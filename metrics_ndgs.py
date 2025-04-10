@@ -21,7 +21,6 @@ import json
 from tqdm import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser
-import trimesh
 
 def readImages(renders_dir, gt_dir):
     renders = []
@@ -54,28 +53,24 @@ def evaluate(model_paths):
             per_view_dict[scene_dir] = {}
             full_dict_polytopeonly[scene_dir] = {}
             per_view_dict_polytopeonly[scene_dir] = {}
-
-            test_dir = Path(scene_dir) / "test"
-
-            for method in os.listdir(test_dir):
+    
+            scene_dir_path = Path(scene_dir)
+            gt_dir = scene_dir_path / "gt"
+            renders_dirs = ["ours_500", "ours_2000", "ours_7000", "ours_15000", "ours_30000"]
+            for renders_dir in renders_dirs:
+                
+                method = renders_dir
+                
                 print("Method:", method)
 
                 full_dict[scene_dir][method] = {}
                 per_view_dict[scene_dir][method] = {}
                 full_dict_polytopeonly[scene_dir][method] = {}
                 per_view_dict_polytopeonly[scene_dir][method] = {}
-
-                method_dir = test_dir / method
-                gt_dir = method_dir/ "gt"
-                renders_dir = method_dir / "renders"
+            
+                renders_dir = scene_dir_path / renders_dir
                 renders, gts, image_names = readImages(renders_dir, gt_dir)
-                
-                ply_path = str(method_dir).replace("test", "point_cloud").replace("ours_", "iteration_")
-                ply_path = os.path.join(ply_path, "point_cloud.ply")
-                mesh = trimesh.load(ply_path)
-                full_dict[scene_dir][method].update({"Number": mesh.vertices.shape[0]})
-                print("  Number: {}".format(mesh.vertices.shape[0]))
-                
+
                 ssims = []
                 psnrs = []
                 lpipss = []
@@ -102,6 +97,7 @@ def evaluate(model_paths):
                 json.dump(full_dict[scene_dir], fp, indent=True)
             with open(scene_dir + "/per_view.json", 'w') as fp:
                 json.dump(per_view_dict[scene_dir], fp, indent=True)
+            
         except:
             print("Unable to compute metrics for model", scene_dir)
 

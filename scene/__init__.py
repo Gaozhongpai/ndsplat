@@ -14,9 +14,26 @@ import random
 import json
 from utils.system_utils import searchForMaxIteration
 from scene.dataset_readers import sceneLoadTypeCallbacks
-from scene.gaussian_model import GaussianModel
 from arguments import ModelParams
 from utils.camera_utils import cameraList_from_camInfos, camera_to_JSON
+
+
+MODE = "ndgs" # "combined", "ddgs3", "ddgs", "x-gaussian", "3dgs", "ndgs", "ddndgs"
+
+if MODE == "combined":
+    from scene.gaussian_model_combined import GaussianModel
+elif MODE == "ddgs":
+    from scene.gaussian_model_ddgs import GaussianModel
+elif MODE == "ndgs":
+    from scene.gaussian_model_ndgs_sh import GaussianModel
+elif MODE == "ddndgs":
+    from scene.gaussian_model_ddndgs import GaussianModel
+elif MODE == "ddgs3":
+    from scene.gaussian_model_ddgs_degree3 import GaussianModel
+elif MODE == "x-gaussian":
+    from scene.gaussian_model_xgaussian import GaussianModel
+elif MODE == "3dgs":
+    from scene.gaussian_model import GaussianModel
 
 class Scene:
 
@@ -79,8 +96,15 @@ class Scene:
                                                            "point_cloud",
                                                            "iteration_" + str(self.loaded_iter),
                                                            "point_cloud.ply"))
+            # point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(self.loaded_iter))
+            # if hasattr(self.gaussians, 'save_ply_decoupled'):
+            #     self.gaussians.save_ply_decoupled()
+            # self.gaussians.save_ply_decoupled(os.path.join(point_cloud_path, "point_cloud.ply"))
         else:
-            self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent)
+            if "ddgs" in MODE:
+                self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent, args.source_path)
+            else:
+                self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent)
 
     def save(self, iteration):
         point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))
