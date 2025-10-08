@@ -20,7 +20,7 @@ from simple_knn._C import distCUDA2
 from utils.sh_utils import RGB2SH
 from utils.graphics_utils import BasicPointCloud
 from utils.general_utils import strip_symmetric, build_scaling_rotation
-from utils.ndgs_utils import create_cholesky, create_cholesky_v2, strip_lower_diag
+from utils.ndgs_utils import create_cholesky, strip_lower_diag
 # Import TCGS rasterizer
 from tcgs_speedy_rasterizer import (
     GaussianRasterizationSettings as TCGSRasterizationSettings,
@@ -53,9 +53,9 @@ class GaussianModel:
             actual_covariance = L @ L.transpose(1, 2)
             symm = strip_symmetric(actual_covariance)
             return symm
-        
+
         # ti.init(arch=ti.cuda, device_memory_GB=0.1)
-        
+
         self.scaling_activation = torch.exp
         self.scaling_inverse_activation = torch.log
 
@@ -65,6 +65,83 @@ class GaussianModel:
         self.inverse_opacity_activation = inverse_sigmoid
 
         self.rotation_activation = torch.nn.functional.normalize
+
+    def create_cholesky_v2(self) -> torch.Tensor:
+        """
+        Create covariance matrix from diagonal and lower triangular elements.
+        Returns V = L @ L^T where L is lower triangular matrix.
+        Uses self.diags and self.l_triangs.
+        """
+        diag = self.diags_act(self.diags)
+        l_triang = self.l_triangs_act(self.l_triangs)
+        L = torch.diag_embed(diag)
+        N = diag.size(1)
+        tril_indices = torch.tril_indices(N, N, offset=-1, device=diag.device)
+        L[:, tril_indices[0], tril_indices[1]] = l_triang.view(diag.size(0), -1) * diag[:, tril_indices[0]]
+        return torch.bmm(L, L.transpose(-1, -2))
+
+    def slice_gaussian(self, q, c_dim=3, lambda_opc=0.35):
+        """
+        Perform conditional Gaussian slicing for 6DGS.
+        Given ND Gaussian with mean [m_1, m_2] and covariance v,
+        compute conditional distribution given observation q for m_2.
+
+        Args:
+            q: Query direction (view direction)
+            c_dim: Conditional dimension (default 3 for xyz)
+            lambda_opc: Opacity scaling factor (default 0.35)
+
+        Returns:
+            m_cond: Conditional mean (3D position)
+            cov3D_precomp: Conditional covariance (lower triangular elements)
+            scale: Opacity scaling factor based on direction influence
+        """
+        m_1 = self.get_xyz
+        m_2 = self.get_normal / self.get_normal.norm(dim=1, keepdim=True)
+        v = self.create_cholesky_v2()
+
+        v_11 = v[:, :c_dim, :c_dim]
+        v_12 = v[:, :c_dim, c_dim:]
+        v_21 = v[:, c_dim:, :c_dim]
+        v_22 = v[:, c_dim:, c_dim:]
+
+        v_22_inv = torch.linalg.inv(v_22)
+        v_regr = torch.bmm(v_12, v_22_inv)
+
+        x = q - m_2
+
+        direction_influence = torch.einsum('bi,bij,bj->b', x, v_22_inv, x).unsqueeze(-1)
+        scale = torch.exp(-lambda_opc * direction_influence)
+
+        m_cond = m_1 + torch.bmm(v_regr, x.unsqueeze(-1)).squeeze(-1)
+        v_cond = v_11 - torch.bmm(v_regr, v_21)
+
+        cov3D_precomp = strip_lower_diag(v_cond)
+        return m_cond, cov3D_precomp, scale
+
+    def slice_gaussian_test(self, q, lambda_opc=0.35):
+        """
+        Optimized version of slice_gaussian for test/inference time.
+        Uses precomputed self.v_22_inv and self.v_regr to avoid redundant computation.
+
+        Args:
+            q: Query direction (view direction)
+            lambda_opc: Opacity scaling factor (default 0.35)
+
+        Returns:
+            m_cond: Conditional mean (3D position)
+            scale: Opacity scaling factor based on direction influence
+        """
+        m_1 = self.get_xyz
+        m_2 = self.direction
+        v_22_inv = self.v_22_inv
+        v_regr = self.v_regr
+
+        x = q - m_2
+        direction_influence = torch.einsum('bi,bij,bj->b', x, v_22_inv, x).unsqueeze(-1)
+        scale = torch.exp(-lambda_opc * direction_influence)
+        m_cond = m_1 + torch.bmm(v_regr, x.unsqueeze(-1)).squeeze(-1)
+        return m_cond, scale
 
 
     def __init__(self, sh_degree : int):
@@ -175,7 +252,7 @@ class GaussianModel:
     @property
     def get_scaling(self):
         # v = self.get_pc_v
-        v = create_cholesky_v2(self.diags_act(self.diags), self.l_triangs_act(self.l_triangs))       
+        v = self.create_cholesky_v2()       
         
         # Slice the 6D covariance matrix
         v_11 = v[:, :3, :3]
@@ -192,7 +269,7 @@ class GaussianModel:
     @property
     def get_rotation_scale(self):
         # v = self.get_pc_v
-        v = create_cholesky_v2(self.diags_act(self.diags), self.l_triangs_act(self.l_triangs))       
+        v = self.create_cholesky_v2()       
         
         # Slice the 6D covariance matrix
         v_11 = v[:, :3, :3]
@@ -220,7 +297,7 @@ class GaussianModel:
     
     def get_nd_scale_rotation(self, eps=1e-10, is_rotate=True):
         # Compute full 7x7 covariance matrix
-        Sigma = create_cholesky_v2(self.diags_act(self.diags), self.l_triangs_act(self.l_triangs))
+        Sigma = self.create_cholesky_v2()
         
         # Add small diagonal for numerical stability
         Sigma = Sigma + eps * torch.eye(self.gs_dim, device=Sigma.device)
@@ -416,7 +493,7 @@ class GaussianModel:
     
         ### test ####
         c_dim = 3
-        v = create_cholesky_v2(self.diags_act(self.diags), self.l_triangs_act(self.l_triangs))
+        v = self.create_cholesky_v2()
         
         v_11 = v[:, :c_dim, :c_dim]
         v_12 = v[:, :c_dim, c_dim:]
@@ -821,7 +898,6 @@ class GaussianModel:
         Render using 6DGS conditional slicing with diff-gaussian-rasterization.
         This encapsulates the 6DGS-specific rendering logic.
         """
-        from utils.ndgs_utils import create_cholesky_v2, slice_gaussian, slice_gaussian_test
         import math
 
         # Create screenspace points for gradient tracking
@@ -838,21 +914,13 @@ class GaussianModel:
 
         if is_test:
             # Test mode: use precomputed values
-            m_cond, pdf_cond = slice_gaussian_test(
-                self.get_xyz, self.direction, cond_params,
-                self.v_22_inv, self.v_regr, lambda_opc=lambda_opc
-            )
+            m_cond, pdf_cond = self.slice_gaussian_test(cond_params, lambda_opc=lambda_opc)
             shs = self.shs
             cov3D_precomp = self.cov3D_precomp
         else:
             # Training mode: compute conditional slicing
-            direction = self.get_normal / self.get_normal.norm(dim=1, keepdim=True)
             shs = self.get_features
-
-            v = create_cholesky_v2(self.diags_act(self.diags), self.l_triangs_act(self.l_triangs))
-            m_cond, cov3D_precomp, pdf_cond = slice_gaussian(
-                self.get_xyz, direction, cond_params, v, c_dim=3, lambda_opc=lambda_opc
-            )
+            m_cond, cov3D_precomp, pdf_cond = self.slice_gaussian(cond_params, c_dim=3, lambda_opc=lambda_opc)
 
         # Compute opacity with conditional probability
         opacity = self.get_opacity * pdf_cond
