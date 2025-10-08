@@ -21,6 +21,10 @@ from utils.sh_utils import RGB2SH
 from utils.graphics_utils import BasicPointCloud
 from utils.general_utils import strip_symmetric, build_scaling_rotation
 from utils.ndgs_utils import create_cholesky, strip_lower_diag
+
+# Import gsplat functions for N-DGS operations
+from gsplat import slice_gaussian_ndgs, slice_gaussian_ndgs_test, l_triangle_to_covar
+
 # Import TCGS rasterizer
 from tcgs_speedy_rasterizer import (
     GaussianRasterizationSettings as TCGSRasterizationSettings,
@@ -66,63 +70,48 @@ class GaussianModel:
 
         self.rotation_activation = torch.nn.functional.normalize
 
-    def create_cholesky_v2(self) -> torch.Tensor:
-        """
-        Create covariance matrix from diagonal and lower triangular elements.
-        Returns V = L @ L^T where L is lower triangular matrix.
-        Uses self.diags and self.l_triangs.
-        """
-        diag = self.diags_act(self.diags)
-        l_triang = self.l_triangs_act(self.l_triangs)
-        L = torch.diag_embed(diag)
-        N = diag.size(1)
-        tril_indices = torch.tril_indices(N, N, offset=-1, device=diag.device)
-        L[:, tril_indices[0], tril_indices[1]] = l_triang.view(diag.size(0), -1) * diag[:, tril_indices[0]]
-        return torch.bmm(L, L.transpose(-1, -2))
-
     def slice_gaussian(self, q, c_dim=3, lambda_opc=0.35):
         """
-        Perform conditional Gaussian slicing for 6DGS.
+        Perform conditional Gaussian slicing for N-DGS.
         Given ND Gaussian with mean [m_1, m_2] and covariance v,
         compute conditional distribution given observation q for m_2.
 
+        Uses gsplat CUDA implementation for efficiency.
+
         Args:
-            q: Query direction (view direction)
-            c_dim: Conditional dimension (default 3 for xyz)
+            q: Query direction (view direction) [N, C]
+            c_dim: Conditional dimension (default 3 for spatial xyz)
             lambda_opc: Opacity scaling factor (default 0.35)
 
         Returns:
-            m_cond: Conditional mean (3D position)
-            cov3D_precomp: Conditional covariance (lower triangular elements)
-            scale: Opacity scaling factor based on direction influence
+            m_cond: Conditional mean (3D position) [N, 3]
+            cov3D_precomp: Conditional covariance (lower triangular elements) [N, 6]
+            scale: Opacity scaling factor based on direction influence [N, 1]
         """
-        m_1 = self.get_xyz
-        m_2 = self.get_normal / self.get_normal.norm(dim=1, keepdim=True)
-        v = self.create_cholesky_v2()
+        m_1 = self.get_xyz  # [N, 3]
+        m_2 = self.get_normal / self.get_normal.norm(dim=1, keepdim=True)  # [N, 3] normalized
 
-        v_11 = v[:, :c_dim, :c_dim]
-        v_12 = v[:, :c_dim, c_dim:]
-        v_21 = v[:, c_dim:, :c_dim]
-        v_22 = v[:, c_dim:, c_dim:]
+        # Build covariance matrix from diagonal and lower triangular elements
+        diag = self.diags_act(self.diags)
+        l_triang = self.l_triangs_act(self.l_triangs)
+        v = l_triangle_to_covar(diag, l_triang)  # [N, D, D] where D = 6 for 6DGS
 
-        v_22_inv = torch.linalg.inv(v_22)
-        v_regr = torch.bmm(v_12, v_22_inv)
+        # Use gsplat CUDA implementation for conditional Gaussian slicing
+        m_cond, cov3D_precomp, scale = slice_gaussian_ndgs(
+            m_1=m_1,
+            m_2=m_2,
+            query=q,
+            covars=v,
+            lambda_opc=lambda_opc
+        )
 
-        x = q - m_2
-
-        direction_influence = torch.einsum('bi,bij,bj->b', x, v_22_inv, x).unsqueeze(-1)
-        scale = torch.exp(-lambda_opc * direction_influence)
-
-        m_cond = m_1 + torch.bmm(v_regr, x.unsqueeze(-1)).squeeze(-1)
-        v_cond = v_11 - torch.bmm(v_regr, v_21)
-
-        cov3D_precomp = strip_lower_diag(v_cond)
         return m_cond, cov3D_precomp, scale
 
     def slice_gaussian_test(self, q, lambda_opc=0.35):
         """
         Optimized version of slice_gaussian for test/inference time.
         Uses precomputed self.v_22_inv and self.v_regr to avoid redundant computation.
+        Now accelerated with custom CUDA kernel.
 
         Args:
             q: Query direction (view direction)
@@ -137,10 +126,15 @@ class GaussianModel:
         v_22_inv = self.v_22_inv
         v_regr = self.v_regr
 
-        x = q - m_2
-        direction_influence = torch.einsum('bi,bij,bj->b', x, v_22_inv, x).unsqueeze(-1)
-        scale = torch.exp(-lambda_opc * direction_influence)
-        m_cond = m_1 + torch.bmm(v_regr, x.unsqueeze(-1)).squeeze(-1)
+        # Use optimized CUDA kernel for inference
+        m_cond, scale = slice_gaussian_ndgs_test(
+            m_1=m_1,
+            m_2=m_2,
+            v_22_inv=v_22_inv,
+            v_regr=v_regr,
+            query=q,
+            lambda_opc=lambda_opc
+        )
         return m_cond, scale
 
 

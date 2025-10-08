@@ -25,8 +25,8 @@ import time
 from utils.general_utils import apply_depth_colormap
 
 # Import gsplat functions for rendering and CUDA operations
-from gsplat.rendering import rasterization
-from gsplat.cuda._wrapper import (
+from gsplat import rasterization
+from gsplat import (
     l_triangle_to_rotmat,
     rot_scale_l_triangle_to_covar,
     cond_mean_convariance_opacity,
