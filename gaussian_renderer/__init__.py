@@ -112,56 +112,21 @@ def render(viewpoint_camera, pc : GaussianModel, pipe,
     # from SHs in Python, do it. If not, then SH -> RGB conversion will be done by rasterizer.
     shs = None
     colors_precomp = None
-    
-    if scene.MODE != "3dgs":
-        override_color = pc.get_color(viewpoint_camera, is_test)
-    
+
     if override_color is None:
         if pipe.convert_SHs_python:
             shs_view = pc.get_features.transpose(1, 2).view(-1, 3, (pc.max_sh_degree+1)**2)
             dir_pp = (pc.get_xyz - viewpoint_camera.camera_center.repeat(pc.get_features.shape[0], 1))
             dir_pp_normalized = dir_pp/dir_pp.norm(dim=1, keepdim=True)
             sh2rgb = eval_sh(pc.active_sh_degree, shs_view, dir_pp_normalized)
-            sh2rgb = sh2rgb.mean(dim=1, keepdim=True).repeat(1, 3)
             colors_precomp = torch.clamp_min(sh2rgb + 0.5, 0.0)
         else:
-            if scene.MODE == "ddgs":
-                shs = pc._features_dc[pc.num_principle:] @ pc._lambda[pc.num_fprinciple:].view(-1, 3)
-                colors_precomp = pc._color
-            else:
-                shs = pc.get_features
+            shs = pc.get_features
     else:
         colors_precomp = override_color
-    
-    rendered_image_principle = None
-    rendered_image_non_principle = None
-    
-    is_render_principle = False ##### settings
-    if "ddgs" in scene.MODE and is_render_principle:
-        rendered_image_non_principle, radii_principle = rasterizer(
-                means3D = means3D[pc.num_principle:],
-                means2D = means2D[pc.num_principle:],
-                shs = shs,
-                colors_precomp = colors_precomp[pc.num_principle:],
-                opacities = opacity[pc.num_principle:],
-                scales = scales[pc.num_principle:],
-                rotations = rotations[pc.num_principle:],
-                cov3D_precomp = cov3D_precomp)
 
-        rendered_image_principle, radii_principle = rasterizer(
-                means3D = means3D[:pc.num_principle],
-                means2D = means2D[:pc.num_principle],
-                shs = shs,
-                colors_precomp = colors_precomp[:pc.num_principle],
-                opacities = opacity[:pc.num_principle],
-                scales = scales[:pc.num_principle],
-                rotations = rotations[:pc.num_principle],
-                cov3D_precomp = cov3D_precomp)
-
-    # Rasterize visible Gaussians to image, obtain their radii (on screen). 
-    # N = int(pc.num_principle) if is_cuda else pc.get_features.shape[0]
+    # Rasterize visible Gaussians to image, obtain their radii (on screen)
     rendered_image, radii = rasterizer(
-        # N, # int(pc.num_principle), pc.get_features.shape[0]
         means3D = means3D,
         means2D = means2D,
         shs = shs,
@@ -173,9 +138,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe,
 
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
     # They will be excluded from value updates used in the splitting criteria.
-    return {"render": rendered_image, 
-            "render_principle": rendered_image_principle,
-            "render_non_principle": rendered_image_non_principle,
+    return {"render": rendered_image,
             "viewspace_points": screenspace_points,
             "visibility_filter" : radii > 0,
             "radii": radii}

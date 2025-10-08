@@ -39,7 +39,7 @@ def create_radial_weight_mask(height, width, center_weight=0.8, edge_weight=5):
 
 def render_wrapper(viewpoint_cam, gaussians, pipe, bg, scaling_modifier=1.0):
     """Wrapper function that handles both standard and model-specific rendering."""
-    if MODE == "ubs" or MODE == "6dgs":
+    if MODE == "ubs":
         # UBS mode: use render_tcgs with CUDA-accelerated conditional slicing
         gaussians.background = bg
         return gaussians.render_tcgs(viewpoint_cam, render_mode="RGB", use_tcgs=False, scaling_modifier=scaling_modifier)
@@ -47,8 +47,11 @@ def render_wrapper(viewpoint_cam, gaussians, pipe, bg, scaling_modifier=1.0):
         # 6DGS mode: use model's render_tcgs with conditional slicing
         gaussians.background = bg
         return gaussians.render_tcgs(viewpoint_cam, render_mode="RGB", use_tcgs=False, is_test=False, scaling_modifier=scaling_modifier)
+    elif MODE == "ddgs" or MODE == "3dgs":
+        # DDGS/3DGS mode: use model's render_tcgs method
+        return gaussians.render_tcgs(viewpoint_cam, pipe, bg, scaling_modifier)
     else:
-        # Standard mode: use standard gaussian rasterization
+        # Fallback: use global renderer
         return render(viewpoint_cam, gaussians, pipe, bg, scaling_modifier)
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):

@@ -36,8 +36,11 @@ def render_wrapper(view, gaussians, pipeline, background, is_test=False):
         # 6DGS mode: use model's render_tcgs with conditional slicing
         gaussians.background = background
         return gaussians.render_tcgs(view, render_mode="RGB", is_test=is_test)
+    elif MODE == "ddgs" or MODE == "3dgs":
+        # DDGS/3DGS mode: use model's render_tcgs method
+        return gaussians.render_tcgs(view, pipeline, background, is_test=is_test)
     else:
-        # Standard mode: use standard gaussian rasterization
+        # Fallback: use global renderer
         return render(view, gaussians, pipeline, background, is_test=is_test)
 
 
