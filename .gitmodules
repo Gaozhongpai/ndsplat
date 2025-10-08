@@ -10,3 +10,6 @@
 [submodule "submodules/tcgs_speedy_rasterizer"]
     path = submodules/tcgs_speedy_rasterizer
     url = https://github.com/Gaozhongpai/tcgscut.git
+[submodule "submodules/gsplat"]
+    path = submodules/gsplat
+    url = https://github.com/Gaozhongpai/gsplatcuda.git
