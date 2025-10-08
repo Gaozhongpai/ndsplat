@@ -43,11 +43,11 @@ def render_wrapper(viewpoint_cam, gaussians, pipe, bg, scaling_modifier=1.0):
         # UBS mode: use render_tcgs with CUDA-accelerated conditional slicing
         gaussians.background = bg
         return gaussians.render_tcgs(viewpoint_cam, render_mode="RGB", use_tcgs=False, scaling_modifier=scaling_modifier)
-    elif MODE == "6dgs":
+    elif "6dgs" in MODE:
         # 6DGS mode: use model's render_tcgs with conditional slicing
         gaussians.background = bg
         return gaussians.render_tcgs(viewpoint_cam, render_mode="RGB", use_tcgs=False, is_test=False, scaling_modifier=scaling_modifier)
-    elif MODE == "ddgs" or MODE == "3dgs":
+    elif "ddgs" in MODE or "3dgs" in MODE:
         # DDGS/3DGS mode: use model's render_tcgs method
         return gaussians.render_tcgs(viewpoint_cam, pipe, bg, scaling_modifier)
     else:
@@ -165,7 +165,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                    min_opacity = 0.01 if MODE == "6dgs" or MODE == "ubs" else 0.005
+                    min_opacity = 0.01 if "6dgs" in MODE or MODE == "ubs" else 0.005
                     gaussians.densify_and_prune(opt.densify_grad_threshold, min_opacity, scene.cameras_extent, size_threshold, iteration)
                 
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):

@@ -19,7 +19,7 @@ from plyfile import PlyData, PlyElement
 from utils.sh_utils import RGB2SH
 from utils.graphics_utils import BasicPointCloud
 from utils.general_utils import strip_symmetric, build_scaling_rotation
-from utils.ndgs_utils import create_cholesky, create_cholesky_v2, strip_lower_diag
+from utils.ndgs_utils import create_cholesky, strip_lower_diag
 
 # from utils.ndgs_utils import project_vectors_gaussians
 # from evaluators.lsh_evaluator import EvaluatorLSH
@@ -47,9 +47,9 @@ class GaussianModel:
             actual_covariance = L @ L.transpose(1, 2)
             symm = strip_symmetric(actual_covariance)
             return symm
-        
+
         # ti.init(arch=ti.cuda, device_memory_GB=0.1)
-        
+
         self.scaling_activation = torch.exp
         self.scaling_inverse_activation = torch.log
 
@@ -60,10 +60,87 @@ class GaussianModel:
 
         self.rotation_activation = torch.nn.functional.normalize
 
+    def create_cholesky_v2(self) -> torch.Tensor:
+        """
+        Create covariance matrix from diagonal and lower triangular elements.
+        Returns V = L @ L^T where L is lower triangular matrix.
+        Uses self.diags and self.l_triangs.
+        """
+        diag = self.diags_act(self.diags)
+        l_triang = self.l_triangs_act(self.l_triangs)
+        L = torch.diag_embed(diag)
+        N = diag.size(1)
+        tril_indices = torch.tril_indices(N, N, offset=-1, device=diag.device)
+        L[:, tril_indices[0], tril_indices[1]] = l_triang.view(diag.size(0), -1) * diag[:, tril_indices[0]]
+        return torch.bmm(L, L.transpose(-1, -2))
+
+    def slice_gaussian(self, q, c_dim=3, lambda_opc=0.35):
+        """
+        Perform conditional Gaussian slicing for 6DGS.
+        Given ND Gaussian with mean [m_1, m_2] and covariance v,
+        compute conditional distribution given observation q for m_2.
+
+        Args:
+            q: Query direction (view direction)
+            c_dim: Conditional dimension (default 3 for xyz)
+            lambda_opc: Opacity scaling factor (default 0.35)
+
+        Returns:
+            m_cond: Conditional mean (3D position)
+            cov3D_precomp: Conditional covariance (lower triangular elements)
+            scale: Opacity scaling factor based on direction influence
+        """
+        m_1 = self.get_xyz
+        m_2 = self.get_normal / self.get_normal.norm(dim=1, keepdim=True)
+        v = self.create_cholesky_v2()
+
+        v_11 = v[:, :c_dim, :c_dim]
+        v_12 = v[:, :c_dim, c_dim:]
+        v_21 = v[:, c_dim:, :c_dim]
+        v_22 = v[:, c_dim:, c_dim:]
+
+        v_22_inv = torch.linalg.inv(v_22)
+        v_regr = torch.bmm(v_12, v_22_inv)
+
+        x = q - m_2
+
+        direction_influence = torch.einsum('bi,bij,bj->b', x, v_22_inv, x).unsqueeze(-1)
+        scale = torch.exp(-lambda_opc * direction_influence)
+
+        m_cond = m_1 + torch.bmm(v_regr, x.unsqueeze(-1)).squeeze(-1)
+        v_cond = v_11 - torch.bmm(v_regr, v_21)
+
+        cov3D_precomp = strip_lower_diag(v_cond)
+        return m_cond, cov3D_precomp, scale
+
+    def slice_gaussian_test(self, q, lambda_opc=0.35):
+        """
+        Optimized version of slice_gaussian for test/inference time.
+        Uses precomputed self.v_22_inv and self.v_regr to avoid redundant computation.
+
+        Args:
+            q: Query direction (view direction)
+            lambda_opc: Opacity scaling factor (default 0.35)
+
+        Returns:
+            m_cond: Conditional mean (3D position)
+            scale: Opacity scaling factor based on direction influence
+        """
+        m_1 = self.get_xyz
+        m_2 = self.direction
+        v_22_inv = self.v_22_inv
+        v_regr = self.v_regr
+
+        x = q - m_2
+        direction_influence = torch.einsum('bi,bij,bj->b', x, v_22_inv, x).unsqueeze(-1)
+        scale = torch.exp(-lambda_opc * direction_influence)
+        m_cond = m_1 + torch.bmm(v_regr, x.unsqueeze(-1)).squeeze(-1)
+        return m_cond, scale
+
 
     def __init__(self, sh_degree : int):
         self.active_sh_degree = 0
-        self.max_sh_degree = sh_degree  
+        self.max_sh_degree = sh_degree
         self._xyz = torch.empty(0)
         self._features_dc = torch.empty(0)
         self._features_rest = torch.empty(0)
@@ -76,6 +153,7 @@ class GaussianModel:
         self.optimizer = None
         self.percent_dense = 0
         self.spatial_lr_scale = 0
+        self.background = torch.empty(0)  # Background color for rendering
         
         self.n_projection_vecs = 8
         self.color_dim = 8
@@ -170,7 +248,7 @@ class GaussianModel:
     @property
     def get_scaling(self):
         # v = self.get_pc_v
-        v = create_cholesky_v2(self.diags_act(self.diags), self.l_triangs_act(self.l_triangs))       
+        v = self.create_cholesky_v2()       
         
         # Slice the 6D covariance matrix
         v_11 = v[:, :3, :3]
@@ -187,7 +265,7 @@ class GaussianModel:
     @property
     def get_rotation_scale(self):
         # v = self.get_pc_v
-        v = create_cholesky_v2(self.diags_act(self.diags), self.l_triangs_act(self.l_triangs))       
+        v = self.create_cholesky_v2()       
         
         # Slice the 6D covariance matrix
         v_11 = v[:, :3, :3]
@@ -398,7 +476,7 @@ class GaussianModel:
     
         ### test ####
         c_dim = 3
-        v = create_cholesky_v2(self.diags_act(self.diags), self.l_triangs_act(self.l_triangs))
+        v = self.create_cholesky_v2()
         
         v_11 = v[:, :c_dim, :c_dim]
         v_12 = v[:, :c_dim, c_dim:]
@@ -599,3 +677,80 @@ class GaussianModel:
     def add_densification_stats(self, viewspace_point_tensor, update_filter):
         self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True)
         self.denom[update_filter] += 1
+
+    def render_tcgs(self, viewpoint_camera, render_mode="RGB", use_tcgs=False, is_test=False, scaling_modifier=1.0):
+        """
+        Render using 6DGS+ conditional slicing with diff-gaussian-rasterization.
+        This encapsulates the 6DGS+ specific rendering logic.
+        """
+        import math
+        from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer
+
+        # Create screenspace points for gradient tracking
+        screenspace_points = torch.zeros_like(self.get_xyz, dtype=self.get_xyz.dtype, requires_grad=True, device="cuda") + 0
+        try:
+            screenspace_points.retain_grad()
+        except:
+            pass
+
+        # Compute view direction for conditional slicing
+        dir_pp = (self.get_xyz - viewpoint_camera.camera_center.repeat(self.get_normal.shape[0], 1))
+        cond_params = dir_pp / dir_pp.norm(dim=1, keepdim=True)
+        lambda_opc = 0.35
+
+        if is_test:
+            # Test mode: use precomputed values
+            m_cond, pdf_cond = self.slice_gaussian_test(cond_params, lambda_opc=lambda_opc)
+            shs = self.shs
+            cov3D_precomp = self.cov3D_precomp
+        else:
+            # Training mode: compute conditional slicing
+            shs = self.get_features
+            m_cond, cov3D_precomp, pdf_cond = self.slice_gaussian(cond_params, c_dim=3, lambda_opc=lambda_opc)
+
+        # Compute opacity with conditional probability and opacity scale
+        opacity = self.get_opacity * pdf_cond * self.get_opacityscale
+
+        # Set up rasterization
+        tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)
+        tanfovy = math.tan(viewpoint_camera.FoVy * 0.5)
+
+        raster_settings = GaussianRasterizationSettings(
+            image_height=int(viewpoint_camera.image_height),
+            image_width=int(viewpoint_camera.image_width),
+            tanfovx=tanfovx,
+            tanfovy=tanfovy,
+            bg=self.background,
+            scale_modifier=scaling_modifier,
+            viewmatrix=viewpoint_camera.world_view_transform,
+            projmatrix=viewpoint_camera.full_proj_transform,
+            sh_degree=self.active_sh_degree,
+            campos=viewpoint_camera.camera_center,
+            prefiltered=False,
+            debug=False
+        )
+
+        rasterizer = GaussianRasterizer(raster_settings=raster_settings)
+
+        means3D = m_cond
+        means2D = screenspace_points
+
+        # Rasterize visible Gaussians to image
+        rendered_image, radii = rasterizer(
+            means3D=means3D,
+            means2D=means2D,
+            shs=shs,
+            colors_precomp=None,
+            opacities=opacity,
+            scales=None,
+            rotations=None,
+            cov3D_precomp=cov3D_precomp
+        )
+
+        # Return rendered outputs
+        return {
+            "render": rendered_image,
+            "viewspace_points": screenspace_points,
+            "visibility_filter": radii > 0,
+            "radii": radii
+        }
