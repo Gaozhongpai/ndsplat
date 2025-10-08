@@ -20,9 +20,16 @@ from simple_knn._C import distCUDA2
 from utils.sh_utils import RGB2SH
 from utils.graphics_utils import BasicPointCloud
 from utils.general_utils import strip_symmetric, build_scaling_rotation
-from utils.ndgs_utils import create_cholesky, strip_lower_diag
+from utils.ndgs_utils import strip_lower_diag
 
 # Import gsplat functions for N-DGS operations
+from gsplat import (
+    
+    _slice_gaussian_ndgs_test as slice_gaussian_ndgs_test,
+    _slice_gaussian_ndgs as slice_gaussian_ndgs,
+    _l_triangle_to_covar as l_triangle_to_covar
+)
+
 from gsplat import slice_gaussian_ndgs, slice_gaussian_ndgs_test, l_triangle_to_covar
 
 # Import TCGS rasterizer
@@ -92,9 +99,7 @@ class GaussianModel:
         m_2 = self.get_normal / self.get_normal.norm(dim=1, keepdim=True)  # [N, 3] normalized
 
         # Build covariance matrix from diagonal and lower triangular elements
-        diag = self.diags_act(self.diags)
-        l_triang = self.l_triangs_act(self.l_triangs)
-        v = l_triangle_to_covar(diag, l_triang)  # [N, D, D] where D = 6 for 6DGS
+        v = self.get_pc_v
 
         # Use gsplat CUDA implementation for conditional Gaussian slicing
         m_cond, cov3D_precomp, scale = slice_gaussian_ndgs(
@@ -227,7 +232,10 @@ class GaussianModel:
     
     @property
     def get_pc_v(self):
-        return create_cholesky(self.diags_act(self.diags), self.l_triangs_act(self.l_triangs))
+        # Use CUDA kernel for covariance matrix construction
+        diag = self.diags_act(self.diags)
+        l_triang = self.l_triangs_act(self.l_triangs)
+        return l_triangle_to_covar(diag, l_triang)  # [N, D, D] using CUDA
     
     @property
     def get_features(self):
@@ -245,9 +253,8 @@ class GaussianModel:
     
     @property
     def get_scaling(self):
-        # v = self.get_pc_v
-        v = self.create_cholesky_v2()       
-        
+        v = self.get_pc_v
+
         # Slice the 6D covariance matrix
         v_11 = v[:, :3, :3]
         v_12 = v[:, :3, 3:]
@@ -262,8 +269,7 @@ class GaussianModel:
         
     @property
     def get_rotation_scale(self):
-        # v = self.get_pc_v
-        v = self.create_cholesky_v2()       
+        v = self.get_pc_v     
         
         # Slice the 6D covariance matrix
         v_11 = v[:, :3, :3]
@@ -288,24 +294,6 @@ class GaussianModel:
         det = torch.linalg.det(rotation)
         rotation[:, :, -1] *= det.sign().unsqueeze(-1)
         return rotation, scale
-    
-    def get_nd_scale_rotation(self, eps=1e-10, is_rotate=True):
-        # Compute full 7x7 covariance matrix
-        Sigma = self.create_cholesky_v2()
-        
-        # Add small diagonal for numerical stability
-        Sigma = Sigma + eps * torch.eye(self.gs_dim, device=Sigma.device)
-    
-        # Fallback to eigendecomposition for numerical stability
-        eigvals, eigvecs = torch.linalg.eigh(Sigma)
-        s = torch.sqrt(torch.clamp(eigvals, min=eps))
-        R = eigvecs
-        
-        if is_rotate:
-            # Ensure proper rotation
-            det = torch.linalg.det(R)
-            R[..., :, -1] *= torch.sign(det).unsqueeze(-1)
-        return R, s
 
     def oneupSHdegree(self):
         if self.active_sh_degree < self.max_sh_degree:
@@ -487,7 +475,8 @@ class GaussianModel:
     
         ### test ####
         c_dim = 3
-        v = self.create_cholesky_v2()
+        # Use CUDA kernel
+        v = self.get_pc_v  # [N, D, D] using CUDA
         
         v_11 = v[:, :c_dim, :c_dim]
         v_12 = v[:, :c_dim, c_dim:]

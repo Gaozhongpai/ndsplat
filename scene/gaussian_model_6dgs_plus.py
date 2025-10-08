@@ -84,10 +84,7 @@ class GaussianModel:
         m_1 = self.get_xyz  # [N, 3]
         m_2 = self.get_normal / self.get_normal.norm(dim=1, keepdim=True)  # [N, 3] normalized
 
-        # Build covariance matrix from diagonal and lower triangular elements
-        diag = self.diags_act(self.diags)
-        l_triang = self.l_triangs_act(self.l_triangs)
-        v = l_triangle_to_covar(diag, l_triang)  # [N, D, D] where D = 6 for 6DGS
+        v = self.get_pc_v  # [N, 6, 6] using gsplat CUDA implementation
 
         # Use gsplat CUDA implementation for conditional Gaussian slicing
         m_cond, cov3D_precomp, scale = slice_gaussian_ndgs(
@@ -215,7 +212,10 @@ class GaussianModel:
     
     @property
     def get_pc_v(self):
-        return create_cholesky(self.diags_act(self.diags), self.l_triangs_act(self.l_triangs))
+        # Use CUDA kernel for covariance matrix construction
+        diag = self.diags_act(self.diags)
+        l_triang = self.l_triangs_act(self.l_triangs)
+        return l_triangle_to_covar(diag, l_triang)  # [N, D, D] using CUDA
     
     @property
     def get_normal(self):
@@ -241,9 +241,7 @@ class GaussianModel:
     @property
     def get_scaling(self):
         # Build covariance matrix using gsplat CUDA implementation
-        diag = self.diags_act(self.diags)
-        l_triang = self.l_triangs_act(self.l_triangs)
-        v = l_triangle_to_covar(diag, l_triang)
+        v = self.get_pc_v
 
         # Slice the 6D covariance matrix
         v_11 = v[:, :3, :3]
@@ -260,9 +258,7 @@ class GaussianModel:
     @property
     def get_rotation_scale(self):
         # Build covariance matrix using gsplat CUDA implementation
-        diag = self.diags_act(self.diags)
-        l_triang = self.l_triangs_act(self.l_triangs)
-        v = l_triangle_to_covar(diag, l_triang)
+        v = self.get_pc_v
 
         # Slice the 6D covariance matrix
         v_11 = v[:, :3, :3]
@@ -474,9 +470,7 @@ class GaussianModel:
         ### test ####
         c_dim = 3
         # Build covariance matrix using gsplat CUDA implementation
-        diag = self.diags_act(self.diags)
-        l_triang = self.l_triangs_act(self.l_triangs)
-        v = l_triangle_to_covar(diag, l_triang)
+        v = self.get_pc_v
 
         v_11 = v[:, :c_dim, :c_dim]
         v_12 = v[:, :c_dim, c_dim:]
