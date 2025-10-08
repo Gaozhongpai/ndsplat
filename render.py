@@ -32,11 +32,11 @@ def render_wrapper(view, gaussians, pipeline, background, is_test=False):
         # UBS mode: use render_tcgs with CUDA-accelerated conditional slicing
         gaussians.background = background
         return gaussians.render_tcgs(view, render_mode="RGB", use_tcgs=True)
-    elif MODE == "6dgs":
+    elif "6dgs" in MODE:
         # 6DGS mode: use model's render_tcgs with conditional slicing
         gaussians.background = background
         return gaussians.render_tcgs(view, render_mode="RGB", is_test=is_test)
-    elif MODE == "ddgs" or MODE == "3dgs":
+    elif "ddgs" in MODE or "3dgs" in MODE:
         # DDGS/3DGS mode: use model's render_tcgs method
         return gaussians.render_tcgs(view, pipeline, background, is_test=is_test)
     else:
