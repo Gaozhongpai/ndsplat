@@ -26,11 +26,16 @@ from utils.ndgs_utils import strip_lower_diag
 from gsplat import (
     _slice_gaussian_ndgs_test as slice_gaussian_ndgs_test,
     _slice_gaussian_ndgs as slice_gaussian_ndgs,
-    l_triangle_to_rotmat,
-    rot_scale_l_triangle_to_covar,
+    _l_triangle_to_rotmat as l_triangle_to_rotmat,
+    _rot_scale_l_triangle_to_covar as rot_scale_l_triangle_to_covar
 )
 
-from gsplat import slice_gaussian_ndgs, slice_gaussian_ndgs_test
+from gsplat import (
+    slice_gaussian_ndgs, 
+    slice_gaussian_ndgs_test,
+    l_triangle_to_rotmat,
+    rot_scale_l_triangle_to_covar
+)
 
 # Import TCGS rasterizer
 from tcgs_speedy_rasterizer import (
@@ -902,6 +907,7 @@ class GaussianModel:
             campos=viewpoint_camera.camera_center,
             prefiltered=False,
             use_tcgs=use_tcgs,
+            tight_snugbox=False,
             debug=False
         )
 

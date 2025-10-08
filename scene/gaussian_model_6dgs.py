@@ -24,13 +24,16 @@ from utils.ndgs_utils import strip_lower_diag
 
 # Import gsplat functions for N-DGS operations
 from gsplat import (
-    
     _slice_gaussian_ndgs_test as slice_gaussian_ndgs_test,
     _slice_gaussian_ndgs as slice_gaussian_ndgs,
     _l_triangle_to_covar as l_triangle_to_covar
 )
 
-from gsplat import slice_gaussian_ndgs, slice_gaussian_ndgs_test, l_triangle_to_covar
+from gsplat import (
+    slice_gaussian_ndgs, 
+    slice_gaussian_ndgs_test, 
+    l_triangle_to_covar
+)
 
 # Import TCGS rasterizer
 from tcgs_speedy_rasterizer import (
