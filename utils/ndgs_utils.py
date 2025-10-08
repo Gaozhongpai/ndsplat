@@ -5,7 +5,7 @@ import torch
 import cv2
 import glfw
 import OpenGL.GL as gl
-import flash_gaussian_splatting
+# import flash_gaussian_splatting
 from utils.graphics_utils import fov2focal
 
 class Rasterizer:

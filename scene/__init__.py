@@ -18,22 +18,16 @@ from arguments import ModelParams
 from utils.camera_utils import cameraList_from_camInfos, camera_to_JSON
 
 
-MODE = "ndgs" # "combined", "ddgs3", "ddgs", "x-gaussian", "3dgs", "ndgs", "ddndgs"
+MODE = "6dgs" # "ddgs", "3dgs", "6dgs", "ubs"
 
-if MODE == "combined":
-    from scene.gaussian_model_combined import GaussianModel
-elif MODE == "ddgs":
+if MODE == "ddgs": ## Neurips 2024
     from scene.gaussian_model_ddgs import GaussianModel
-elif MODE == "ndgs":
-    from scene.gaussian_model_ndgs_sh import GaussianModel
-elif MODE == "ddndgs":
-    from scene.gaussian_model_ddndgs import GaussianModel
-elif MODE == "ddgs3":
-    from scene.gaussian_model_ddgs_degree3 import GaussianModel
-elif MODE == "x-gaussian":
-    from scene.gaussian_model_xgaussian import GaussianModel
-elif MODE == "3dgs":
+elif MODE == "6dgs": ## ICLR 2025
+    from scene.gaussian_model_6dgs import GaussianModel
+elif MODE == "3dgs": ## original 3DGS
     from scene.gaussian_model import GaussianModel
+elif MODE == "ubs": ## UBS (ICLR 2026)
+    from scene.gaussian_model_ubs import GaussianModel
 
 class Scene:
 
@@ -103,6 +97,9 @@ class Scene:
         else:
             if "ddgs" in MODE:
                 self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent, args.source_path)
+            elif MODE == "ubs":
+                # UBS model only needs spatial_lr_scale (no sh_degree parameter)
+                self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent)
             else:
                 self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent)
 

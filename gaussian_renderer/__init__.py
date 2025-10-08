@@ -13,10 +13,10 @@ import torch
 import math
 from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer
 from scene import GaussianModel
-import scene 
+import scene
 from utils.sh_utils import eval_sh
-from utils.ndgs_utils import create_cholesky_v2, slice_gaussian, slice_gaussian_test
-from utils.ndgs_utils import Rasterizer
+from utils.ndgs_utils import slice_gaussian_test  # Used in render_flash
+from utils.ndgs_utils import Rasterizer  # Used in render_flash
 
 
 def render_flash(viewpoint_camera, pc : GaussianModel, pipe, 
@@ -85,6 +85,8 @@ def render(viewpoint_camera, pc : GaussianModel, pipe,
         projmatrix=viewpoint_camera.full_proj_transform,
         sh_degree=pc.active_sh_degree,
         campos=viewpoint_camera.camera_center,
+        # x_threshold=float('inf'),
+        use_tcgs=False,
         prefiltered=False,
         debug=pipe.debug
     )
@@ -93,55 +95,6 @@ def render(viewpoint_camera, pc : GaussianModel, pipe,
 
     means3D = pc.get_xyz
     means2D = screenspace_points
-    
-    if scene.MODE == "ndgs":
-        # Cull based on view direction
-        dir_pp = (pc.get_xyz - viewpoint_camera.camera_center.repeat(pc.get_normal.shape[0], 1))
-        cond_params = dir_pp/dir_pp.norm(dim=1, keepdim=True)
-        lambda_opc = 0.35 # pc.get_opacity_scale #.mean(dim=0) # 0.5 # 0.35
-        if is_test:        
-            m_cond, pdf_cond = slice_gaussian_test(pc.get_xyz, pc.direction, cond_params, pc.v_22_inv, pc.v_regr, lambda_opc=lambda_opc)
-            shs = pc.shs
-            cov3D_precomp = pc.cov3D_precomp
-        else:
-            direction = pc.get_normal/pc.get_normal.norm(dim=1, keepdim=True)
-            shs = pc.get_features
-            
-            # ## method 1
-            v = create_cholesky_v2(pc.diags_act(pc.diags), pc.l_triangs_act(pc.l_triangs))
-            m_cond, cov3D_precomp, pdf_cond = slice_gaussian(pc.get_xyz, direction, cond_params, v, c_dim=3, lambda_opc=lambda_opc)
-            
-            ## method 2 combined
-            # m_cond, cov3D_precomp, pdf_cond = optimized_slice_gaussian(pc.get_xyz, direction, cond_params, pc.diags_act(pc.diags), pc.l_triangs_act(pc.l_triangs))
-                    
-            # mask = pc.cull(torch.cat([pc.get_xyz, cond_params], dim=-1), m, v).type(torch.bool)    
-            # means2D = means2D[mask]
-            # cond_params = cond_params[mask]
-            # m = m[mask]
-            # v = v[mask]
-            # colors = colors[mask]
-            # opacity = opacity[mask]
-            ## cull_percent = (n_gs_init-m.shape[0])/n_gs_init
-        
-        opacity = pc.get_opacity * pdf_cond
-        rendered_image, radii = rasterizer(
-                                means3D=m_cond,
-                                means2D=means2D,
-                                shs=shs,
-                                colors_precomp=None,
-                                opacities=opacity,
-                                scales=None,
-                                rotations=None,
-                                cov3D_precomp=cov3D_precomp,
-                                )
-        
-        return {"render": rendered_image, 
-            "render_principle": None,
-            "render_non_principle": None,
-            "viewspace_points": screenspace_points,
-            "visibility_filter" : radii > 0,
-            "radii": radii}
-
     opacity = pc.get_opacity
 
     # If precomputed 3d covariance is provided, use it. If not, then it will be computed from

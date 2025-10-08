@@ -14,8 +14,8 @@ from scene import Scene
 import os
 from tqdm import tqdm
 from os import makedirs
-# from gaussian_renderer import render
-from gaussian_renderer import render_flash as render
+from gaussian_renderer import render
+# from gaussian_renderer import render_flash as render
 import torchvision
 from utils.general_utils import safe_state
 from argparse import ArgumentParser
@@ -23,6 +23,22 @@ from arguments import ModelParams, PipelineParams, get_combined_args
 from gaussian_renderer import GaussianModel
 import json, time
 import numpy as np
+from scene import MODE
+
+
+def render_wrapper(view, gaussians, pipeline, background, is_test=False):
+    """Wrapper function that handles both standard and model-specific rendering."""
+    if MODE == "ubs":
+        # UBS mode: use render_tcgs with CUDA-accelerated conditional slicing
+        gaussians.background = background
+        return gaussians.render_tcgs(view, render_mode="RGB", use_tcgs=True)
+    elif MODE == "6dgs":
+        # 6DGS mode: use model's render_tcgs with conditional slicing
+        gaussians.background = background
+        return gaussians.render_tcgs(view, render_mode="RGB", is_test=is_test)
+    else:
+        # Standard mode: use standard gaussian rasterization
+        return render(view, gaussians, pipeline, background, is_test=is_test)
 
 
 def render_set(model_path, name, iteration, views, gaussians, pipeline, background):
@@ -50,7 +66,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
             # Measure the start time
             start_time = time.time()
             for _ in range(num_frames):
-                rendering = render(view, gaussians, pipeline, background, is_test=True)["render"]
+                rendering = render_wrapper(view, gaussians, pipeline, background, is_test=True)["render"]
             end_time = time.time()
             # Calculate the total time taken
             total_time = end_time - start_time
@@ -61,10 +77,10 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
             if len(fpslist) == 20:
                 print(f"Average Rendering FPS: {np.array(fpslist).mean():.2f}")
         else:
-            renderings = render(view, gaussians, pipeline, background, is_test=True)
+            renderings = render_wrapper(view, gaussians, pipeline, background, is_test=True)
             rendering = renderings["render"]
-            rendering_principle = renderings["render_principle"]
-            rendering_non_principle = renderings["render_non_principle"]
+            rendering_principle = renderings.get("render_principle")
+            rendering_non_principle = renderings.get("render_non_principle")
             
         gt = view.original_image[0:3, :, :]
         torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))

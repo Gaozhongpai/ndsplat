@@ -37,10 +37,31 @@ def create_radial_weight_mask(height, width, center_weight=0.8, edge_weight=5):
     weight_mask = center_weight + (edge_weight - center_weight) * normalized_distance
     return weight_mask
 
+def render_wrapper(viewpoint_cam, gaussians, pipe, bg, scaling_modifier=1.0):
+    """Wrapper function that handles both standard and model-specific rendering."""
+    if MODE == "ubs" or MODE == "6dgs":
+        # UBS mode: use render_tcgs with CUDA-accelerated conditional slicing
+        gaussians.background = bg
+        return gaussians.render_tcgs(viewpoint_cam, render_mode="RGB", use_tcgs=False, scaling_modifier=scaling_modifier)
+    elif MODE == "6dgs":
+        # 6DGS mode: use model's render_tcgs with conditional slicing
+        gaussians.background = bg
+        return gaussians.render_tcgs(viewpoint_cam, render_mode="RGB", use_tcgs=False, is_test=False, scaling_modifier=scaling_modifier)
+    else:
+        # Standard mode: use standard gaussian rasterization
+        return render(viewpoint_cam, gaussians, pipe, bg, scaling_modifier)
+
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
-    gaussians = GaussianModel(dataset.sh_degree)
+
+    # Initialize model based on MODE
+    if MODE == "ubs":
+        # UBS model uses input_dim instead of sh_degree
+        gaussians = GaussianModel(input_dim=6)  # 6D Gaussian (or 7 for time)
+    else:
+        gaussians = GaussianModel(dataset.sh_degree)
+
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
     if checkpoint:
@@ -72,7 +93,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 net_image_bytes = None
                 custom_cam, do_training, pipe.convert_SHs_python, pipe.compute_cov3D_python, keep_alive, scaling_modifer = network_gui.receive()
                 if custom_cam != None:
-                    net_image = render(custom_cam, gaussians, pipe, background, scaling_modifer)["render"]
+                    net_image = render_wrapper(custom_cam, gaussians, pipe, background, scaling_modifer)["render"]
                     net_image_bytes = memoryview((torch.clamp(net_image, min=0, max=1.0) * 255).byte().permute(1, 2, 0).contiguous().cpu().numpy())
                 network_gui.send(net_image_bytes, dataset.source_path)
                 if do_training and ((iteration < int(opt.iterations)) or not keep_alive):
@@ -101,7 +122,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
             bg = torch.rand((3), device="cuda") if opt.random_background else background
 
-            render_pkg = render(viewpoint_cam, gaussians, pipe, bg)
+            # Use unified render wrapper (handles both ubs and standard modes)
+            render_pkg = render_wrapper(viewpoint_cam, gaussians, pipe, bg)
             image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
             # image_non_principle = render_pkg["render_non_principle"]
             # Loss
@@ -123,7 +145,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 progress_bar.close()
 
             # Log and save
-            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background))
+            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render_wrapper, (pipe, background))
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 print("\nNnmber Gaussian: {}".format(gaussians.get_xyz.shape[0]))
@@ -140,7 +162,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                    min_opacity = 0.01 if MODE == "ndgs" else 0.005
+                    min_opacity = 0.01 if MODE == "6dgs" or MODE == "ubs" else 0.005
                     gaussians.densify_and_prune(opt.densify_grad_threshold, min_opacity, scene.cameras_extent, size_threshold, iteration)
                 
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):

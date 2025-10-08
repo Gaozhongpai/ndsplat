@@ -7,3 +7,6 @@
 [submodule "SIBR_viewers"]
 	path = SIBR_viewers
 	url = https://gitlab.inria.fr/sibr/sibr_core.git
+[submodule "submodules/tcgs_speedy_rasterizer"]
+    path = submodules/tcgs_speedy_rasterizer
+    url = https://github.com/Gaozhongpai/tcgscut.git

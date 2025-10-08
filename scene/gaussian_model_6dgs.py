@@ -21,6 +21,11 @@ from utils.sh_utils import RGB2SH
 from utils.graphics_utils import BasicPointCloud
 from utils.general_utils import strip_symmetric, build_scaling_rotation
 from utils.ndgs_utils import create_cholesky, create_cholesky_v2, strip_lower_diag
+# Import TCGS rasterizer
+from tcgs_speedy_rasterizer import (
+    GaussianRasterizationSettings as TCGSRasterizationSettings,
+    GaussianRasterizer as TCGSRasterizer,
+)
 
 # from utils.ndgs_utils import project_vectors_gaussians
 # from evaluators.lsh_evaluator import EvaluatorLSH
@@ -64,7 +69,7 @@ class GaussianModel:
 
     def __init__(self, sh_degree : int):
         self.active_sh_degree = 0
-        self.max_sh_degree = sh_degree  
+        self.max_sh_degree = sh_degree
         self._xyz = torch.empty(0)
         self._features_dc = torch.empty(0)
         self._features_rest = torch.empty(0)
@@ -76,6 +81,7 @@ class GaussianModel:
         self.optimizer = None
         self.percent_dense = 0
         self.spatial_lr_scale = 0
+        self.background = torch.empty(0)  # Background color for rendering
         
         self.n_projection_vecs = 8
         self.color_dim = 8
@@ -809,3 +815,89 @@ class GaussianModel:
     def add_densification_stats(self, viewspace_point_tensor, update_filter):
         self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True)
         self.denom[update_filter] += 1
+
+    def render_tcgs(self, viewpoint_camera, render_mode="RGB", use_tcgs=False, is_test=False, scaling_modifier=1.0):
+        """
+        Render using 6DGS conditional slicing with diff-gaussian-rasterization.
+        This encapsulates the 6DGS-specific rendering logic.
+        """
+        from utils.ndgs_utils import create_cholesky_v2, slice_gaussian, slice_gaussian_test
+        import math
+
+        # Create screenspace points for gradient tracking
+        screenspace_points = torch.zeros_like(self.get_xyz, dtype=self.get_xyz.dtype, requires_grad=True, device="cuda") + 0
+        try:
+            screenspace_points.retain_grad()
+        except:
+            pass
+
+        # Compute view direction for conditional slicing
+        dir_pp = (self.get_xyz - viewpoint_camera.camera_center.repeat(self.get_normal.shape[0], 1))
+        cond_params = dir_pp / dir_pp.norm(dim=1, keepdim=True)
+        lambda_opc = 0.35
+
+        if is_test:
+            # Test mode: use precomputed values
+            m_cond, pdf_cond = slice_gaussian_test(
+                self.get_xyz, self.direction, cond_params,
+                self.v_22_inv, self.v_regr, lambda_opc=lambda_opc
+            )
+            shs = self.shs
+            cov3D_precomp = self.cov3D_precomp
+        else:
+            # Training mode: compute conditional slicing
+            direction = self.get_normal / self.get_normal.norm(dim=1, keepdim=True)
+            shs = self.get_features
+
+            v = create_cholesky_v2(self.diags_act(self.diags), self.l_triangs_act(self.l_triangs))
+            m_cond, cov3D_precomp, pdf_cond = slice_gaussian(
+                self.get_xyz, direction, cond_params, v, c_dim=3, lambda_opc=lambda_opc
+            )
+
+        # Compute opacity with conditional probability
+        opacity = self.get_opacity * pdf_cond
+
+        # Set up rasterization
+        tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)
+        tanfovy = math.tan(viewpoint_camera.FoVy * 0.5)
+
+        # Use background from model if set, otherwise default to black
+        bg_color = self.background if self.background.numel() > 0 else torch.tensor([0, 0, 0], dtype=torch.float32, device="cuda")
+
+        raster_settings = TCGSRasterizationSettings(
+            image_height=int(viewpoint_camera.image_height),
+            image_width=int(viewpoint_camera.image_width),
+            tanfovx=tanfovx,
+            tanfovy=tanfovy,
+            bg=bg_color,
+            scale_modifier=scaling_modifier,
+            viewmatrix=viewpoint_camera.world_view_transform,
+            projmatrix=viewpoint_camera.full_proj_transform,
+            sh_degree=self.active_sh_degree,
+            campos=viewpoint_camera.camera_center,
+            prefiltered=False,
+            use_tcgs=use_tcgs,
+            debug=False
+        )
+
+        rasterizer = TCGSRasterizer(raster_settings=raster_settings)
+        
+        # Rasterize
+        rendered_image, radii, render_time = rasterizer(
+            means3D=m_cond,
+            means2D=screenspace_points,
+            shs=shs,
+            colors_precomp=None,
+            opacities=opacity,
+            scores=None,
+            scales=None,
+            rotations=None,
+            cov3D_precomp=cov3D_precomp,
+        )
+
+        return {
+            "render": rendered_image,
+            "viewspace_points": screenspace_points,
+            "visibility_filter": radii > 0,
+            "radii": radii,
+        }

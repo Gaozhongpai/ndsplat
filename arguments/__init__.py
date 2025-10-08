@@ -77,7 +77,7 @@ class OptimizationParams(ParamGroup):
         self.position_lr_delay_mult = 0.01
         self.position_lr_max_steps = 30_000
         self.feature_lr = 0.0025
-        
+
         self.diags_lr = 1e-2
         self.l_triangs_lr = 1e-2
         self.color_lr = 0.005
@@ -93,6 +93,14 @@ class OptimizationParams(ParamGroup):
         self.densify_until_iter = 15_000
         self.densify_grad_threshold = 0.0002
         self.random_background = False
+
+        # UBS-specific learning rates
+        self.mean_lr = 0.0001
+        self.beta_lr = 0.0001
+        self.rgb_lr = 0.0025
+        self.scale_lr = 0.005
+        self.l_triangle_lr = 0.001
+
         super().__init__(parser, "Optimization Parameters")
 
 def get_combined_args(parser : ArgumentParser):
