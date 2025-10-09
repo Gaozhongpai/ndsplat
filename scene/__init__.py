@@ -23,7 +23,7 @@ MODE = "6dgs" # "ddgs", "3dgs", "6dgs", "ubs"
 if MODE == "ddgs": ## Neurips 2024
     from scene.gaussian_model_ddgs import GaussianModel
 elif MODE == "6dgs": ## ICLR 2025
-    from scene.gaussian_model_6dgs_rot import GaussianModel
+    from scene.gaussian_model_6dgs import GaussianModel
 elif MODE == "3dgs": ## original 3DGS
     from scene.gaussian_model import GaussianModel
 elif MODE == "ubs": ## UBS (ICLR 2026)

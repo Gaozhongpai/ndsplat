@@ -190,8 +190,12 @@ def create_cholesky_v2(diag: torch.Tensor, l_triang: torch.Tensor) -> torch.Tens
 
 def strip_lower_diag(L):
     return torch.stack([
-        L[:, 0, 0].abs(), L[:, 0, 1], L[:, 0, 2],
-        L[:, 1, 1].abs(), L[:, 1, 2], L[:, 2, 2].abs()
+        L[:, 0, 0].abs(), 
+        L[:, 0, 1], 
+        L[:, 0, 2],
+        L[:, 1, 1].abs(), 
+        L[:, 1, 2], 
+        L[:, 2, 2].abs()
     ], dim=1)
 
 def slice_gaussian(m_1, m_2, q, v, c_dim, lambda_opc=0.35):

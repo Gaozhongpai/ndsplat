@@ -22,17 +22,17 @@ from utils.graphics_utils import BasicPointCloud
 from utils.general_utils import strip_symmetric, build_scaling_rotation
 from utils.ndgs_utils import strip_lower_diag
 
-# Import gsplat functions for N-DGS operations
 from gsplat import (
     _slice_gaussian_ndgs_test as slice_gaussian_ndgs_test,
     _slice_gaussian_ndgs as slice_gaussian_ndgs,
     _l_triangle_to_covar as l_triangle_to_covar
 )
 
+# Import CUDA-accelerated gsplat operations for N-DGS (verified with unit tests)
 from gsplat import (
-    slice_gaussian_ndgs, 
-    slice_gaussian_ndgs_test, 
-    l_triangle_to_covar
+    slice_gaussian_ndgs_test,
+    slice_gaussian_ndgs,
+    l_triangle_to_covar,
 )
 
 # Import TCGS rasterizer
@@ -86,7 +86,7 @@ class GaussianModel:
         Given ND Gaussian with mean [m_1, m_2] and covariance v,
         compute conditional distribution given observation q for m_2.
 
-        Uses gsplat CUDA implementation for efficiency.
+        Uses CUDA-accelerated gsplat implementation for fast computation.
 
         Args:
             q: Query direction (view direction) [N, C]
@@ -104,7 +104,7 @@ class GaussianModel:
         # Build covariance matrix from diagonal and lower triangular elements
         v = self.get_pc_v
 
-        # Use gsplat CUDA implementation for conditional Gaussian slicing
+        # Use CUDA-accelerated conditional Gaussian slicing
         m_cond, cov3D_precomp, scale = slice_gaussian_ndgs(
             m_1=m_1,
             m_2=m_2,
@@ -119,7 +119,7 @@ class GaussianModel:
         """
         Optimized version of slice_gaussian for test/inference time.
         Uses precomputed self.v_22_inv and self.v_regr to avoid redundant computation.
-        Now accelerated with custom CUDA kernel.
+        CUDA-accelerated for fast inference.
 
         Args:
             q: Query direction (view direction)
@@ -134,7 +134,7 @@ class GaussianModel:
         v_22_inv = self.v_22_inv
         v_regr = self.v_regr
 
-        # Use optimized CUDA kernel for inference
+        # Use CUDA-accelerated inference
         m_cond, scale = slice_gaussian_ndgs_test(
             m_1=m_1,
             m_2=m_2,
@@ -235,10 +235,10 @@ class GaussianModel:
     
     @property
     def get_pc_v(self):
-        # Use CUDA kernel for covariance matrix construction
+        # Use CUDA-accelerated covariance computation
         diag = self.diags_act(self.diags)
         l_triang = self.l_triangs_act(self.l_triangs)
-        return l_triangle_to_covar(diag, l_triang)  # [N, D, D] using CUDA
+        return l_triangle_to_covar(diag, l_triang)  # [N, D, D] via CUDA
     
     @property
     def get_features(self):
@@ -478,8 +478,8 @@ class GaussianModel:
     
         ### test ####
         c_dim = 3
-        # Use CUDA kernel
-        v = self.get_pc_v  # [N, D, D] using CUDA
+        # Use CUDA-accelerated covariance
+        v = self.get_pc_v  # [N, D, D] via CUDA
         
         v_11 = v[:, :c_dim, :c_dim]
         v_12 = v[:, :c_dim, c_dim:]
@@ -906,6 +906,8 @@ class GaussianModel:
         else:
             # Training mode: compute conditional slicing
             shs = self.get_features
+            # slice_gaussian returns upper-triangular format [0,0], [0,1], [0,2], [1,1], [1,2], [2,2]
+            # which is directly compatible with diff_gaussian_rasterization
             m_cond, cov3D_precomp, pdf_cond = self.slice_gaussian(cond_params, c_dim=3, lambda_opc=lambda_opc)
 
         # Compute opacity with conditional probability
@@ -931,6 +933,7 @@ class GaussianModel:
             campos=viewpoint_camera.camera_center,
             prefiltered=False,
             use_tcgs=use_tcgs,
+            tight_snugbox=False,
             debug=False
         )
 

@@ -30,7 +30,6 @@ from gsplat import (
     l_triangle_to_rotmat,
     rot_scale_l_triangle_to_covar,
     cond_mean_convariance_opacity,
-    cov3x3_to_triu,
 )
 
 # Import compression utilities
@@ -981,7 +980,7 @@ class GaussianModel:
         render_mode="RGB",
         mask=None,
         use_tcgs=False,
-        tight_snugbox=True,
+        tight_snugbox=False,
         scaling_modifier=1.0,
     ):
         if render_mode != "RGB":
@@ -1017,7 +1016,10 @@ class GaussianModel:
 
         means3d = means[mask][..., :3].contiguous()
 
-        covars = cov3x3_to_triu(convs[mask].contiguous())
+        # Convert covars from 3x3 symmetric matrix to upper-triangular 6-element vector
+        # Upper-tri order: [0,0], [0,1], [0,2], [1,1], [1,2], [2,2] (required by TCGS rasterizer)
+        tri_indices = ([0, 0, 0, 1, 1, 2], [0, 1, 2, 1, 2, 2])
+        covars = convs[mask][..., tri_indices[0], tri_indices[1]].contiguous()  # [N, 6]
         rgba = self._rgb[mask].contiguous()  # Should be [N, 3]
 
         # Extract first beta dimension for TCGS rasterizer and keep as [N, 1]
