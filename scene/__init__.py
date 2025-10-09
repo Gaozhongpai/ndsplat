@@ -27,7 +27,7 @@ elif MODE == "6dgs": ## ICLR 2025
 elif MODE == "3dgs": ## original 3DGS
     from scene.gaussian_model import GaussianModel
 elif MODE == "ubs": ## UBS (ICLR 2026)
-    from scene.gaussian_model_ubs import GaussianModel
+    from scene.gaussian_model_ubs_sh import GaussianModel
 
 class Scene:
 

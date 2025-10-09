@@ -907,7 +907,7 @@ class GaussianModel:
             campos=viewpoint_camera.camera_center,
             prefiltered=False,
             use_tcgs=use_tcgs,
-            tight_snugbox=False,
+            tight_snugbox=True,
             debug=False
         )
 
