@@ -12,10 +12,14 @@
 import os
 import random
 import json
+from typing import TYPE_CHECKING
 from utils.system_utils import searchForMaxIteration
 from scene.dataset_readers import sceneLoadTypeCallbacks
 from arguments import ModelParams
 from utils.camera_utils import cameraList_from_camInfos, camera_to_JSON
+
+if TYPE_CHECKING:
+    from scene.gaussian_model_6dgs import GaussianModel
 
 
 def get_gaussian_model(mode: str):
@@ -39,15 +43,12 @@ def get_gaussian_model(mode: str):
         raise ValueError(f"Unknown mode: {mode}. Must be one of: 6dgs, ddgs, 3dgs, ubs")
     return GaussianModel
 
-# For backward compatibility, export a default MODE
-# This will be overridden by args.mode in train.py and render.py
-MODE = "6dgs"
 
 class Scene:
 
-    gaussians : GaussianModel
+    gaussians : "GaussianModel"
 
-    def __init__(self, args : ModelParams, gaussians : GaussianModel, load_iteration=None, shuffle=True, resolution_scales=[1.0]):
+    def __init__(self, args : ModelParams, gaussians : "GaussianModel", load_iteration=None, shuffle=True, resolution_scales=[1.0]):
         """b
         :param path: Path to colmap scene main folder.
         """
@@ -109,9 +110,9 @@ class Scene:
             #     self.gaussians.save_ply_decoupled()
             # self.gaussians.save_ply_decoupled(os.path.join(point_cloud_path, "point_cloud.ply"))
         else:
-            if "ddgs" in MODE:
+            if "ddgs" in args.mode:
                 self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent, args.source_path)
-            elif MODE == "ubs":
+            elif args.mode == "ubs":
                 # UBS model only needs spatial_lr_scale (no sh_degree parameter)
                 self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent)
             else:

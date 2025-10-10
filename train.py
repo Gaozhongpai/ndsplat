@@ -11,6 +11,7 @@
 
 import os
 import torch
+import numpy as np
 from random import randint
 from utils.loss_utils import l1_loss, ssim
 import sys
@@ -102,7 +103,29 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
     # Initialize viser viewer if available and not disabled
     viewer = None
     if VISER_FOUND and not viewer_params.disable_viewer:
+        # Compute scene bounds for initial camera setup
+        xyz = gaussians.get_xyz.detach().cpu().numpy()
+        scene_center = xyz.mean(axis=0)
+        scene_min = xyz.min(axis=0)
+        scene_max = xyz.max(axis=0)
+        scene_size = scene_max - scene_min
+        scene_radius = float(np.linalg.norm(scene_size))  # Diagonal of bounding box
+
         server = viser.ViserServer(port=viewer_params.port, verbose=False)
+
+        # Set initial camera pose looking at the scene center
+        # Camera positioned at distance = scene_radius from center
+        camera_distance = scene_radius * 1.2  # Add 20% margin
+        initial_camera_position = scene_center + np.array([0, 0, camera_distance])
+
+        # Set up the camera to look at the center
+        server.scene.set_up_direction("+y")
+        server.scene.add_frame(
+            "world",
+            wxyz=(1.0, 0.0, 0.0, 0.0),
+            position=tuple(scene_center),
+        )
+
         viewer = GaussianViewer(
             server=server,
             render_fn=lambda camera_state, render_tab_state: gaussians.view_tcgs(
@@ -112,7 +135,13 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
             mode="training",
             share_url=False,
         )
+
+        # Set initial camera position
+        server.camera.position = tuple(initial_camera_position)
+        server.camera.look_at = tuple(scene_center)
+
         print(f"Viser viewer started on port {viewer_params.port}")
+        print(f"Scene center: {scene_center}, radius: {scene_radius:.2f}")
 
     iter_start = torch.cuda.Event(enable_timing = True)
     iter_end = torch.cuda.Event(enable_timing = True)

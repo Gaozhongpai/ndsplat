@@ -12,6 +12,7 @@ class GaussianRenderTabState(RenderTabState):
     # controlable parameters
     near_plane: float = 1e-3
     far_plane: float = 1e3
+    radius_clip: float = 0.0  # 2D radius clip for rendering
     opacity_threshold: float = 0.01  # Minimum opacity for rendering
     scale_threshold: float = 100.0  # Maximum scale for rendering
     x_threshold: float = float('inf')  # X-axis threshold for cutting plane
