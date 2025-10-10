@@ -1146,6 +1146,10 @@ class GaussianModel:
         # Add color_interpolation attribute for dual SH blending
         viewpoint_camera.color_interpolation = render_tab_state.color_interpolation
 
+        # Add timestamp for 7DGS time animation
+        if self.input_dim == 7:
+            viewpoint_camera.timestamp = render_tab_state.timestamp
+
         # Apply filtering mask for selective rendering
         opacity = self.get_opacity
         mask = create_mask(
@@ -1174,6 +1178,8 @@ class GaussianModel:
         original_lambda_opc = self._lambda_opc
         original_scale = self._scale
         original_l_triangle = self._l_triangle
+        # Save time parameter for 7DGS
+        original_mean_time = self._mean_time if (self.input_dim == 7 and hasattr(self, '_mean_time')) else None
 
         # Check if mask has any valid Gaussians
         num_valid = mask.sum().item()
@@ -1199,6 +1205,9 @@ class GaussianModel:
         self._lambda_opc = self._lambda_opc[mask]
         self._scale = self._scale[mask]
         self._l_triangle = self._l_triangle[mask]
+        # Filter time parameter for 7DGS
+        if self.input_dim == 7 and hasattr(self, '_mean_time'):
+            self._mean_time = self._mean_time[mask]
 
         try:
             # Call render_tcgs
@@ -1236,6 +1245,9 @@ class GaussianModel:
             self._lambda_opc = original_lambda_opc
             self._scale = original_scale
             self._l_triangle = original_l_triangle
+            # Restore time parameter for 7DGS
+            if original_mean_time is not None:
+                self._mean_time = original_mean_time
 
         # Convert from [C, H, W] to [H, W, C] for viewer
         render_colors = render_colors.permute(1, 2, 0)
