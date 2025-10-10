@@ -709,7 +709,7 @@ class GaussianModel:
         self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True)
         self.denom[update_filter] += 1
 
-    def render_tcgs(self, viewpoint_camera, render_mode="RGB", use_tcgs=False, is_test=False, scaling_modifier=1.0):
+    def render_tcgs(self, viewpoint_camera, render_mode="RGB", use_tcgs=False, is_test=False, scaling_modifier=1.0, tight_snugbox=True):
         """
         Render using 6DGS conditional slicing with diff-gaussian-rasterization.
         This encapsulates the 6DGS-specific rendering logic with dual SH support.
@@ -720,6 +720,7 @@ class GaussianModel:
             use_tcgs: Whether to use TCGS rasterizer
             is_test: Whether in test mode
             scaling_modifier: Scaling factor for Gaussians
+            tight_snugbox: Use tight snugbox for TCGS rasterization (default: True)
         """
         import math
 
@@ -795,7 +796,7 @@ class GaussianModel:
             x_threshold=x_threshold,
             prefiltered=False,
             use_tcgs=use_tcgs,
-            tight_snugbox=True,
+            tight_snugbox=tight_snugbox,
             debug=False
         )
 
@@ -978,7 +979,8 @@ class GaussianModel:
                 render_mode=render_tab_state.render_mode,
                 use_tcgs=True,
                 is_test=False,
-                scaling_modifier=1.0
+                scaling_modifier=1.0,
+                tight_snugbox=render_tab_state.tight_snugbox
             )
 
             render_colors = render_output["render"]

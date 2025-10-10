@@ -26,6 +26,7 @@ class GaussianRenderTabState(RenderTabState):
         "RGB", "Alpha", "Diffuse", "Specular", "Depth", "Normal"
     ] = "RGB"
     color_interpolation: float = 0.0  # 0.0 = SH_0 only, 1.0 = SH_1 only, 0.5 = 50/50 blend
+    tight_snugbox: bool = True  # Use tight snugbox for TCGS rasterization (default: True)
 
 
 class GaussianViewer(Viewer):
@@ -205,6 +206,17 @@ class GaussianViewer(Viewer):
                     self.render_tab_state.render_mode = self.render_mode_dropdown.value
                     self.rerender(_)
 
+                self.tight_snugbox_checkbox = self.server.gui.add_checkbox(
+                    "Tight Snugbox",
+                    initial_value=self.render_tab_state.tight_snugbox,
+                    hint="Use tight snugbox for TCGS rasterization (better culling, may improve performance)",
+                )
+
+                @self.tight_snugbox_checkbox.on_update
+                def _(_) -> None:
+                    self.render_tab_state.tight_snugbox = self.tight_snugbox_checkbox.value
+                    self.rerender(_)
+
                 self.total_count_number = self.server.gui.add_number(
                     "Total",
                     initial_value=self.render_tab_state.total_count_number,
@@ -271,6 +283,7 @@ class GaussianViewer(Viewer):
                 "x_threshold_slider": self.x_threshold_slider,
                 "x_threshold_checkbox": self.x_threshold_checkbox,
                 "color_interpolation_slider": self.color_interpolation_slider,
+                "tight_snugbox_checkbox": self.tight_snugbox_checkbox,
                 "fps_number": self.fps_number,
                 "total_count_number": self.total_count_number,
                 "rendered_count_number": self.rendered_count_number,
