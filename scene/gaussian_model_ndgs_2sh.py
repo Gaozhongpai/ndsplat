@@ -24,17 +24,13 @@ from utils.graphics_utils import BasicPointCloud
 from utils.general_utils import strip_symmetric, build_scaling_rotation
 from utils.ndgs_utils import strip_lower_diag
 
-from gsplat import (
-    _slice_gaussian_ndgs_test as slice_gaussian_ndgs_test,
-    _slice_gaussian_ndgs as slice_gaussian_ndgs,
-    _l_triangle_to_covar as l_triangle_to_covar
-)
-
-# Import CUDA-accelerated gsplat operations for N-DGS (verified with unit tests)
+# Import gsplat functions for N-DGS operations
 from gsplat import (
     slice_gaussian_ndgs_test,
     slice_gaussian_ndgs,
     l_triangle_to_covar,
+    l_triangle_to_rotmat,
+    rot_scale_l_triangle_to_covar
 )
 
 # Import TCGS rasterizer
@@ -91,7 +87,7 @@ class GaussianModel:
         Uses CUDA-accelerated gsplat implementation for fast computation.
 
         Args:
-            q: Query direction (view direction) [N, C]
+            q: Query direction (view direction + time for 7DGS) [N, C]
             c_dim: Conditional dimension (default 3 for spatial xyz)
             lambda_opc: Opacity scaling factor (default 0.35)
 
@@ -101,7 +97,13 @@ class GaussianModel:
             scale: Opacity scaling factor based on direction influence [N, 1]
         """
         m_1 = self.get_xyz  # [N, 3]
-        m_2 = self.get_normal / self.get_normal.norm(dim=1, keepdim=True)  # [N, 3] normalized
+
+        # For 7DGS, m_2 includes both normal (3D) and time (1D)
+        if self.input_dim == 7 and hasattr(self, '_mean_time'):
+            normal_normalized = self.get_normal / self.get_normal.norm(dim=1, keepdim=True)  # [N, 3]
+            m_2 = torch.cat([normal_normalized, self._mean_time], dim=-1)  # [N, 4]
+        else:
+            m_2 = self.get_normal / self.get_normal.norm(dim=1, keepdim=True)  # [N, 3]
 
         # Build covariance matrix from diagonal and lower triangular elements
         v = self.get_pc_v
@@ -148,15 +150,30 @@ class GaussianModel:
         return m_cond, scale
 
 
-    def __init__(self, sh_degree : int, input_dim: int = 6):
+    def __init__(self, sh_degree : int, input_dim: int = 6, use_rot_scale_l_triangle: bool = False,
+                 learnable_lambda_opc: bool = False):
+        """
+        Initialize GaussianModel with flexible covariance parametrization.
+
+        Args:
+            sh_degree: Maximum degree of spherical harmonics
+            input_dim: Dimensionality (6 for 6DGS, 7 for 7DGS with time)
+            use_rot_scale_l_triangle: If True, use rotation-scale-l_triangle parametrization (UBS style).
+                                      If False, use direct diagonal-l_triangle parametrization (NDGS style).
+            learnable_lambda_opc: If True, make lambda_opc a learnable parameter per Gaussian.
+        """
         self.active_sh_degree = 0
         self.max_sh_degree = sh_degree
         self.input_dim = input_dim  # 6 for 6DGS, 7 for 7DGS (with time)
+        self.use_rot_scale_l_triangle = use_rot_scale_l_triangle
+        self.learnable_lambda_opc = learnable_lambda_opc
+
         self._xyz = torch.empty(0)
         self._features_dc = [torch.empty(0), torch.empty(0)]  # Dual SH for multi-view
         self._features_rest = [torch.empty(0), torch.empty(0)]  # Dual SH for multi-view
         self._normal = torch.empty(0)
         self._opacity = torch.empty(0)
+        self._lambda_opc = torch.empty(0)  # Learnable opacity scaling parameter
         self.max_radii2D = torch.empty(0)
         self.xyz_gradient_accum = torch.empty(0)
         self.denom = torch.empty(0)
@@ -170,21 +187,38 @@ class GaussianModel:
         self.gs_dim = input_dim  # Use input_dim instead of hardcoded 6
         self.init_color=1.0
         self.cov_bias=1e-1
-        
-        # self.color_net = nn.Sequential(
-        #                     nn.Linear(6, 64),
-        #                     nn.ReLU(),
-        #                     nn.Linear(64, 3),
-        #                     nn.Sigmoid()  # Output in [0, 1] range
-        #                 ).to("cuda")
-        
-        # self.opacity_act_inv=lambda x: inverse_sigmoid(x)
-        self.diags_act = lambda x: torch.exp(x)
-        self.diags_act_inv = lambda x: torch.log(torch.max(x, torch.tensor(1e-6, device=x.device)))
-        self.l_triangs_act = lambda x: torch.sigmoid(x)*2.0-1.0
-        self.l_triangs_act_inv = lambda x: inverse_sigmoid(torch.clip((x+1.0)/2.0, min=1e-6, max=1.0 - 1e-6))
+
+        # Unified parameters for both parametrizations
+        self._scale = torch.empty(0)
+        self._l_triangle = torch.empty(0)
+
+        # Activation functions (parametrization-specific)
+        if self.use_rot_scale_l_triangle:
+            # UBS-style: rotation-scale-l_triangle parametrization
+            def inverse_softplus(y):
+                return y + torch.log(-torch.expm1(-y))
+
+            self.scale_activation = torch.nn.functional.softplus
+            self.scale_inverse_activation = inverse_softplus
+            self.l_triangle_activation = lambda x: x
+            self.l_triangle_inverse_activation = lambda x: x
+        else:
+            # NDGS-style: direct diagonal-l_triangle parametrization
+            self.scale_activation = lambda x: torch.exp(x)
+            self.scale_inverse_activation = lambda x: torch.log(torch.max(x, torch.tensor(1e-6, device=x.device)))
+            self.l_triangle_activation = lambda x: torch.sigmoid(x)*2.0-1.0
+            self.l_triangle_inverse_activation = lambda x: inverse_sigmoid(torch.clip((x+1.0)/2.0, min=1e-6, max=1.0 - 1e-6))
+
         self.mean_scale = 1.0
         self.setup_functions()
+
+        # Compute indices for rest of l_triangle (excluding first 3 spatial rotation params)
+        # Only needed for rot_scale_l_triangle parametrization
+        if self.use_rot_scale_l_triangle:
+            tril_i, tril_j = torch.tril_indices(self.gs_dim, self.gs_dim, offset=-1)
+            mask_rest = (tril_i >= 3) | (tril_j >= 3)
+            self.rest_i = tril_i[mask_rest].to(torch.int32).to("cuda")
+            self.rest_j = tril_j[mask_rest].to(torch.int32).to("cuda")
 
     def capture(self):
         return (
@@ -228,6 +262,10 @@ class GaussianModel:
     
     @property
     def get_xyz_normal(self):
+        # For 6DGS: [xyz, normal_xyz] -> 6D
+        # For 7DGS: [xyz, normal_xyz, time] -> 7D (if _mean_time exists)
+        if self.input_dim == 7 and hasattr(self, '_mean_time'):
+            return torch.cat([self._xyz, self._normal, self._mean_time], dim=-1)
         return torch.cat([self._xyz, self._normal], dim=-1)
     
     # def cull(self, q, total_m, total_v):
@@ -237,11 +275,42 @@ class GaussianModel:
     #     return mask
     
     @property
+    def get_rotation(self):
+        """Get 6D rotation matrix from first 3 l_triangle parameters (rot_scale_l_triangle only)."""
+        if not self.use_rot_scale_l_triangle:
+            raise NotImplementedError("get_rotation only available with rot_scale_l_triangle parametrization")
+        return l_triangle_to_rotmat(self.get_l_triangle[:, :3])
+
+    @property
+    def get_scale(self):
+        """Get activated scale parameters (works for both parametrizations)."""
+        return self.scale_activation(self._scale)
+
+    @property
+    def get_l_triangle(self):
+        """Get activated l_triangle parameters (works for both parametrizations)."""
+        return self.l_triangle_activation(self._l_triangle)
+
+    @property
     def get_pc_v(self):
-        # Use CUDA-accelerated covariance computation
-        diag = self.diags_act(self.diags)
-        l_triang = self.l_triangs_act(self.l_triangs)
-        return l_triangle_to_covar(diag, l_triang)  # [N, D, D] via CUDA
+        """
+        Get full ND covariance matrix using the appropriate parametrization.
+
+        Returns:
+            Covariance matrix [N, D, D]
+        """
+        if self.use_rot_scale_l_triangle:
+            # UBS-style: Use CUDA kernel for rotation-scale-l_triangle
+            return rot_scale_l_triangle_to_covar(
+                self.get_rotation,
+                self.get_scale,
+                self.get_l_triangle,
+                self.rest_i,
+                self.rest_j,
+            )
+        else:
+            # NDGS-style: Use CUDA kernel for diagonal-l_triangle
+            return l_triangle_to_covar(self.get_scale, self.get_l_triangle)  # [N, D, D] via CUDA
     
     @property
     def get_features(self):
@@ -256,7 +325,16 @@ class GaussianModel:
     @property
     def get_opacity(self):
         return self.opacity_activation(self._opacity)
-    
+
+    @property
+    def get_lambda_opc(self):
+        """Get lambda_opc parameter (learnable or fixed)."""
+        if self.learnable_lambda_opc:
+            return self.opacity_activation(self._lambda_opc)
+        else:
+            # Return fixed value of 0.35 for all Gaussians
+            return torch.ones_like(self._opacity) * 0.35
+
     @property
     def get_scaling(self):
         v = self.get_pc_v
@@ -330,6 +408,11 @@ class GaussianModel:
         dir = torch.randn((init_n_gs, 3), device=device)
         normal = (dir / dir.norm(dim=1, keepdim=True)).float().cuda()
 
+        # For 7DGS, initialize time dimension
+        if self.input_dim == 7:
+            mean_time = torch.empty(init_n_gs, 1, device=device).uniform_(0.0, 1.0)
+            self._mean_time = nn.Parameter(mean_time.requires_grad_(True))
+
         print("Number of points at initialisation : ", fused_point_cloud.shape[0])
         
         # dist2 = torch.clamp_min(distCUDA2(torch.from_numpy(np.asarray(pcd.points)).float().cuda()), 0.0000001)
@@ -337,15 +420,36 @@ class GaussianModel:
         # self.diags = torch.nn.Parameter(self.diags_act_inv(torch.cat([scales, scales], dim=-1)))
 
         opacities = inverse_sigmoid(0.1 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda"))
-        
-        self.diags = torch.nn.Parameter(self.diags_act_inv(torch.ones([init_n_gs, self.gs_dim], device=device) * self.cov_bias))
-        self.l_triangs = torch.nn.Parameter(self.l_triangs_act_inv(torch.zeros([init_n_gs, self.gs_dim*(self.gs_dim-1)//2], device=device)))
-        # self.color = torch.nn.Parameter(torch.ones([init_n_gs, self.color_dim], device=device) * self.init_color)
-        
-        # # LSH Culling params
-        # self.projection_vecs = torch.randn(self.n_projection_vecs, self.gs_dim, device=device)
-        # self.projection_vecs /= self.projection_vecs.norm(dim=-1, keepdim=True)
-        
+        lambda_opcs = inverse_sigmoid(0.35 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda"))
+
+        from sklearn.neighbors import NearestNeighbors
+        def knn(x, K=4):
+            x_np = x.cpu().numpy()
+            model = NearestNeighbors(n_neighbors=K, metric="euclidean").fit(x_np)
+            distances, _ = model.kneighbors(x_np)
+            return torch.from_numpy(distances).to(x)
+
+        # Spatial scales (first 3): from KNN distances
+        dist2 = (knn(fused_point_cloud)[:, 1:] ** 2).mean(dim=-1)
+        scales_spatial = self.scale_inverse_activation(torch.sqrt(dist2))[..., None].repeat(1, 3)
+
+        # Non-spatial scales (remaining dimensions): small random values
+        if self.gs_dim > 3:
+            scales_rest = self.scale_inverse_activation(
+                torch.normal(1, 1e-5, size=(init_n_gs, self.gs_dim - 3), device=device)
+            )
+            scales = torch.cat([scales_spatial, scales_rest], dim=1)
+        else:
+            scales = scales_spatial
+
+        # L_triangle: [N, gs_dim*(gs_dim-1)//2] initialized to small noise
+        l_triangles = self.l_triangle_inverse_activation(
+            torch.normal(0, 1e-5, size=(init_n_gs, self.gs_dim*(self.gs_dim-1)//2), device=device)
+        )
+
+        self._scale = nn.Parameter(scales.requires_grad_(True))
+        self._l_triangle = nn.Parameter(l_triangles.requires_grad_(True))
+
         self._xyz = nn.Parameter(fused_point_cloud.requires_grad_(True))
         self._features_dc = [nn.Parameter(features[:,:,0:1].transpose(1, 2).contiguous().requires_grad_(True)),
                              nn.Parameter(features[:,:,0:1].transpose(1, 2).contiguous().requires_grad_(True))]
@@ -353,6 +457,7 @@ class GaussianModel:
                                nn.Parameter(features[:,:,1:].transpose(1, 2).contiguous().requires_grad_(True))]
         self._normal = nn.Parameter(normal.requires_grad_(True))
         self._opacity = nn.Parameter(opacities.requires_grad_(True))
+        self._lambda_opc = nn.Parameter(lambda_opcs.requires_grad_(self.learnable_lambda_opc))
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
     def training_setup(self, training_args):
@@ -368,10 +473,25 @@ class GaussianModel:
             {'params': [self._features_rest[1]], 'lr': training_args.feature_lr / 20.0, "name": "f_rest_1"},
             {'params': [self._normal], 'lr': training_args.feature_lr, "name": "normal"},
             {'params': [self._opacity], 'lr': training_args.opacity_lr, "name": "opacity"},
-            {'params': [self.diags], 'lr': training_args.diags_lr, "name": "diags"},
-            {'params': [self.l_triangs], 'lr': training_args.l_triangs_lr, "name": "l_triangs"},
-            # {'params': self.color_net.parameters(), 'lr': training_args.color_lr, "name": "color_net"}
         ]
+
+        # Support both old and new naming for learning rates
+        scale_lr = training_args.scale_lr if hasattr(training_args, 'scale_lr') else training_args.diags_lr
+        l_triangle_lr = training_args.l_triangle_lr if hasattr(training_args, 'l_triangle_lr') else training_args.l_triangs_lr
+
+        l.append({'params': [self._scale], 'lr': scale_lr, "name": "scale"})
+        l.append({'params': [self._l_triangle], 'lr': l_triangle_lr, "name": "l_triangle"})
+
+        # Add lambda_opc parameter (learnable or not)
+        if self.learnable_lambda_opc:
+            l.append({'params': [self._lambda_opc], 'lr': training_args.opacity_lr, "name": "lambda_opc"})
+        else:
+            # Still add to optimizer but with requires_grad=False for consistency
+            l.append({'params': [self._lambda_opc], 'lr': 0.0, "name": "lambda_opc"})
+
+        # Add time parameter for 7DGS
+        if self.input_dim == 7 and hasattr(self, '_mean_time'):
+            l.append({'params': [self._mean_time], 'lr': training_args.feature_lr, "name": "mean_time"})
 
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
         self.xyz_scheduler_args = get_expon_lr_func(lr_init=training_args.position_lr_init*self.spatial_lr_scale,
@@ -399,10 +519,16 @@ class GaussianModel:
         for i in range(self._features_rest[1].shape[1]*self._features_rest[1].shape[2]):
             l.append('f_rest_1_{}'.format(i))
         l.append('opacity')
-        for i in range(self.diags.shape[1]):
-            l.append('diags_{}'.format(i))
-        for i in range(self.l_triangs.shape[1]):
-            l.append('l_triangs_{}'.format(i))
+        l.append('lambda_opc')
+        # Add time for 7DGS
+        if self.input_dim == 7 and hasattr(self, '_mean_time'):
+            l.append('mean_time')
+
+        # Use unified naming
+        for i in range(self._scale.shape[1]):
+            l.append('scale_{}'.format(i))
+        for i in range(self._l_triangle.shape[1]):
+            l.append('l_triangle_{}'.format(i))
 
         return l
 
@@ -415,17 +541,25 @@ class GaussianModel:
         f_dc_1 = self._features_dc[1].detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
         f_rest_0 = self._features_rest[0].detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
         f_rest_1 = self._features_rest[1].detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
-        # projection_vecs = self.projection_vecs.cpu().numpy()
-        # np.save(path.replace("ply", "npy"), projection_vecs)
         opacities = self._opacity.detach().cpu().numpy()
-        diags = self.diags.detach().cpu().numpy()
-        l_triangs = self.l_triangs.detach().cpu().numpy()
+        lambda_opcs = self._lambda_opc.detach().cpu().numpy()
 
         dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
 
         elements = np.empty(xyz.shape[0], dtype=dtype_full)
-        attributes = np.concatenate((xyz, normals, f_dc_0, f_dc_1, f_rest_0, f_rest_1,
-                                     opacities, diags, l_triangs), axis=1)
+
+        # Build attributes list, including time for 7DGS
+        attr_list = [xyz, normals, f_dc_0, f_dc_1, f_rest_0, f_rest_1, opacities, lambda_opcs]
+        if self.input_dim == 7 and hasattr(self, '_mean_time'):
+            mean_time = self._mean_time.detach().cpu().numpy()
+            attr_list.append(mean_time)
+
+        # Add covariance parameters (unified naming)
+        scales = self._scale.detach().cpu().numpy()
+        l_triangles = self._l_triangle.detach().cpu().numpy()
+        attr_list.extend([scales, l_triangles])
+
+        attributes = np.concatenate(attr_list, axis=1)
         elements[:] = list(map(tuple, attributes))
         el = PlyElement.describe(elements, 'vertex')
         PlyData([el]).write(path)
@@ -451,6 +585,23 @@ class GaussianModel:
         
         opacities = np.asarray(plydata.elements[0]["opacity"])[..., np.newaxis]
         opacities = np.ascontiguousarray(opacities, dtype=np.float32)
+
+        # Load lambda_opc (with backward compatibility)
+        try:
+            lambda_opcs = np.asarray(plydata.elements[0]["lambda_opc"])[..., np.newaxis]
+        except:
+            # Default to 0.35 if not present in file
+            lambda_opcs = np.full((xyz.shape[0], 1), inverse_sigmoid(0.35), dtype=np.float32)
+        lambda_opcs = np.ascontiguousarray(lambda_opcs, dtype=np.float32)
+
+        # Load time dimension for 7DGS
+        mean_time = None
+        if self.input_dim == 7:
+            try:
+                mean_time = np.asarray(plydata.elements[0]["mean_time"])[..., np.newaxis]
+            except:
+                # Initialize with default values if not present
+                mean_time = np.zeros((xyz.shape[0], 1), dtype=np.float32)
 
         features_dc_0 = np.zeros((xyz.shape[0], 3, 1))
         features_dc_0[:, 0, 0] = np.asarray(plydata.elements[0]["f_dc_0_0"])
@@ -480,21 +631,28 @@ class GaussianModel:
         # Reshape (P,F*SH_coeffs) to (P, F, SH_coeffs except DC)
         features_extra_1 = features_extra_1.reshape((features_extra_1.shape[0], 3, (self.max_sh_degree + 1) ** 2 - 1))
 
-        # projection_vecs = np.load(path.replace("ply", "npy"))
-        # self.projection_vecs = torch.from_numpy(projection_vecs).float().cuda()
+        # Load covariance parameters (unified naming)
+        # Try to load with new unified naming first, fall back to old names for backward compatibility
+        scale_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("scale_")]
+        if not scale_names:  # Backward compatibility: try old "diags_" naming
+            scale_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("diags_")]
 
-        diags_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("diags_")]
-        diags_names = sorted(diags_names, key = lambda x: int(x.split('_')[-1]))
-        diags = np.zeros((xyz.shape[0], len(diags_names)))
-        for idx, attr_name in enumerate(diags_names):
-            diags[:, idx] = np.asarray(plydata.elements[0][attr_name])
+        scale_names = sorted(scale_names, key = lambda x: int(x.split('_')[-1]))
+        scales = np.zeros((xyz.shape[0], len(scale_names)))
+        for idx, attr_name in enumerate(scale_names):
+            scales[:, idx] = np.asarray(plydata.elements[0][attr_name])
 
-        l_triangs_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("l_triangs_")]
-        l_triangs_names = sorted(l_triangs_names, key = lambda x: int(x.split('_')[-1]))
-        l_triangs = np.zeros((xyz.shape[0], len(l_triangs_names)))
-        for idx, attr_name in enumerate(l_triangs_names):
-            l_triangs[:, idx] = np.asarray(plydata.elements[0][attr_name])
-            
+        l_triangle_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("l_triangle_")]
+        if not l_triangle_names:  # Backward compatibility: try old "l_triangs_" naming
+            l_triangle_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("l_triangs_")]
+
+        l_triangle_names = sorted(l_triangle_names, key = lambda x: int(x.split('_')[-1]))
+        l_triangles = np.zeros((xyz.shape[0], len(l_triangle_names)))
+        for idx, attr_name in enumerate(l_triangle_names):
+            l_triangles[:, idx] = np.asarray(plydata.elements[0][attr_name])
+
+        self._scale = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._l_triangle = nn.Parameter(torch.tensor(l_triangles, dtype=torch.float, device="cuda").requires_grad_(True))
 
         self._xyz = nn.Parameter(torch.tensor(xyz, dtype=torch.float, device="cuda").requires_grad_(True))
         self._features_dc = [nn.Parameter(torch.tensor(features_dc_0, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True)),
@@ -502,12 +660,14 @@ class GaussianModel:
         self._features_rest = [nn.Parameter(torch.tensor(features_extra_0, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True)),
                                nn.Parameter(torch.tensor(features_extra_1, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))]
         self._opacity = nn.Parameter(torch.tensor(opacities, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._lambda_opc = nn.Parameter(torch.tensor(lambda_opcs, dtype=torch.float, device="cuda").requires_grad_(self.learnable_lambda_opc))
         self._normal = nn.Parameter(torch.tensor(normal, dtype=torch.float, device="cuda").requires_grad_(True))
-        self.diags = nn.Parameter(torch.tensor(diags, dtype=torch.float, device="cuda").requires_grad_(True))
-        self.l_triangs = nn.Parameter(torch.tensor(l_triangs, dtype=torch.float, device="cuda").requires_grad_(True))
-        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
-    
-        ### test ####
+
+        # Load time parameter for 7DGS
+        if self.input_dim == 7 and mean_time is not None:
+            self._mean_time = nn.Parameter(torch.tensor(mean_time, dtype=torch.float, device="cuda").requires_grad_(True))
+
+        ### Precompute test-time values ###
         c_dim = 3
         # Use CUDA-accelerated covariance
         v = self.get_pc_v  # [N, D, D] via CUDA
@@ -577,11 +737,16 @@ class GaussianModel:
         self._features_rest = [optimizable_tensors["f_rest_0"], optimizable_tensors["f_rest_1"]]
         self._normal = optimizable_tensors["normal"]
         self._opacity = optimizable_tensors["opacity"]
-        self.diags = optimizable_tensors["diags"]
-        self.l_triangs = optimizable_tensors["l_triangs"]
+        self._lambda_opc = optimizable_tensors["lambda_opc"]
+        # Update covariance tensors (unified naming)
+        self._scale = optimizable_tensors["scale"]
+        self._l_triangle = optimizable_tensors["l_triangle"]
+
+        # Handle time parameter for 7DGS
+        if self.input_dim == 7 and "mean_time" in optimizable_tensors:
+            self._mean_time = optimizable_tensors["mean_time"]
 
         self.xyz_gradient_accum = self.xyz_gradient_accum[valid_points_mask]
-
         self.denom = self.denom[valid_points_mask]
         self.max_radii2D = self.max_radii2D[valid_points_mask]
 
@@ -610,8 +775,16 @@ class GaussianModel:
 
         return optimizable_tensors
 
-    def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_normal, \
-                                    new_opacities, new_diags, new_l_triangs):
+    def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_normal,
+                                    new_opacities, new_lambda_opc, new_scale, new_l_triangle, new_mean_time=None):
+        """
+        Add new Gaussians to the model after densification.
+
+        Args:
+            new_scale: New scale parameters (unified naming)
+            new_l_triangle: New l_triangle parameters (unified naming)
+            new_lambda_opc: New lambda_opc parameters
+        """
         d = {"xyz": new_xyz,
             "f_dc_0": new_features_dc[0],
             "f_rest_0": new_features_rest[0],
@@ -619,9 +792,14 @@ class GaussianModel:
             "f_rest_1": new_features_rest[1],
             "normal": new_normal,
             "opacity": new_opacities,
-            "diags" : new_diags,
-            "l_triangs" : new_l_triangs,
+            "lambda_opc": new_lambda_opc,
+            "scale": new_scale,
+            "l_triangle": new_l_triangle,
             }
+
+        # Add time parameter for 7DGS
+        if self.input_dim == 7 and new_mean_time is not None:
+            d["mean_time"] = new_mean_time
 
         optimizable_tensors = self.cat_tensors_to_optimizer(d)
         self._xyz = optimizable_tensors["xyz"]
@@ -629,8 +807,14 @@ class GaussianModel:
         self._features_rest = [optimizable_tensors["f_rest_0"], optimizable_tensors["f_rest_1"]]
         self._normal = optimizable_tensors["normal"]
         self._opacity = optimizable_tensors["opacity"]
-        self.diags = optimizable_tensors["diags"]
-        self.l_triangs = optimizable_tensors["l_triangs"]
+        self._lambda_opc = optimizable_tensors["lambda_opc"]
+        # Update covariance tensors (unified naming)
+        self._scale = optimizable_tensors["scale"]
+        self._l_triangle = optimizable_tensors["l_triangle"]
+
+        # Handle time parameter for 7DGS
+        if self.input_dim == 7 and "mean_time" in optimizable_tensors:
+            self._mean_time = optimizable_tensors["mean_time"]
 
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
@@ -658,49 +842,70 @@ class GaussianModel:
         new_features_rest = [self._features_rest[0][selected_pts_mask].repeat(N,1,1),
                              self._features_rest[1][selected_pts_mask].repeat(N,1,1)]
         new_opacity = self._opacity[selected_pts_mask].repeat(N,1)
-        new_diags = self.diags_act_inv(self.diags_act(self.diags[selected_pts_mask]) * 0.8).repeat(N, 1)
-        # new_diags = self.diags[selected_pts_mask].repeat(N, 1)
-        new_l_triangs = self.l_triangs[selected_pts_mask].repeat(N, 1)
+        new_lambda_opc = self._lambda_opc[selected_pts_mask].repeat(N,1)
+        # Scale down for split (applies to all dimensions) - unified naming
+        new_scale = self._scale[selected_pts_mask]
+        new_scale = self.scale_inverse_activation(self.scale_activation(new_scale) * 0.8).repeat(N, 1)
+        new_l_triangle = self._l_triangle[selected_pts_mask].repeat(N, 1)
 
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_normal, \
-                                   new_opacity, new_diags, new_l_triangs)
+        # Handle time parameter for 7DGS
+        new_mean_time = None
+        if self.input_dim == 7 and hasattr(self, '_mean_time'):
+            new_mean_time = self._mean_time[selected_pts_mask].repeat(N, 1)
+
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_normal,
+                                   new_opacity, new_lambda_opc, new_scale, new_l_triangle, new_mean_time)
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
 
-    def densify_and_clone(self, grads, grad_threshold, scene_extent, scale):
+    def densify_and_clone(self, grads, grad_threshold, scene_extent):
+        """Clone Gaussians with high gradients and small scales."""
         # Extract points that satisfy the gradient condition
         selected_pts_mask = torch.where(torch.norm(grads, dim=-1) >= grad_threshold, True, False)
-        
-        selected_pts_mask = torch.logical_and(selected_pts_mask,
-                                              torch.max(scale[:, :3], dim=1).values <= self.percent_dense*scene_extent)
-        
+
+        # Only clone small Gaussians - compute scale for CURRENT state
+        scale = self.get_scaling
+        selected_pts_mask = torch.logical_and(
+            selected_pts_mask,
+            torch.max(scale[:, :3], dim=1).values <= self.percent_dense * scene_extent
+        )
+
         new_xyz = self._xyz[selected_pts_mask]
         new_features_dc = [self._features_dc[0][selected_pts_mask], self._features_dc[1][selected_pts_mask]]
         new_features_rest = [self._features_rest[0][selected_pts_mask], self._features_rest[1][selected_pts_mask]]
         new_normal = self._normal[selected_pts_mask]
         new_opacities = self._opacity[selected_pts_mask]
-        new_diags = self.diags[selected_pts_mask]
-        new_l_triangs = self.l_triangs[selected_pts_mask]
+        new_lambda_opc = self._lambda_opc[selected_pts_mask]
+
+        # Clone covariance parameters - unified naming
+        new_scale = self._scale[selected_pts_mask]
+        new_l_triangle = self._l_triangle[selected_pts_mask]
+
+        # Handle time parameter for 7DGS
+        new_mean_time = None
+        if self.input_dim == 7 and hasattr(self, '_mean_time'):
+            new_mean_time = self._mean_time[selected_pts_mask]
 
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_normal,
-                                   new_opacities, new_diags, new_l_triangs)
+                                   new_opacities, new_lambda_opc, new_scale, new_l_triangle, new_mean_time)
 
     def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size, iteration):
+        """Main densification and pruning routine."""
         grads = self.xyz_gradient_accum / self.denom
         grads[grads.isnan()] = 0.0
 
-        scale = self.get_scaling
-        self.densify_and_clone(grads, max_grad, extent, scale)
+        # Clone and split (compute scale/rotation internally for current state)
+        self.densify_and_clone(grads, max_grad, extent)
         rotation, scale = self.get_rotation_scale
         self.densify_and_split(grads, max_grad, extent, rotation, scale)
-        scale = self.get_scaling
-        
+
+        # Prune low opacity and large Gaussians
         prune_mask = (self.get_opacity < min_opacity).squeeze()
-            
+
         if max_screen_size:
             big_points_vs = self.max_radii2D > max_screen_size
-            big_points_ws = scale[:, :3].max(dim=1).values > 0.1 * extent
+            big_points_ws = self.get_scaling[:, :3].max(dim=1).values > 0.1 * extent
             prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
         self.prune_points(prune_mask)
 
@@ -738,8 +943,25 @@ class GaussianModel:
 
         # Compute view direction for conditional slicing
         dir_pp = (self.get_xyz - viewpoint_camera.camera_center.repeat(self.get_normal.shape[0], 1))
-        cond_params = dir_pp / dir_pp.norm(dim=1, keepdim=True)
-        lambda_opc = 0.35
+        view_dir = dir_pp / dir_pp.norm(dim=1, keepdim=True)
+
+        # For 7DGS, append timestamp to query
+        if self.input_dim == 7:
+            timestamp = torch.full(
+                (view_dir.shape[0], 1),
+                viewpoint_camera.timestamp if hasattr(viewpoint_camera, 'timestamp') else 0.0,
+                device=view_dir.device,
+                dtype=view_dir.dtype,
+            )
+            cond_params = torch.cat([view_dir, timestamp], dim=-1)
+        else:
+            cond_params = view_dir
+
+        # Use fixed or learnable lambda_opc
+        if self.learnable_lambda_opc:
+            lambda_opc = self.get_lambda_opc.squeeze(-1)  # [N]
+        else:
+            lambda_opc = 0.35
 
         if is_test:
             # Test mode: use precomputed values
@@ -770,8 +992,11 @@ class GaussianModel:
             # which is directly compatible with diff_gaussian_rasterization
             m_cond, cov3D_precomp, pdf_cond = self.slice_gaussian(cond_params, c_dim=3, lambda_opc=lambda_opc)
 
-        # Compute opacity with conditional probability
-        opacity = self.get_opacity * pdf_cond
+        # Compute opacity with conditional probability and learnable lambda_opc scaling
+        if self.learnable_lambda_opc:
+            opacity = self.get_opacity * pdf_cond * self.get_lambda_opc
+        else:
+            opacity = self.get_opacity * pdf_cond
 
         # Set up rasterization
         tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)
@@ -946,8 +1171,9 @@ class GaussianModel:
         original_features_rest = self._features_rest
         original_normal = self._normal
         original_opacity = self._opacity
-        original_diags = self.diags
-        original_l_triangs = self.l_triangs
+        original_lambda_opc = self._lambda_opc
+        original_scale = self._scale
+        original_l_triangle = self._l_triangle
 
         # Check if mask has any valid Gaussians
         num_valid = mask.sum().item()
@@ -970,8 +1196,9 @@ class GaussianModel:
         self._features_rest = [self._features_rest[0][mask], self._features_rest[1][mask]]
         self._normal = self._normal[mask]
         self._opacity = self._opacity[mask]
-        self.diags = self.diags[mask]
-        self.l_triangs = self.l_triangs[mask]
+        self._lambda_opc = self._lambda_opc[mask]
+        self._scale = self._scale[mask]
+        self._l_triangle = self._l_triangle[mask]
 
         try:
             # Call render_tcgs
@@ -1006,8 +1233,9 @@ class GaussianModel:
             self._features_rest = original_features_rest
             self._normal = original_normal
             self._opacity = original_opacity
-            self.diags = original_diags
-            self.l_triangs = original_l_triangs
+            self._lambda_opc = original_lambda_opc
+            self._scale = original_scale
+            self._l_triangle = original_l_triangle
 
         # Convert from [C, H, W] to [H, W, C] for viewer
         render_colors = render_colors.permute(1, 2, 0)

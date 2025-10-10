@@ -19,14 +19,14 @@ from arguments import ModelParams
 from utils.camera_utils import cameraList_from_camInfos, camera_to_JSON
 
 if TYPE_CHECKING:
-    from scene.gaussian_model_6dgs import GaussianModel
+    from scene.gaussian_model_ndgs import GaussianModel
 
 
 def get_gaussian_model(mode: str):
     """Factory function to get the appropriate GaussianModel class based on mode.
 
     Args:
-        mode: One of "ndgs", "ddgs", "3dgs", "ubs"
+        mode: One of "ndgs", "ddgs", "3dgs", "ubs", "ndgs_merged"
 
     Returns:
         GaussianModel class for the specified mode
@@ -37,10 +37,10 @@ def get_gaussian_model(mode: str):
         from scene.gaussian_model import GaussianModel
     elif mode == "ubs":  ## UBS (ICLR 2026)
         from scene.gaussian_model_ubs import GaussianModel
-    elif mode == "ndgs":  ## N-DGS (supports both 6DGS and 7DGS with time)
+    elif mode == "ndgs":  ## N-DGS (supports both 6DGS and 7DGS with time, with merged parametrization)
         from scene.gaussian_model_ndgs import GaussianModel
     else:
-        raise ValueError(f"Unknown mode: {mode}. Must be one of: 6dgs, ddgs, 3dgs, ubs, ndgs")
+        raise ValueError(f"Unknown mode: {mode}. Must be one of: ndgs, ddgs, 3dgs, ubs, ndgs_original")
     return GaussianModel
 
 

@@ -54,8 +54,9 @@ class ModelParams(ParamGroup):
         self._white_background = False
         self.data_device = "cuda"
         self.eval = False
-        self.mode = "ndgs"  # Options: "6dgs", "ddgs", "3dgs", "ubs", "ndgs"
+        self.mode = "ndgs"  # Options: "ddgs", "3dgs", "ubs", "ndgs"
         self.input_dim = 7  # Gaussian dimension: 6 for 6DGS/UBS, 7 for 7DGS (with time)
+        self.use_rot_scale_l_triangle = False  # If True: use rotation-scale-l_triangle (UBS-style), If False: use diagonal-l_triangle (NDGS-style)
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):

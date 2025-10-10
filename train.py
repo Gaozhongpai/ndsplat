@@ -84,7 +84,12 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
     GaussianModel = get_gaussian_model(mode)
 
     # Initialize model based on mode
-    gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim)
+    # For NDGS mode, pass the use_rot_scale_l_triangle flag
+    if mode == "ndgs":
+        gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim,
+                                   use_rot_scale_l_triangle=dataset.use_rot_scale_l_triangle)
+    else:
+        gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim)
 
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)

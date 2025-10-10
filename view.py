@@ -26,6 +26,9 @@ def viewing(model_params, viewer_params, ply_path, input_dim=6, auto_camera=True
     # Initialize model
     if model_params.mode == "ubs":
         gaussian_model = GaussianModel(input_dim=input_dim)
+    elif model_params.mode == "ndgs":
+        gaussian_model = GaussianModel(model_params.sh_degree, input_dim=input_dim,
+                                       use_rot_scale_l_triangle=model_params.use_rot_scale_l_triangle)
     else:
         gaussian_model = GaussianModel(model_params.sh_degree)
 
