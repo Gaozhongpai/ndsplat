@@ -156,6 +156,10 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
     iter_start = torch.cuda.Event(enable_timing = True)
     iter_end = torch.cuda.Event(enable_timing = True)
     
+    # weight_mask = create_radial_weight_mask(scene.train_cameras[1.0][0].image_width, scene.train_cameras[1.0][0].image_height)    
+    # weight_mask = weight_mask.cuda()
+    weight_mask = None
+    # save_weight_mask_as_png(weight_mask, "weight_mask.png")
 
     viewpoint_stack = None
     ema_loss_for_log = 0.0
@@ -193,10 +197,11 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
             # Use unified render wrapper (handles all model modes)
             render_pkg = render_wrapper(viewpoint_cam, gaussians, pipe, bg, mode)
             image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
+            # image_non_principle = render_pkg["render_non_principle"]
             # Loss
             gt_image = viewpoint_cam.original_image.cuda()
-            Ll1 = l1_loss(image, gt_image)
-            loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
+            Ll1 = l1_loss(image, gt_image, weight_mask)
+            loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image, weight_mask))
             total_loss = total_loss + loss
         total_loss.backward()
 
@@ -215,10 +220,10 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
             training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render_wrapper, (pipe, background, mode))
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
-                print("\nNumber Gaussian: {}".format(gaussians.get_xyz.shape[0]))
+                print("\nNnmber Gaussian: {}".format(gaussians.get_xyz.shape[0]))
                 if mode == "ddgs" or mode == "ddndgs":
-                    print("\nNumber Principle: {}".format(gaussians._is_principle.sum()))
-                    print("\nNumber Non-Principle: {}".format((~gaussians._is_principle).sum()))
+                    print("\nNnmber Principle: {}".format(gaussians._is_principle.sum()))
+                    print("\nNnmber Non-Principle: {}".format((~gaussians._is_principle).sum()))
                 scene.save(iteration)
 
             # Densification

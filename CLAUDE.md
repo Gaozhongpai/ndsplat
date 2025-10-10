@@ -155,15 +155,30 @@ python train.py -s <dataset_path> --model_path <output_path> --eval
 
 ### Training Scripts for Batch Processing
 
-Multiple shell scripts are provided for running experiments on different datasets:
+Experiment scripts are organized in the `scripts/` directory by category:
 
-- `run_datasets_6dgs_nerf.sh`: NeRF Synthetic dataset experiments
-- `run_datasets_6dgs_360.sh`: MipNeRF360 dataset experiments
-- `run_datasets_6dgs_tank.sh`: Tanks & Temples experiments
-- `run_datasets_6dgs_shiny.sh`: Shiny dataset experiments
-- `run_datasets_ablation.sh`: Ablation studies
+**Use the master run script:**
+```bash
+./run.sh <category> <script>
+
+# Examples:
+./run.sh benchmark mipnerf360       # Run Mip-NeRF 360 benchmark
+./run.sh ablation nerf_synthetic    # Run ablation study
+./run.sh test ct_data                # Run quick test
+
+# See all options:
+./run.sh --help
+./run.sh list
+```
+
+**Organization:**
+- `scripts/benchmarks/` - Standard evaluation scripts (mipnerf360, nerf_synthetic, tanks_temples, shiny_blender)
+- `scripts/ablations/` - Ablation study scripts (nerf_synthetic, deepdrr, deepdrr_entangled)
+- `scripts/tests/` - Development and debugging scripts (ct_data, dicom, etc.)
 
 These scripts iterate through dataset subdirectories, train models, render at multiple checkpoints (500, 2000, 7000, 15000, 30000 iterations), and compute metrics.
+
+**See [scripts/README.md](scripts/README.md) for detailed documentation.**
 
 ## Rendering and Evaluation
 
@@ -193,21 +208,53 @@ python metrics.py -m <path1> <path2> <path3>
 ```
 
 Alternative metrics implementations:
-- `metrics.py`: Standard metrics
-- `metrics_ndgs.py`: NDGS-specific metrics
+- `metrics.py`: Standard metrics (root level)
+- `tools/evaluation/metrics_ndgs.py`: NDGS-specific metrics
 
 ### Full Evaluation Pipeline
 
 ```bash
 # Complete evaluation (train + render + metrics)
-python full_eval.py -m360 <mipnerf360_folder> -tat <tanks_temples_folder> -db <deep_blending_folder>
+python tools/evaluation/full_eval.py -m360 <mipnerf360_folder> -tat <tanks_temples_folder> -db <deep_blending_folder>
 
 # Evaluate pre-trained models (skip training)
-python full_eval.py -o <pretrained_models_dir> --skip_training -m360 <mipnerf360_folder> ...
+python tools/evaluation/full_eval.py -o <pretrained_models_dir> --skip_training -m360 <mipnerf360_folder> ...
 
 # Compute metrics only (skip training and rendering)
-python full_eval.py -m <images_dir> --skip_training --skip_rendering
+python tools/evaluation/full_eval.py -m <images_dir> --skip_training --skip_rendering
 ```
+
+**See [tools/README.md](tools/README.md) for more utility scripts.**
+
+## Project Structure
+
+```
+6dgs-iclr/
+├── Core Scripts (Root)
+│   ├── train.py, render.py, metrics.py  # Main pipeline
+│   └── run.sh                           # Master experiment runner
+│
+├── tools/                               # Utility scripts
+│   ├── preprocessing/                   # Data preparation
+│   │   ├── colmap_convert.py
+│   │   └── cloud_dataset_preprocessing.py
+│   └── evaluation/                      # Evaluation tools
+│       ├── full_eval.py
+│       └── metrics_ndgs.py
+│
+├── scripts/                             # Organized experiment runners
+│   ├── benchmarks/                      # Standard evaluations (4 scripts)
+│   ├── ablations/                       # Ablation studies (3 scripts)
+│   └── tests/                           # Dev/debug (7 scripts)
+│
+└── Model Code
+    ├── scene/                           # Scene & Gaussian models
+    ├── gaussian_renderer/               # Rendering engine
+    ├── utils/                           # Helper functions
+    └── submodules/                      # CUDA extensions
+```
+
+**See [ORGANIZATION.md](ORGANIZATION.md) for complete documentation.**
 
 ## Code Architecture
 
@@ -287,13 +334,16 @@ The NDGS model uses:
 
 ```bash
 # Convert images to COLMAP format with undistortion
-python convert.py -s <location> [--resize]
+python tools/preprocessing/colmap_convert.py -s <location> [--resize]
 
 # Skip COLMAP matching if COLMAP data already exists
-python convert.py -s <location> --skip_matching [--resize]
+python tools/preprocessing/colmap_convert.py -s <location> --skip_matching [--resize]
+
+# Prepare volumetric/cloud datasets
+python tools/preprocessing/cloud_dataset_preprocessing.py
 ```
 
-The repository includes a preprocessing script for cloud datasets: [cloud_dataset_preprocssing.py](cloud_dataset_preprocssing.py)
+**See [tools/README.md](tools/README.md) for detailed preprocessing documentation.**
 
 ## SIBR Viewer (Interactive Visualization)
 

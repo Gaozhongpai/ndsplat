@@ -50,6 +50,28 @@ pip install submodules/tcgs-speedy-rasterizer
 pip install submodules/simple-knn
 ```
 
+## Project Organization
+
+The repository is organized into three main categories:
+
+- **Core Scripts** (root): `train.py`, `render.py`, `metrics.py` - Main pipeline
+- **tools/**: Data preprocessing and evaluation utilities
+  - `preprocessing/`: COLMAP conversion, cloud dataset generation
+  - `evaluation/`: Automated benchmarking tools
+- **scripts/**: Organized experiment runners
+  - `benchmarks/`: Standard evaluations (Mip-NeRF 360, NeRF Synthetic, etc.)
+  - `ablations/`: Ablation studies
+  - `tests/`: Development and debugging scripts
+
+**Run experiments with:**
+```shell
+./run.sh <category> <script>      # Master entry point
+./run.sh --help                    # See all options
+./run.sh list                      # List available scripts
+```
+
+See [ORGANIZATION.md](ORGANIZATION.md) for complete documentation.
+
 ## Usage
 
 ### Training
@@ -136,6 +158,23 @@ python train.py -s <path to dataset> --eval  # Train with test split
 python render.py -m <path to trained model>   # Render test views
 python metrics.py -m <path to trained model>  # Compute metrics
 ```
+
+### Data Preprocessing
+
+Prepare datasets for training:
+
+```shell
+# Convert images to COLMAP format
+python tools/preprocessing/colmap_convert.py -s <images_directory>
+
+# Generate volumetric/cloud datasets
+python tools/preprocessing/cloud_dataset_preprocessing.py
+
+# Run full benchmark evaluation
+python tools/evaluation/full_eval.py -m360 <mipnerf360> -tat <tanks> -db <deepblending>
+```
+
+See [tools/README.md](tools/README.md) for detailed documentation.
 
 ## Live Viewer
 
