@@ -91,7 +91,7 @@ class GaussianModel:
         Uses CUDA-accelerated gsplat implementation for fast computation.
 
         Args:
-            q: Query direction (view direction) [N, C]
+            q: Query direction (view direction + time for 7DGS) [N, C]
             c_dim: Conditional dimension (default 3 for spatial xyz)
             lambda_opc: Opacity scaling factor (default 0.35)
 
@@ -101,7 +101,13 @@ class GaussianModel:
             scale: Opacity scaling factor based on direction influence [N, 1]
         """
         m_1 = self.get_xyz  # [N, 3]
-        m_2 = self.get_normal / self.get_normal.norm(dim=1, keepdim=True)  # [N, 3] normalized
+
+        # For 7DGS, m_2 includes both normal (3D) and time (1D)
+        if self.input_dim == 7 and hasattr(self, '_mean_time'):
+            normal_normalized = self.get_normal / self.get_normal.norm(dim=1, keepdim=True)  # [N, 3]
+            m_2 = torch.cat([normal_normalized, self._mean_time], dim=-1)  # [N, 4]
+        else:
+            m_2 = self.get_normal / self.get_normal.norm(dim=1, keepdim=True)  # [N, 3]
 
         # Build covariance matrix from diagonal and lower triangular elements
         v = self.get_pc_v
@@ -939,6 +945,7 @@ class GaussianModel:
             uid=0,
             x_threshold=render_tab_state.x_threshold,
             data_device="cuda",
+            timestamp=render_tab_state.timestamp,  # For 7DGS support
         )
 
         # Apply filtering mask for selective rendering
@@ -968,6 +975,8 @@ class GaussianModel:
         original_opacity = self._opacity
         original_diags = self.diags
         original_l_triangs = self.l_triangs
+        # For 7DGS, save and filter time parameter
+        original_mean_time = self._mean_time if (self.input_dim == 7 and hasattr(self, '_mean_time')) else None
 
         # Check if mask has any valid Gaussians
         num_valid = mask.sum().item()
@@ -991,6 +1000,9 @@ class GaussianModel:
         self._opacity = self._opacity[mask]
         self.diags = self.diags[mask]
         self.l_triangs = self.l_triangs[mask]
+        # For 7DGS, filter time parameter
+        if self.input_dim == 7 and hasattr(self, '_mean_time'):
+            self._mean_time = self._mean_time[mask]
 
         try:
             # Call render_tcgs
@@ -1027,6 +1039,9 @@ class GaussianModel:
             self._opacity = original_opacity
             self.diags = original_diags
             self.l_triangs = original_l_triangs
+            # For 7DGS, restore time parameter
+            if original_mean_time is not None:
+                self._mean_time = original_mean_time
 
         # Convert from [C, H, W] to [H, W, C] for viewer
         render_colors = render_colors.permute(1, 2, 0)

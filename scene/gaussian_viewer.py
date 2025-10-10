@@ -13,6 +13,9 @@ class GaussianRenderTabState(RenderTabState):
     _fps_alpha: float = 0.1  # EMA smoothing factor (lower = smoother)
 
     # controlable parameters
+    timestamp: float = 0.0  # Time dimension for 7DGS
+    auto_loop_time: bool = False  # Auto-loop time animation
+    loop_duration: float = 1.0  # Duration for one complete loop (seconds)
     near_plane: float = 1e-3
     far_plane: float = 1e3
     radius_clip: float = 0.0  # 2D radius clip for rendering
@@ -41,9 +44,14 @@ class GaussianViewer(Viewer):
     ):
         self.input_dim = input_dim
         self.scene_bounds = scene_bounds
+        # Time loop tracking for 7DGS
+        self._loop_start_time = None
         super().__init__(server, render_fn, mode=mode)
         # Configure the panel
-        server.gui.set_panel_label("6D Gaussian Splatting Viewer")
+        panel_label = f"{input_dim}D Gaussian Splatting Viewer"
+        if input_dim == 7:
+            panel_label += " (with Time)"
+        server.gui.set_panel_label(panel_label)
         server.gui.configure_theme(control_width="large")
         if share_url:
             server.request_share_url()
@@ -62,6 +70,73 @@ class GaussianViewer(Viewer):
                 disabled=True,
                 hint="Frames per second (rendering performance)",
             )
+
+            # Time slider for 7DGS (similar to BetaViewer)
+            if self.input_dim == 7:
+                with self.server.gui.add_folder("Time Animation"):
+                    # Auto-loop checkbox
+                    self.auto_loop_time_checkbox = self.server.gui.add_checkbox(
+                        "Auto Loop",
+                        initial_value=self.render_tab_state.auto_loop_time,
+                        hint="Automatically loop through time dimension",
+                    )
+
+                    @self.auto_loop_time_checkbox.on_update
+                    def _(_) -> None:
+                        self.render_tab_state.auto_loop_time = self.auto_loop_time_checkbox.value
+                        if self.render_tab_state.auto_loop_time:
+                            # Start timing from current timestamp
+                            import time
+                            # Calculate where we are in the loop
+                            current_phase = self.render_tab_state.timestamp
+                            self._loop_start_time = time.time() - (current_phase * self.render_tab_state.loop_duration)
+                        else:
+                            self._loop_start_time = None
+                        # Don't call rerender here - the animation loop will handle it
+
+                    # Loop duration slider
+                    self.loop_duration_slider = self.server.gui.add_slider(
+                        "Loop Duration (s)",
+                        min=0.5,
+                        max=10.0,
+                        step=0.1,
+                        initial_value=self.render_tab_state.loop_duration,
+                        hint="Duration for one complete time loop (seconds)",
+                    )
+
+                    @self.loop_duration_slider.on_update
+                    def _(_) -> None:
+                        self.render_tab_state.loop_duration = self.loop_duration_slider.value
+                        # Adjust loop start time to maintain current phase
+                        if self.render_tab_state.auto_loop_time and self._loop_start_time is not None:
+                            import time
+                            current_phase = self.render_tab_state.timestamp
+                            self._loop_start_time = time.time() - (current_phase * self.render_tab_state.loop_duration)
+
+                    # Time slider (manual control)
+                    self.timestamp_slider = self.server.gui.add_slider(
+                        "Time",
+                        min=0.0,
+                        max=1.0,
+                        step=0.0001,
+                        initial_value=self.render_tab_state.timestamp,
+                        hint="Time dimension for 7DGS (0.0 = start, 1.0 = end). Pauses auto-loop when manually adjusted.",
+                    )
+
+                    # Track if we're updating programmatically (to avoid disabling auto-loop)
+                    self._programmatic_slider_update = False
+
+                    @self.timestamp_slider.on_update
+                    def _(_) -> None:
+                        # Only pause auto-loop if this is a manual user adjustment
+                        # (not a programmatic update from the animation loop)
+                        if not self._programmatic_slider_update:
+                            if self.render_tab_state.auto_loop_time:
+                                self.render_tab_state.auto_loop_time = False
+                                self.auto_loop_time_checkbox.value = False
+                                self._loop_start_time = None
+                            self.render_tab_state.timestamp = self.timestamp_slider.value
+                            self.rerender(_)
 
             with self.server.gui.add_folder("Gaussian Filtering"):
                 # Toggle between absolute threshold and percentile
@@ -274,25 +349,31 @@ class GaussianViewer(Viewer):
                     self.render_tab_state.backgrounds = self.backgrounds_slider.value
                     self.rerender(_)
 
-        self._rendering_tab_handles.update(
-            {
-                "use_opacity_percentile_checkbox": self.use_opacity_percentile_checkbox,
-                "opacity_threshold_slider": self.opacity_threshold_slider,
-                "opacity_percentile_slider": self.opacity_percentile_slider,
-                "scale_threshold_slider": self.scale_threshold_slider,
-                "x_threshold_slider": self.x_threshold_slider,
-                "x_threshold_checkbox": self.x_threshold_checkbox,
-                "color_interpolation_slider": self.color_interpolation_slider,
-                "tight_snugbox_checkbox": self.tight_snugbox_checkbox,
-                "fps_number": self.fps_number,
-                "total_count_number": self.total_count_number,
-                "rendered_count_number": self.rendered_count_number,
-                "near_far_plane_vec2": self.near_far_plane_vec2,
-                "radius_clip_slider": self.radius_clip_slider,
-                "render_mode_dropdown": self.render_mode_dropdown,
-                "backgrounds_slider": self.backgrounds_slider,
-            }
-        )
+        handles_dict = {
+            "use_opacity_percentile_checkbox": self.use_opacity_percentile_checkbox,
+            "opacity_threshold_slider": self.opacity_threshold_slider,
+            "opacity_percentile_slider": self.opacity_percentile_slider,
+            "scale_threshold_slider": self.scale_threshold_slider,
+            "x_threshold_slider": self.x_threshold_slider,
+            "x_threshold_checkbox": self.x_threshold_checkbox,
+            "color_interpolation_slider": self.color_interpolation_slider,
+            "tight_snugbox_checkbox": self.tight_snugbox_checkbox,
+            "fps_number": self.fps_number,
+            "total_count_number": self.total_count_number,
+            "rendered_count_number": self.rendered_count_number,
+            "near_far_plane_vec2": self.near_far_plane_vec2,
+            "radius_clip_slider": self.radius_clip_slider,
+            "render_mode_dropdown": self.render_mode_dropdown,
+            "backgrounds_slider": self.backgrounds_slider,
+        }
+
+        # Add timestamp slider for 7DGS
+        if self.input_dim == 7:
+            handles_dict["timestamp_slider"] = self.timestamp_slider
+            handles_dict["auto_loop_time_checkbox"] = self.auto_loop_time_checkbox
+            handles_dict["loop_duration_slider"] = self.loop_duration_slider
+
+        self._rendering_tab_handles.update(handles_dict)
         super()._populate_rendering_tab()
 
     def _after_render(self):
@@ -317,3 +398,22 @@ class GaussianViewer(Viewer):
         self._rendering_tab_handles[
             "rendered_count_number"
         ].value = self.render_tab_state.rendered_count_number
+
+        # Handle auto-loop time animation for 7DGS
+        if self.input_dim == 7 and self.render_tab_state.auto_loop_time:
+            import time
+            if self._loop_start_time is None:
+                self._loop_start_time = time.time()
+
+            # Calculate current time position in loop (0.0 to 1.0)
+            elapsed = time.time() - self._loop_start_time
+            loop_position = (elapsed % self.render_tab_state.loop_duration) / self.render_tab_state.loop_duration
+
+            # Update timestamp
+            self.render_tab_state.timestamp = loop_position
+
+            # Update slider without triggering manual override
+            if "timestamp_slider" in self._rendering_tab_handles:
+                self._programmatic_slider_update = True
+                self._rendering_tab_handles["timestamp_slider"].value = loop_position
+                self._programmatic_slider_update = False

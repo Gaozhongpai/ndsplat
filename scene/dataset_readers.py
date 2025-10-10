@@ -189,7 +189,11 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
         contents = json.load(json_file)
         fovx = contents["camera_angle_x"]
 
-        frames = contents["frames"]
+        if "train" in transformsfile:
+            frames = contents["frames"] #[:200]
+        else:
+            frames = contents["frames"] #[:20]
+
         for idx, frame in enumerate(tqdm(frames)):
             cam_name = os.path.join(path, frame["file_path"] + extension)
 
