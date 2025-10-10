@@ -722,8 +722,9 @@ class GaussianModel:
         """
         import math
 
-        # Extract color_idx from viewpoint camera if available (for dual SH models)
+        # Extract color_idx and color_interpolation from viewpoint camera if available (for dual SH models)
         color_idx = int(viewpoint_camera.color_idx) if viewpoint_camera.color_idx is not None else 0
+        color_interpolation = getattr(viewpoint_camera, 'color_interpolation', None)
 
         # Create screenspace points for gradient tracking
         screenspace_points = torch.zeros_like(self.get_xyz, dtype=self.get_xyz.dtype, requires_grad=True, device="cuda") + 0
@@ -740,14 +741,28 @@ class GaussianModel:
         if is_test:
             # Test mode: use precomputed values
             m_cond, pdf_cond = self.slice_gaussian_test(cond_params, lambda_opc=lambda_opc)
-            # Select SH features based on color_idx from camera
-            shs = self.shs[color_idx] if isinstance(self.shs, list) else self.shs
+            # Handle color interpolation or selection
+            if isinstance(self.shs, list) and color_interpolation is not None:
+                # Interpolate between the two SH features
+                shs = (1.0 - color_interpolation) * self.shs[0] + color_interpolation * self.shs[1]
+            elif isinstance(self.shs, list):
+                # Select SH features based on color_idx from camera
+                shs = self.shs[color_idx]
+            else:
+                shs = self.shs
             cov3D_precomp = self.cov3D_precomp
         else:
             # Training mode: compute conditional slicing
             shs_list = self.get_features
-            # Select SH features based on color_idx from camera
-            shs = shs_list[color_idx] if isinstance(shs_list, list) else shs_list
+            # Handle color interpolation or selection
+            if isinstance(shs_list, list) and color_interpolation is not None:
+                # Interpolate between the two SH features
+                shs = (1.0 - color_interpolation) * shs_list[0] + color_interpolation * shs_list[1]
+            elif isinstance(shs_list, list):
+                # Select SH features based on color_idx from camera
+                shs = shs_list[color_idx]
+            else:
+                shs = shs_list
             # slice_gaussian returns upper-triangular format [0,0], [0,1], [0,2], [1,1], [1,2], [2,2]
             # which is directly compatible with diff_gaussian_rasterization
             m_cond, cov3D_precomp, pdf_cond = self.slice_gaussian(cond_params, c_dim=3, lambda_opc=lambda_opc)
@@ -806,7 +821,7 @@ class GaussianModel:
         }
 
     @torch.no_grad()
-    def view_tcgs(self, camera_state, render_tab_state, center=None):
+    def view_tcgs(self, camera_state, render_tab_state):
         """Callable function for the viewer using TCGS rasterizer.
 
         This method provides interactive viewing capabilities for the 6DGS model,
@@ -815,7 +830,6 @@ class GaussianModel:
         Args:
             camera_state: Camera state from the viewer (contains c2w, K)
             render_tab_state: Render settings from viewer (GaussianRenderTabState)
-            center: Optional centering of the scene
 
         Returns:
             numpy array: Rendered image in [H, W, C] format for display
@@ -857,10 +871,6 @@ class GaussianModel:
         c2w = torch.from_numpy(c2w).float().to("cuda")
         K = torch.from_numpy(K).float().to("cuda")
 
-        # Optional centering
-        if center:
-            self._xyz -= self._xyz.mean(dim=0, keepdim=True)
-
         # Build camera for render_tcgs
         from scene.cameras import Camera
 
@@ -891,6 +901,9 @@ class GaussianModel:
             x_threshold=render_tab_state.x_threshold,
             data_device="cuda",
         )
+
+        # Add color_interpolation attribute for dual SH blending
+        viewpoint_camera.color_interpolation = render_tab_state.color_interpolation
 
         # Apply filtering mask for selective rendering
         opacity = self.get_opacity

@@ -123,7 +123,7 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
         viewer = GaussianViewer(
             server=server,
             render_fn=lambda camera_state, render_tab_state: gaussians.view_tcgs(
-                camera_state, render_tab_state, center=False
+                camera_state, render_tab_state
             ),
             input_dim=getattr(gaussians, 'input_dim', 3),
             mode="training",
@@ -134,7 +134,7 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
         # Set initial camera via client connection
         @server.on_client_connect
         def on_connect(client):
-            camera_distance = scene_radius * 1.5  # Add 50% margin for better view
+            camera_distance = scene_radius * 1.2  # Add 20% margin for better view
 
             # Position camera slightly above and in front of the scene
             # This gives a nice 3/4 view of the object

@@ -20,6 +20,7 @@ class GaussianRenderTabState(RenderTabState):
     render_mode: Literal[
         "RGB", "Alpha", "Diffuse", "Specular", "Depth", "Normal"
     ] = "RGB"
+    color_interpolation: float = 0.0  # 0.0 = SH_0 only, 1.0 = SH_1 only, 0.5 = 50/50 blend
 
 
 class GaussianViewer(Viewer):
@@ -83,10 +84,10 @@ class GaussianViewer(Viewer):
                     # Add 20% margin on each side
                     x_range = x_max - x_min
                     margin = x_range * 0.2
-                    slider_min = x_min - margin
-                    slider_max = x_max + margin
-                    slider_initial = (x_min + x_max) / 2.0  # Center of scene
-                    slider_step = x_range / 1000.0  # 1000 steps across range
+                    slider_min = round(x_min - margin, 1)  # Round to 1 decimal for cleaner UI
+                    slider_max = round(x_max + margin, 1)  # Round to 1 decimal for cleaner UI
+                    slider_initial = round((x_min + x_max) / 2.0, 1)  # Center of scene
+                    slider_step = round(x_range / 1000.0, 3)  # 1000 steps across range
                 else:
                     # Fallback to default values
                     slider_min = -100.0
@@ -100,7 +101,7 @@ class GaussianViewer(Viewer):
                     max=slider_max,
                     step=slider_step,
                     initial_value=slider_initial,
-                    hint=f"X-axis threshold for cutting plane (range: {slider_min:.2f} to {slider_max:.2f})",
+                    hint=f"X-axis threshold for cutting plane (range: {slider_min:.1f} to {slider_max:.1f})",
                 )
 
                 @self.x_threshold_slider.on_update
@@ -120,6 +121,21 @@ class GaussianViewer(Viewer):
                         self.render_tab_state.x_threshold = self.x_threshold_slider.value
                     else:
                         self.render_tab_state.x_threshold = float('inf')
+                    self.rerender(_)
+            
+            with self.server.gui.add_folder("Color Interpolation (Dual SH)"):
+                self.color_interpolation_slider = self.server.gui.add_slider(
+                    "Color Blend",
+                    min=0.0,
+                    max=1.0,
+                    step=0.01,
+                    initial_value=self.render_tab_state.color_interpolation,
+                    hint="Interpolate between two SH colors: 0.0 = Color 0, 0.5 = 50/50 blend, 1.0 = Color 1",
+                )
+
+                @self.color_interpolation_slider.on_update
+                def _(_) -> None:
+                    self.render_tab_state.color_interpolation = self.color_interpolation_slider.value
                     self.rerender(_)
 
             with self.server.gui.add_folder("Render Mode"):
@@ -197,6 +213,7 @@ class GaussianViewer(Viewer):
                 "scale_threshold_slider": self.scale_threshold_slider,
                 "x_threshold_slider": self.x_threshold_slider,
                 "x_threshold_checkbox": self.x_threshold_checkbox,
+                "color_interpolation_slider": self.color_interpolation_slider,
                 "total_count_number": self.total_count_number,
                 "rendered_count_number": self.rendered_count_number,
                 "near_far_plane_vec2": self.near_far_plane_vec2,
