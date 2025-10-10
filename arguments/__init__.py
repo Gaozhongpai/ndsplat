@@ -72,28 +72,25 @@ class PipelineParams(ParamGroup):
 
 class OptimizationParams(ParamGroup):
     def __init__(self, parser):
+        # Training iterations
         self.iterations = 30_000
+
+        # Position learning rates (3DGS-style with scheduling)
         self.position_lr_init = 0.00016
         self.position_lr_final = 0.0000016
         self.position_lr_delay_mult = 0.01
         self.position_lr_max_steps = 30_000
+
+        # 3DGS learning rates
         self.feature_lr = 0.0025
-
-        self.diags_lr = 1e-2
-        self.l_triangs_lr = 1e-2
-        self.color_lr = 0.005
-
         self.opacity_lr = 0.05
         self.scaling_lr = 0.005
         self.rotation_lr = 0.001
-        self.percent_dense = 0.01
-        self.lambda_dssim = 0.2
-        self.densification_interval = 100
-        self.opacity_reset_interval = 3000
-        self.densify_from_iter = 500
-        self.densify_until_iter = 15_000
-        self.densify_grad_threshold = 0.0002
-        self.random_background = False
+
+        # 6DGS-specific learning rates
+        self.diags_lr = 1e-2
+        self.l_triangs_lr = 1e-2
+        self.color_lr = 0.005
 
         # UBS-specific learning rates
         self.mean_lr = 0.0001
@@ -101,6 +98,18 @@ class OptimizationParams(ParamGroup):
         self.rgb_lr = 0.0025
         self.scale_lr = 0.005
         self.l_triangle_lr = 0.001
+
+        # Densification parameters
+        self.percent_dense = 0.01
+        self.densification_interval = 100
+        self.densify_from_iter = 500
+        self.densify_until_iter = 15_000
+        self.densify_grad_threshold = 0.0002
+        self.opacity_reset_interval = 3000
+
+        # Loss parameters
+        self.lambda_dssim = 0.2
+        self.random_background = False
 
         super().__init__(parser, "Optimization Parameters")
 
