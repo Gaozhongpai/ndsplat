@@ -982,30 +982,25 @@ class GaussianModel:
         from scene.gaussian_viewer import GaussianRenderTabState
         assert isinstance(render_tab_state, GaussianRenderTabState)
 
-        def create_mask(opacity, scale, opacity_threshold, scale_threshold):
+        def create_mask(opacity, opacity_threshold):
             """
-            Create mask based on opacity and scale thresholds for 6DGS.
+            Create mask based on opacity threshold for 6DGS.
 
             Args:
-                opacity: [N, 1] Gaussian opacities
-                scale: [N, 3] Gaussian scales
+                opacity: [N, 1] Gaussian opacities (after sigmoid activation)
                 opacity_threshold: Minimum opacity to render
-                scale_threshold: Maximum scale to render
 
             Returns:
                 mask: [N] Boolean mask for valid Gaussians
             """
             # Filter by opacity (remove transparent Gaussians)
-            opacity_mask = opacity.squeeze() > opacity_threshold
+            # Opacity is already activated (sigmoid applied in get_opacity)
+            if opacity.dim() > 1:
+                opacity_mask = opacity.squeeze(-1) > opacity_threshold
+            else:
+                opacity_mask = opacity > opacity_threshold
 
-            # Filter by scale (remove too large Gaussians)
-            max_scale = scale.max(dim=1).values
-            scale_mask = max_scale < scale_threshold
-
-            # Combine masks
-            mask = opacity_mask & scale_mask
-
-            return mask
+            return opacity_mask
 
         # Determine render resolution
         if render_tab_state.preview_render:
@@ -1058,13 +1053,15 @@ class GaussianModel:
 
         # Apply filtering mask for selective rendering
         opacity = self.get_opacity
-        scale = self.get_scaling
         mask = create_mask(
             opacity,
-            scale,
             opacity_threshold=render_tab_state.opacity_threshold,
-            scale_threshold=render_tab_state.scale_threshold,
         )
+
+        # Debug: Print mask statistics (uncomment if you want to see opacity info)
+        # print(f"Opacity range: [{opacity.min().item():.4f}, {opacity.max().item():.4f}]")
+        # print(f"Opacity threshold: {render_tab_state.opacity_threshold:.4f}")
+        # print(f"Mask: {mask.sum().item()} / {mask.shape[0]} Gaussians passed")
 
         # Set background color
         self.background = (
@@ -1079,6 +1076,20 @@ class GaussianModel:
         original_opacity = self._opacity
         original_diags = self.diags
         original_l_triangs = self.l_triangs
+
+        # Check if mask has any valid Gaussians
+        num_valid = mask.sum().item()
+
+        # Update stats
+        render_tab_state.total_count_number = len(original_xyz)
+        render_tab_state.rendered_count_number = 0  # Will be updated after rendering
+
+        # If no Gaussians pass the filter, return a blank image
+        if num_valid == 0:
+            # Return background color
+            bg_color = torch.tensor(render_tab_state.backgrounds, device="cuda") / 255.0
+            render_colors = bg_color.view(3, 1, 1).expand(3, H, W)
+            return render_colors.cpu().numpy().transpose(1, 2, 0)
 
         # Apply mask
         self._xyz = self._xyz[mask]
@@ -1101,8 +1112,7 @@ class GaussianModel:
 
             render_colors = render_output["render"]
 
-            # Update render stats
-            render_tab_state.total_count_number = len(original_xyz)
+            # Update render stats with actual rendered count
             render_tab_state.rendered_count_number = render_output["visibility_filter"].sum().item()
 
             # Handle different render modes

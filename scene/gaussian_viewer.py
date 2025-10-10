@@ -13,7 +13,7 @@ class GaussianRenderTabState(RenderTabState):
     near_plane: float = 1e-3
     far_plane: float = 1e3
     radius_clip: float = 0.0  # 2D radius clip for rendering
-    opacity_threshold: float = 0.01  # Minimum opacity for rendering
+    opacity_threshold: float = 0.005  # Minimum opacity for rendering (default very low to show most Gaussians)
     scale_threshold: float = 100.0  # Maximum scale for rendering
     x_threshold: float = float('inf')  # X-axis threshold for cutting plane
     backgrounds: Tuple[float, float, float] = (0.0, 0.0, 0.0)
@@ -30,8 +30,10 @@ class GaussianViewer(Viewer):
         input_dim: int = 6,
         mode: Literal["rendering", "training"] = "rendering",
         share_url: bool = False,
+        scene_bounds: Tuple[float, float] = None,  # (x_min, x_max) for x_threshold slider
     ):
         self.input_dim = input_dim
+        self.scene_bounds = scene_bounds
         super().__init__(server, render_fn, mode=mode)
         server.gui.set_panel_label("6D Gaussian Splatting Viewer")
         if share_url:
@@ -49,10 +51,10 @@ class GaussianViewer(Viewer):
                 self.opacity_threshold_slider = self.server.gui.add_slider(
                     "Opacity Threshold",
                     min=0.0,
-                    max=1.0,
+                    max=0.5,
                     step=0.001,
                     initial_value=self.render_tab_state.opacity_threshold,
-                    hint="Minimum opacity for rendering Gaussians",
+                    hint="Minimum opacity for rendering Gaussians (0.005 = show most, 0.1 = only opaque)",
                 )
 
                 @self.opacity_threshold_slider.on_update
@@ -75,13 +77,30 @@ class GaussianViewer(Viewer):
                     self.rerender(_)
 
             with self.server.gui.add_folder("Cutting Plane"):
+                # Calculate x_threshold range from scene bounds
+                if self.scene_bounds is not None:
+                    x_min, x_max = self.scene_bounds
+                    # Add 20% margin on each side
+                    x_range = x_max - x_min
+                    margin = x_range * 0.2
+                    slider_min = x_min - margin
+                    slider_max = x_max + margin
+                    slider_initial = (x_min + x_max) / 2.0  # Center of scene
+                    slider_step = x_range / 1000.0  # 1000 steps across range
+                else:
+                    # Fallback to default values
+                    slider_min = -100.0
+                    slider_max = 100.0
+                    slider_initial = 0.0
+                    slider_step = 0.1
+
                 self.x_threshold_slider = self.server.gui.add_slider(
                     "X Threshold",
-                    min=-100.0,
-                    max=100.0,
-                    step=0.1,
-                    initial_value=0.0,
-                    hint="X-axis threshold for cutting plane (inf = disabled)",
+                    min=slider_min,
+                    max=slider_max,
+                    step=slider_step,
+                    initial_value=slider_initial,
+                    hint=f"X-axis threshold for cutting plane (range: {slider_min:.2f} to {slider_max:.2f})",
                 )
 
                 @self.x_threshold_slider.on_update
