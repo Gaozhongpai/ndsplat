@@ -67,7 +67,8 @@ def render_wrapper(viewpoint_cam, gaussians, pipe, bg, mode, scaling_modifier=1.
     elif "6dgs" in mode:
         # 6DGS mode: use model's render_tcgs with conditional slicing
         gaussians.background = bg
-        return gaussians.render_tcgs(viewpoint_cam, render_mode="RGB", use_tcgs=False, is_test=False, scaling_modifier=scaling_modifier)
+        return gaussians.render_tcgs(viewpoint_cam, render_mode="RGB", use_tcgs=False, is_test=False,
+                                     scaling_modifier=scaling_modifier)
     elif "ddgs" in mode or "3dgs" in mode:
         # DDGS/3DGS mode: use model's render_tcgs method
         return gaussians.render_tcgs(viewpoint_cam, pipe, bg, scaling_modifier)
