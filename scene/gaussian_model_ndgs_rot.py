@@ -91,7 +91,7 @@ class GaussianModel:
         Uses gsplat CUDA implementation for efficiency.
 
         Args:
-            q: Query direction (view direction) [N, C]
+            q: Query direction (view direction + time for 7DGS) [N, C]
             c_dim: Conditional dimension (default 3 for spatial xyz)
             lambda_opc: Opacity scaling factor (default 0.35)
 
@@ -101,7 +101,13 @@ class GaussianModel:
             scale: Opacity scaling factor based on direction influence [N, 1]
         """
         m_1 = self.get_xyz  # [N, 3]
-        m_2 = self.get_normal / self.get_normal.norm(dim=1, keepdim=True)  # [N, 3] normalized
+
+        # For 7DGS, m_2 includes both normal (3D) and time (1D)
+        if self.input_dim == 7 and hasattr(self, '_mean_time'):
+            normal_normalized = self.get_normal / self.get_normal.norm(dim=1, keepdim=True)  # [N, 3]
+            m_2 = torch.cat([normal_normalized, self._mean_time], dim=-1)  # [N, 4]
+        else:
+            m_2 = self.get_normal / self.get_normal.norm(dim=1, keepdim=True)  # [N, 3]
 
         # Build covariance matrix from diagonal and lower triangular elements
         v = self.get_pc_v
@@ -148,9 +154,10 @@ class GaussianModel:
         return m_cond, scale
 
 
-    def __init__(self, sh_degree : int):
+    def __init__(self, sh_degree : int, input_dim: int = 6):
         self.active_sh_degree = 0
         self.max_sh_degree = sh_degree
+        self.input_dim = input_dim  # 6 for 6DGS, 7 for 7DGS (with time)
         self._xyz = torch.empty(0)
         self._features_dc = torch.empty(0)
         self._features_rest = torch.empty(0)
@@ -163,10 +170,10 @@ class GaussianModel:
         self.percent_dense = 0
         self.spatial_lr_scale = 0
         self.background = torch.empty(0)  # Background color for rendering
-        
+
         self.n_projection_vecs = 8
         self.color_dim = 8
-        self.gs_dim = 6
+        self.gs_dim = input_dim  # Use input_dim instead of hardcoded 6
         self.init_color=1.0
         self.cov_bias=1e-1
         
@@ -241,6 +248,10 @@ class GaussianModel:
     
     @property
     def get_xyz_normal(self):
+        # For 6DGS: [xyz, normal_xyz] -> 6D
+        # For 7DGS: [xyz, normal_xyz, time] -> 7D (if _mean_time exists)
+        if self.input_dim == 7 and hasattr(self, '_mean_time'):
+            return torch.cat([self._xyz, self._normal, self._mean_time], dim=-1)
         return torch.cat([self._xyz, self._normal], dim=-1)
     
     # def cull(self, q, total_m, total_v):
@@ -362,6 +373,11 @@ class GaussianModel:
         dir = torch.randn((init_n_gs, 3), device=device)
         normal = (dir / dir.norm(dim=1, keepdim=True)).float().cuda()
 
+        # For 7DGS, initialize time dimension
+        if self.input_dim == 7:
+            mean_time = torch.empty(init_n_gs, 1, device=device).uniform_(0.0, 1.0)
+            self._mean_time = nn.Parameter(mean_time.requires_grad_(True))
+
         print("Number of points at initialisation : ", fused_point_cloud.shape[0])
         
         # dist2 = torch.clamp_min(distCUDA2(torch.from_numpy(np.asarray(pcd.points)).float().cuda()), 0.0000001)
@@ -420,6 +436,10 @@ class GaussianModel:
             {'params': [self._l_triangle], 'lr': training_args.l_triangle_lr if hasattr(training_args, 'l_triangle_lr') else training_args.l_triangs_lr, "name": "l_triangle"},
         ]
 
+        # Add time parameter for 7DGS
+        if self.input_dim == 7 and hasattr(self, '_mean_time'):
+            l.append({'params': [self._mean_time], 'lr': training_args.feature_lr, "name": "mean_time"})
+
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
         self.xyz_scheduler_args = get_expon_lr_func(lr_init=training_args.position_lr_init*self.spatial_lr_scale,
                                                     lr_final=training_args.position_lr_final*self.spatial_lr_scale,
@@ -442,6 +462,9 @@ class GaussianModel:
         for i in range(self._features_rest.shape[1]*self._features_rest.shape[2]):
             l.append('f_rest_{}'.format(i))
         l.append('opacity')
+        # Add time for 7DGS
+        if self.input_dim == 7 and hasattr(self, '_mean_time'):
+            l.append('mean_time')
         for i in range(self._scale.shape[1]):
             l.append('scale_{}'.format(i))
         for i in range(self._l_triangle.shape[1]):
@@ -463,7 +486,15 @@ class GaussianModel:
         dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
 
         elements = np.empty(xyz.shape[0], dtype=dtype_full)
-        attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scales, l_triangles), axis=1)
+
+        # Build attributes list, including time for 7DGS
+        attr_list = [xyz, normals, f_dc, f_rest, opacities]
+        if self.input_dim == 7 and hasattr(self, '_mean_time'):
+            mean_time = self._mean_time.detach().cpu().numpy()
+            attr_list.append(mean_time)
+        attr_list.extend([scales, l_triangles])
+
+        attributes = np.concatenate(attr_list, axis=1)
         elements[:] = list(map(tuple, attributes))
         el = PlyElement.describe(elements, 'vertex')
         PlyData([el]).write(path)
@@ -489,7 +520,16 @@ class GaussianModel:
         
         opacities = np.asarray(plydata.elements[0]["opacity"])[..., np.newaxis]
         opacities = np.ascontiguousarray(opacities, dtype=np.float32)
-        
+
+        # Load time dimension for 7DGS
+        mean_time = None
+        if self.input_dim == 7:
+            try:
+                mean_time = np.asarray(plydata.elements[0]["mean_time"])[..., np.newaxis]
+            except:
+                # Initialize with default values if not present
+                mean_time = np.zeros((xyz.shape[0], 1), dtype=np.float32)
+
         features_dc = np.zeros((xyz.shape[0], 3, 1))
         features_dc[:, 0, 0] = np.asarray(plydata.elements[0]["f_dc_0"])
         features_dc[:, 1, 0] = np.asarray(plydata.elements[0]["f_dc_1"])
@@ -527,6 +567,10 @@ class GaussianModel:
         self._normal = nn.Parameter(torch.tensor(normal, dtype=torch.float, device="cuda").requires_grad_(True))
         self._scale = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True))
         self._l_triangle = nn.Parameter(torch.tensor(l_triangles, dtype=torch.float, device="cuda").requires_grad_(True))
+
+        # Load time parameter for 7DGS
+        if self.input_dim == 7 and mean_time is not None:
+            self._mean_time = nn.Parameter(torch.tensor(mean_time, dtype=torch.float, device="cuda").requires_grad_(True))
     
         ### test ####
         c_dim = 3
@@ -601,6 +645,10 @@ class GaussianModel:
         self._scale = optimizable_tensors["scale"]
         self._l_triangle = optimizable_tensors["l_triangle"]
 
+        # Handle time parameter for 7DGS
+        if self.input_dim == 7 and "mean_time" in optimizable_tensors:
+            self._mean_time = optimizable_tensors["mean_time"]
+
         self.xyz_gradient_accum = self.xyz_gradient_accum[valid_points_mask]
 
         self.denom = self.denom[valid_points_mask]
@@ -632,7 +680,7 @@ class GaussianModel:
         return optimizable_tensors
 
     def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_normal, \
-                                    new_opacities, new_scale, new_l_triangle):
+                                    new_opacities, new_scale, new_l_triangle, new_mean_time=None):
         d = {"xyz": new_xyz,
              "f_dc": new_features_dc,
             "f_rest": new_features_rest,
@@ -642,6 +690,10 @@ class GaussianModel:
             "l_triangle" : new_l_triangle,
             }
 
+        # Add time parameter for 7DGS
+        if self.input_dim == 7 and new_mean_time is not None:
+            d["mean_time"] = new_mean_time
+
         optimizable_tensors = self.cat_tensors_to_optimizer(d)
         self._xyz = optimizable_tensors["xyz"]
         self._features_dc = optimizable_tensors["f_dc"]
@@ -650,6 +702,10 @@ class GaussianModel:
         self._opacity = optimizable_tensors["opacity"]
         self._scale = optimizable_tensors["scale"]
         self._l_triangle = optimizable_tensors["l_triangle"]
+
+        # Handle time parameter for 7DGS
+        if self.input_dim == 7 and "mean_time" in optimizable_tensors:
+            self._mean_time = optimizable_tensors["mean_time"]
 
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
@@ -681,12 +737,17 @@ class GaussianModel:
         new_scale = self._scale[selected_pts_mask]
         split_diags = self.scale_inverse_activation(self.scale_activation(self._scale[selected_pts_mask_split]) * 0.8)
         new_scale[selected_pts_mask_split[selected_pts_mask]] = split_diags
-        new_scale = new_scale.repeat(N, 1)    
+        new_scale = new_scale.repeat(N, 1)
 
         new_l_triangle = self._l_triangle[selected_pts_mask].repeat(N, 1)
 
+        # Handle time parameter for 7DGS
+        new_mean_time = None
+        if self.input_dim == 7 and hasattr(self, '_mean_time'):
+            new_mean_time = self._mean_time[selected_pts_mask].repeat(N, 1)
+
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_normal,
-                                new_opacity, new_scale, new_l_triangle)
+                                new_opacity, new_scale, new_l_triangle, new_mean_time)
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device=device, dtype=torch.bool)))
         self.prune_points(prune_filter)    
@@ -734,8 +795,13 @@ class GaussianModel:
         new_scale = self.scale_inverse_activation(self.scale_activation(new_scale) * 0.8).repeat(N, 1)
         new_l_triangle = self._l_triangle[selected_pts_mask].repeat(N, 1)
 
+        # Handle time parameter for 7DGS
+        new_mean_time = None
+        if self.input_dim == 7 and hasattr(self, '_mean_time'):
+            new_mean_time = self._mean_time[selected_pts_mask].repeat(N, 1)
+
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_normal,
-                                   new_opacity, new_scale, new_l_triangle)
+                                   new_opacity, new_scale, new_l_triangle, new_mean_time)
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
@@ -760,7 +826,12 @@ class GaussianModel:
         new_scale = self._scale[selected_pts_mask]
         new_l_triangle = self._l_triangle[selected_pts_mask]
 
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_normal, new_opacities, new_scale, new_l_triangle)
+        # Handle time parameter for 7DGS
+        new_mean_time = None
+        if self.input_dim == 7 and hasattr(self, '_mean_time'):
+            new_mean_time = self._mean_time[selected_pts_mask]
+
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_normal, new_opacities, new_scale, new_l_triangle, new_mean_time)
 
     def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size, iteration):
         """Main densification and pruning routine (matching UBS model)."""
@@ -802,7 +873,20 @@ class GaussianModel:
 
         # Compute view direction for conditional slicing
         dir_pp = (self.get_xyz - viewpoint_camera.camera_center.repeat(self.get_normal.shape[0], 1))
-        cond_params = dir_pp / dir_pp.norm(dim=1, keepdim=True)
+        view_dir = dir_pp / dir_pp.norm(dim=1, keepdim=True)
+
+        # For 7DGS, append timestamp to query
+        if self.input_dim == 7:
+            timestamp = torch.full(
+                (view_dir.shape[0], 1),
+                viewpoint_camera.timestamp if hasattr(viewpoint_camera, 'timestamp') else 0.0,
+                device=view_dir.device,
+                dtype=view_dir.dtype,
+            )
+            cond_params = torch.cat([view_dir, timestamp], dim=-1)
+        else:
+            cond_params = view_dir
+
         lambda_opc = 0.35
 
         if is_test:

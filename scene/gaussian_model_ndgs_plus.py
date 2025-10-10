@@ -14,11 +14,8 @@ import numpy as np
 from utils.general_utils import inverse_sigmoid, get_expon_lr_func, build_rotation
 from torch import nn
 import os
-import math
-import time
 from utils.system_utils import mkdir_p
 from plyfile import PlyData, PlyElement
-from simple_knn._C import distCUDA2
 from utils.sh_utils import RGB2SH
 from utils.graphics_utils import BasicPointCloud
 from utils.general_utils import strip_symmetric, build_scaling_rotation
@@ -30,17 +27,10 @@ from gsplat import (
     _l_triangle_to_covar as l_triangle_to_covar
 )
 
-# Import CUDA-accelerated gsplat operations for N-DGS (verified with unit tests)
 from gsplat import (
-    slice_gaussian_ndgs_test,
-    slice_gaussian_ndgs,
-    l_triangle_to_covar,
-)
-
-# Import TCGS rasterizer
-from tcgs_speedy_rasterizer import (
-    GaussianRasterizationSettings as TCGSRasterizationSettings,
-    GaussianRasterizer as TCGSRasterizer,
+    slice_gaussian_ndgs, 
+    slice_gaussian_ndgs_test, 
+    l_triangle_to_covar
 )
 
 # from utils.ndgs_utils import project_vectors_gaussians
@@ -88,10 +78,10 @@ class GaussianModel:
         Given ND Gaussian with mean [m_1, m_2] and covariance v,
         compute conditional distribution given observation q for m_2.
 
-        Uses CUDA-accelerated gsplat implementation for fast computation.
+        Uses gsplat CUDA implementation for efficiency.
 
         Args:
-            q: Query direction (view direction) [N, C]
+            q: Query direction (view direction + time for 7DGS) [N, C]
             c_dim: Conditional dimension (default 3 for spatial xyz)
             lambda_opc: Opacity scaling factor (default 0.35)
 
@@ -101,12 +91,17 @@ class GaussianModel:
             scale: Opacity scaling factor based on direction influence [N, 1]
         """
         m_1 = self.get_xyz  # [N, 3]
-        m_2 = self.get_normal / self.get_normal.norm(dim=1, keepdim=True)  # [N, 3] normalized
 
-        # Build covariance matrix from diagonal and lower triangular elements
-        v = self.get_pc_v
+        # For 7DGS, m_2 includes both normal (3D) and time (1D)
+        if self.input_dim == 7 and hasattr(self, '_mean_time'):
+            normal_normalized = self.get_normal / self.get_normal.norm(dim=1, keepdim=True)  # [N, 3]
+            m_2 = torch.cat([normal_normalized, self._mean_time], dim=-1)  # [N, 4]
+        else:
+            m_2 = self.get_normal / self.get_normal.norm(dim=1, keepdim=True)  # [N, 3]
 
-        # Use CUDA-accelerated conditional Gaussian slicing
+        v = self.get_pc_v  # [N, 6, 6] using gsplat CUDA implementation
+
+        # Use gsplat CUDA implementation for conditional Gaussian slicing
         m_cond, cov3D_precomp, scale = slice_gaussian_ndgs(
             m_1=m_1,
             m_2=m_2,
@@ -121,7 +116,7 @@ class GaussianModel:
         """
         Optimized version of slice_gaussian for test/inference time.
         Uses precomputed self.v_22_inv and self.v_regr to avoid redundant computation.
-        CUDA-accelerated for fast inference.
+        Now accelerated with custom CUDA kernel.
 
         Args:
             q: Query direction (view direction)
@@ -136,7 +131,7 @@ class GaussianModel:
         v_22_inv = self.v_22_inv
         v_regr = self.v_regr
 
-        # Use CUDA-accelerated inference
+        # Use optimized CUDA kernel for inference
         m_cond, scale = slice_gaussian_ndgs_test(
             m_1=m_1,
             m_2=m_2,
@@ -148,14 +143,16 @@ class GaussianModel:
         return m_cond, scale
 
 
-    def __init__(self, sh_degree : int):
+    def __init__(self, sh_degree : int, input_dim: int = 6):
         self.active_sh_degree = 0
         self.max_sh_degree = sh_degree
+        self.input_dim = input_dim  # 6 for 6DGS, 7 for 7DGS (with time)
         self._xyz = torch.empty(0)
         self._features_dc = torch.empty(0)
         self._features_rest = torch.empty(0)
         self._normal = torch.empty(0)
         self._opacity = torch.empty(0)
+        self._opacityscale = torch.empty(0)
         self.max_radii2D = torch.empty(0)
         self.xyz_gradient_accum = torch.empty(0)
         self.denom = torch.empty(0)
@@ -166,7 +163,7 @@ class GaussianModel:
         
         self.n_projection_vecs = 8
         self.color_dim = 8
-        self.gs_dim = 6
+        self.gs_dim = input_dim  # Use input_dim instead of hardcoded 6
         self.init_color=1.0
         self.cov_bias=1e-1
         
@@ -179,10 +176,10 @@ class GaussianModel:
         
         # self.opacity_act_inv=lambda x: inverse_sigmoid(x)
         self.diags_act = lambda x: torch.exp(x)
-        self.diags_act_inv = lambda x: torch.log(torch.max(x, torch.tensor(1e-6, device=x.device)))
+        self.diags_act_inv = lambda x: torch.log(torch.abs(x+1e-6))
         self.l_triangs_act = lambda x: torch.sigmoid(x)*2.0-1.0
         self.l_triangs_act_inv = lambda x: inverse_sigmoid(torch.clip((x+1.0)/2.0, min=1e-6, max=1.0 - 1e-6))
-        self.mean_scale = 1.0
+
         self.setup_functions()
 
     def capture(self):
@@ -193,6 +190,7 @@ class GaussianModel:
             self._features_rest,
             self._normal,
             self._opacity,
+            self._opacityscale,
             self.max_radii2D,
             self.xyz_gradient_accum,
             self.denom,
@@ -207,6 +205,7 @@ class GaussianModel:
         self._features_rest,
         self._normal, 
         self._opacity,
+        self._opacityscale,
         self.max_radii2D, 
         xyz_gradient_accum, 
         denom,
@@ -221,14 +220,6 @@ class GaussianModel:
     def get_xyz(self):
         return self._xyz
     
-    @property
-    def get_normal(self):
-        return self._normal
-    
-    @property
-    def get_xyz_normal(self):
-        return torch.cat([self._xyz, self._normal], dim=-1)
-    
     # def cull(self, q, total_m, total_v):
     #     q_projections, _ = project_vectors_gaussians(vecs=q, projection_vecs=self.projection_vecs, n_hashes=self.n_projection_vecs)
     #     m_projections, m_projections_range = project_vectors_gaussians(vecs=total_m, projection_vecs=self.projection_vecs, cov=total_v, n_hashes=self.n_projection_vecs)
@@ -237,10 +228,14 @@ class GaussianModel:
     
     @property
     def get_pc_v(self):
-        # Use CUDA-accelerated covariance computation
+        # Use CUDA kernel for covariance matrix construction
         diag = self.diags_act(self.diags)
         l_triang = self.l_triangs_act(self.l_triangs)
-        return l_triangle_to_covar(diag, l_triang)  # [N, D, D] via CUDA
+        return l_triangle_to_covar(diag, l_triang)  # [N, D, D] using CUDA
+    
+    @property
+    def get_normal(self):
+        return self._normal
     
     @property
     def get_features(self):
@@ -255,9 +250,13 @@ class GaussianModel:
     @property
     def get_opacity(self):
         return self.opacity_activation(self._opacity)
+    @property
+    def get_opacity_scale(self):
+        return self.opacity_activation(self._opacityscale)
     
     @property
     def get_scaling(self):
+        # Build covariance matrix using gsplat CUDA implementation
         v = self.get_pc_v
 
         # Slice the 6D covariance matrix
@@ -274,8 +273,9 @@ class GaussianModel:
         
     @property
     def get_rotation_scale(self):
-        v = self.get_pc_v     
-        
+        # Build covariance matrix using gsplat CUDA implementation
+        v = self.get_pc_v
+
         # Slice the 6D covariance matrix
         v_11 = v[:, :3, :3]
         v_12 = v[:, :3, 3:]
@@ -329,13 +329,15 @@ class GaussianModel:
         dir = torch.randn((init_n_gs, 3), device=device)
         normal = (dir / dir.norm(dim=1, keepdim=True)).float().cuda()
 
+        # For 7DGS, initialize time dimension
+        if self.input_dim == 7:
+            mean_time = torch.empty(init_n_gs, 1, device=device).uniform_(0.0, 1.0)
+            self._mean_time = nn.Parameter(mean_time.requires_grad_(True))
+
         print("Number of points at initialisation : ", fused_point_cloud.shape[0])
-        
-        # dist2 = torch.clamp_min(distCUDA2(torch.from_numpy(np.asarray(pcd.points)).float().cuda()), 0.0000001)
-        # scales = torch.sqrt(dist2)[...,None].repeat(1, 3)
-        # self.diags = torch.nn.Parameter(self.diags_act_inv(torch.cat([scales, scales], dim=-1)))
 
         opacities = inverse_sigmoid(0.1 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda"))
+        opacityscales = inverse_sigmoid(0.35 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda"))
         
         self.diags = torch.nn.Parameter(self.diags_act_inv(torch.ones([init_n_gs, self.gs_dim], device=device) * self.cov_bias))
         self.l_triangs = torch.nn.Parameter(self.l_triangs_act_inv(torch.zeros([init_n_gs, self.gs_dim*(self.gs_dim-1)//2], device=device)))
@@ -350,6 +352,7 @@ class GaussianModel:
         self._features_rest = nn.Parameter(features[:,:,1:].transpose(1, 2).contiguous().requires_grad_(True))
         self._normal = nn.Parameter(normal.requires_grad_(True))
         self._opacity = nn.Parameter(opacities.requires_grad_(True))
+        self._opacityscale = nn.Parameter(opacityscales).requires_grad_(False)
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
     def training_setup(self, training_args):
@@ -363,11 +366,16 @@ class GaussianModel:
             {'params': [self._features_rest], 'lr': training_args.feature_lr / 20.0, "name": "f_rest"},
             {'params': [self._normal], 'lr': training_args.feature_lr, "name": "normal"},
             {'params': [self._opacity], 'lr': training_args.opacity_lr, "name": "opacity"},
+            {'params': [self._opacityscale], 'lr': training_args.opacity_lr, "name": "opacityscale"},
             {'params': [self.diags], 'lr': training_args.diags_lr, "name": "diags"},
             {'params': [self.l_triangs], 'lr': training_args.l_triangs_lr, "name": "l_triangs"},
             # {'params': self.color_net.parameters(), 'lr': training_args.color_lr, "name": "color_net"}
         ]
 
+
+        # Add time parameter for 7DGS
+        if self.input_dim == 7 and hasattr(self, '_mean_time'):
+            l.append({'params': [self._mean_time], 'lr': training_args.feature_lr, "name": "mean_time"})
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
         self.xyz_scheduler_args = get_expon_lr_func(lr_init=training_args.position_lr_init*self.spatial_lr_scale,
                                                     lr_final=training_args.position_lr_final*self.spatial_lr_scale,
@@ -390,6 +398,7 @@ class GaussianModel:
         for i in range(self._features_rest.shape[1]*self._features_rest.shape[2]):
             l.append('f_rest_{}'.format(i))
         l.append('opacity')
+        l.append('opacityscale')
         for i in range(self.diags.shape[1]):
             l.append('diags_{}'.format(i))
         for i in range(self.l_triangs.shape[1]):
@@ -407,13 +416,14 @@ class GaussianModel:
         # projection_vecs = self.projection_vecs.cpu().numpy()
         # np.save(path.replace("ply", "npy"), projection_vecs)
         opacities = self._opacity.detach().cpu().numpy()
+        opacityscales = self._opacityscale.detach().cpu().numpy()
         diags = self.diags.detach().cpu().numpy()
         l_triangs = self.l_triangs.detach().cpu().numpy()
         
         dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
 
         elements = np.empty(xyz.shape[0], dtype=dtype_full)
-        attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, diags, l_triangs), axis=1)
+        attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, opacityscales, diags, l_triangs), axis=1)
         elements[:] = list(map(tuple, attributes))
         el = PlyElement.describe(elements, 'vertex')
         PlyData([el]).write(path)
@@ -439,6 +449,9 @@ class GaussianModel:
         
         opacities = np.asarray(plydata.elements[0]["opacity"])[..., np.newaxis]
         opacities = np.ascontiguousarray(opacities, dtype=np.float32)
+        
+        opacityscales = np.asarray(plydata.elements[0]["opacityscale"])[..., np.newaxis]
+        opacityscales = np.ascontiguousarray(opacityscales, dtype=np.float32)
         
         features_dc = np.zeros((xyz.shape[0], 3, 1))
         features_dc[:, 0, 0] = np.asarray(plydata.elements[0]["f_dc_0"])
@@ -474,15 +487,16 @@ class GaussianModel:
         self._features_dc = nn.Parameter(torch.tensor(features_dc, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
         self._features_rest = nn.Parameter(torch.tensor(features_extra, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
         self._opacity = nn.Parameter(torch.tensor(opacities, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._opacityscale = nn.Parameter(torch.tensor(opacityscales, dtype=torch.float, device="cuda").requires_grad_(True))
         self._normal = nn.Parameter(torch.tensor(normal, dtype=torch.float, device="cuda").requires_grad_(True))
         self.diags = nn.Parameter(torch.tensor(diags, dtype=torch.float, device="cuda").requires_grad_(True))
         self.l_triangs = nn.Parameter(torch.tensor(l_triangs, dtype=torch.float, device="cuda").requires_grad_(True))
     
         ### test ####
         c_dim = 3
-        # Use CUDA-accelerated covariance
-        v = self.get_pc_v  # [N, D, D] via CUDA
-        
+        # Build covariance matrix using gsplat CUDA implementation
+        v = self.get_pc_v
+
         v_11 = v[:, :c_dim, :c_dim]
         v_12 = v[:, :c_dim, c_dim:]
         v_21 = v[:, c_dim:, :c_dim]
@@ -492,7 +506,7 @@ class GaussianModel:
         self.v_regr = torch.bmm(v_12, self.v_22_inv)
         v_cond = (v_11 - torch.bmm(self.v_regr, v_21)) # * scale.unsqueeze(-1)
         self.cov3D_precomp = strip_lower_diag(v_cond)
-        self.shs = self.get_features 
+        self.shs = self.get_features
         self.direction = self.get_normal/self.get_normal.norm(dim=1, keepdim=True)
     
         # # Load color_net
@@ -548,6 +562,7 @@ class GaussianModel:
         self._features_rest = optimizable_tensors["f_rest"]
         self._normal = optimizable_tensors["normal"]
         self._opacity = optimizable_tensors["opacity"]
+        self._opacityscale = optimizable_tensors["opacityscale"]
         self.diags = optimizable_tensors["diags"]
         self.l_triangs = optimizable_tensors["l_triangs"]
 
@@ -582,12 +597,13 @@ class GaussianModel:
         return optimizable_tensors
 
     def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_normal, \
-                                    new_opacities, new_diags, new_l_triangs):
+                                    new_opacities, new_opacityscales, new_diags, new_l_triangs):
         d = {"xyz": new_xyz,
              "f_dc": new_features_dc,
             "f_rest": new_features_rest,
             "normal": new_normal,
             "opacity": new_opacities,
+            "opacityscale": new_opacityscales,
             "diags" : new_diags,
             "l_triangs" : new_l_triangs,
             }
@@ -598,6 +614,7 @@ class GaussianModel:
         self._features_rest = optimizable_tensors["f_rest"]
         self._normal = optimizable_tensors["normal"]
         self._opacity = optimizable_tensors["opacity"]
+        self._opacityscale = optimizable_tensors["opacityscale"]
         self.diags = optimizable_tensors["diags"]
         self.l_triangs = optimizable_tensors["l_triangs"]
 
@@ -625,12 +642,13 @@ class GaussianModel:
         new_features_dc = self._features_dc[selected_pts_mask].repeat(N,1,1)
         new_features_rest = self._features_rest[selected_pts_mask].repeat(N,1,1)
         new_opacity = self._opacity[selected_pts_mask].repeat(N,1)
+        new_opacityscale = self._opacityscale[selected_pts_mask].repeat(N,1)
         new_diags = self.diags_act_inv(self.diags_act(self.diags[selected_pts_mask]) * 0.8).repeat(N, 1)
         # new_diags = self.diags[selected_pts_mask].repeat(N, 1)
         new_l_triangs = self.l_triangs[selected_pts_mask].repeat(N, 1)
 
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_normal, \
-                                   new_opacity, new_diags, new_l_triangs)
+                                   new_opacity, new_opacityscale, new_diags, new_l_triangs)
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
@@ -640,17 +658,18 @@ class GaussianModel:
         selected_pts_mask = torch.where(torch.norm(grads, dim=-1) >= grad_threshold, True, False)
         
         selected_pts_mask = torch.logical_and(selected_pts_mask,
-                                              torch.max(scale[:, :3], dim=1).values <= self.percent_dense*scene_extent)
+                                              torch.max(scale, dim=1).values <= self.percent_dense*scene_extent)
         
         new_xyz = self._xyz[selected_pts_mask]
         new_features_dc = self._features_dc[selected_pts_mask]
         new_features_rest = self._features_rest[selected_pts_mask]
         new_normal = self._normal[selected_pts_mask]
         new_opacities = self._opacity[selected_pts_mask]
+        new_opacityscales = self._opacityscale[selected_pts_mask]
         new_diags = self.diags[selected_pts_mask]
         new_l_triangs = self.l_triangs[selected_pts_mask]
 
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_normal, new_opacities, new_diags, new_l_triangs)
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_normal, new_opacities, new_opacityscales, new_diags, new_l_triangs)
 
     def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size, iteration):
         grads = self.xyz_gradient_accum / self.denom
@@ -666,30 +685,25 @@ class GaussianModel:
             
         if max_screen_size:
             big_points_vs = self.max_radii2D > max_screen_size
-            big_points_ws = scale[:, :3].max(dim=1).values > 0.1 * extent
+            big_points_ws = scale.max(dim=1).values > 0.1 * extent
             prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
         self.prune_points(prune_mask)
-
+        
+        if iteration < 14900:
+            self._opacityscale.requires_grad_(False)
         torch.cuda.empty_cache()
 
     def add_densification_stats(self, viewspace_point_tensor, update_filter):
         self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True)
         self.denom[update_filter] += 1
 
-    def render_tcgs(self, viewpoint_camera, render_mode="RGB", use_tcgs=False, is_test=False, scaling_modifier=1.0, tight_snugbox=True):
+    def render_tcgs(self, viewpoint_camera, render_mode="RGB", use_tcgs=False, is_test=False, scaling_modifier=1.0):
         """
-        Render using 6DGS conditional slicing with diff-gaussian-rasterization.
-        This encapsulates the 6DGS-specific rendering logic.
-
-        Args:
-            viewpoint_camera: Camera viewpoint
-            render_mode: Rendering mode (RGB, depth, etc.)
-            use_tcgs: Whether to use TCGS rasterizer
-            is_test: Whether in test mode
-            scaling_modifier: Scaling factor for Gaussians
-            tight_snugbox: Use tight snugbox for TCGS rasterization (default: True)
+        Render using 6DGS+ conditional slicing with diff-gaussian-rasterization.
+        This encapsulates the 6DGS+ specific rendering logic.
         """
         import math
+        from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer
 
         # Create screenspace points for gradient tracking
         screenspace_points = torch.zeros_like(self.get_xyz, dtype=self.get_xyz.dtype, requires_grad=True, device="cuda") + 0
@@ -711,258 +725,51 @@ class GaussianModel:
         else:
             # Training mode: compute conditional slicing
             shs = self.get_features
-            # slice_gaussian returns upper-triangular format [0,0], [0,1], [0,2], [1,1], [1,2], [2,2]
-            # which is directly compatible with diff_gaussian_rasterization
             m_cond, cov3D_precomp, pdf_cond = self.slice_gaussian(cond_params, c_dim=3, lambda_opc=lambda_opc)
 
-        # Compute opacity with conditional probability
-        opacity = self.get_opacity * pdf_cond
+        # Compute opacity with conditional probability and opacity scale
+        opacity = self.get_opacity * pdf_cond * self.get_opacityscale
 
         # Set up rasterization
         tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)
         tanfovy = math.tan(viewpoint_camera.FoVy * 0.5)
 
-        # Use background from model if set, otherwise default to black
-        bg_color = self.background if self.background.numel() > 0 else torch.tensor([0, 0, 0], dtype=torch.float32, device="cuda")
-
-        # Get x_threshold from viewpoint_camera if it exists, otherwise use infinity
-        x_threshold = viewpoint_camera.x_threshold if hasattr(viewpoint_camera, 'x_threshold') and viewpoint_camera.x_threshold is not None else float('inf')
-
-        raster_settings = TCGSRasterizationSettings(
+        raster_settings = GaussianRasterizationSettings(
             image_height=int(viewpoint_camera.image_height),
             image_width=int(viewpoint_camera.image_width),
             tanfovx=tanfovx,
             tanfovy=tanfovy,
-            bg=bg_color,
+            bg=self.background,
             scale_modifier=scaling_modifier,
             viewmatrix=viewpoint_camera.world_view_transform,
             projmatrix=viewpoint_camera.full_proj_transform,
             sh_degree=self.active_sh_degree,
             campos=viewpoint_camera.camera_center,
-            x_threshold=x_threshold,
             prefiltered=False,
-            use_tcgs=use_tcgs,
-            tight_snugbox=tight_snugbox,
             debug=False
         )
 
-        rasterizer = TCGSRasterizer(raster_settings=raster_settings)
-        
-        # Rasterize
-        rendered_image, radii, render_time = rasterizer(
-            means3D=m_cond,
-            means2D=screenspace_points,
+        rasterizer = GaussianRasterizer(raster_settings=raster_settings)
+
+        means3D = m_cond
+        means2D = screenspace_points
+
+        # Rasterize visible Gaussians to image
+        rendered_image, radii = rasterizer(
+            means3D=means3D,
+            means2D=means2D,
             shs=shs,
             colors_precomp=None,
             opacities=opacity,
-            scores=None,
             scales=None,
             rotations=None,
-            cov3D_precomp=cov3D_precomp,
+            cov3D_precomp=cov3D_precomp
         )
 
+        # Return rendered outputs
         return {
             "render": rendered_image,
             "viewspace_points": screenspace_points,
             "visibility_filter": radii > 0,
-            "radii": radii,
+            "radii": radii
         }
-
-    @torch.no_grad()
-    def view_tcgs(self, camera_state, render_tab_state, center=None):
-        """Callable function for the viewer using TCGS rasterizer.
-
-        This method provides interactive viewing capabilities for the 6DGS model,
-        allowing real-time visualization through the GaussianViewer interface.
-
-        Args:
-            camera_state: Camera state from the viewer (contains c2w, K)
-            render_tab_state: Render settings from viewer (GaussianRenderTabState)
-            center: Optional centering of the scene
-
-        Returns:
-            numpy array: Rendered image in [H, W, C] format for display
-        """
-        # Start timing for FPS calculation
-        start_time = time.time()
-
-        from scene.gaussian_viewer import GaussianRenderTabState
-        assert isinstance(render_tab_state, GaussianRenderTabState)
-
-        def create_mask(opacity, opacity_threshold, use_percentile=False, percentile=0.0):
-            """
-            Create mask based on opacity threshold or percentile for 6DGS.
-
-            Args:
-                opacity: [N, 1] Gaussian opacities (after sigmoid activation)
-                opacity_threshold: Minimum opacity to render (if not using percentile)
-                use_percentile: Use percentile filtering instead of absolute threshold
-                percentile: Show top (100-percentile)% most opaque Gaussians
-
-            Returns:
-                mask: [N] Boolean mask for valid Gaussians
-            """
-            # Squeeze opacity to 1D
-            if opacity.dim() > 1:
-                opacity_1d = opacity.squeeze(-1)
-            else:
-                opacity_1d = opacity
-
-            if use_percentile and percentile > 0.0:
-                # Percentile filtering: show top (100-percentile)% most opaque
-                # E.g., percentile=90 means show top 10% (above 90th percentile)
-                threshold_value = torch.quantile(opacity_1d, percentile / 100.0)
-                opacity_mask = opacity_1d > threshold_value
-            else:
-                # Absolute threshold filtering
-                opacity_mask = opacity_1d > opacity_threshold
-
-            return opacity_mask
-
-        # Determine render resolution
-        if render_tab_state.preview_render:
-            W = render_tab_state.render_width
-            H = render_tab_state.render_height
-        else:
-            W = render_tab_state.viewer_width
-            H = render_tab_state.viewer_height
-
-        # Extract camera parameters
-        c2w = camera_state.c2w
-        K = camera_state.get_K((W, H))
-        c2w = torch.from_numpy(c2w).float().to("cuda")
-        K = torch.from_numpy(K).float().to("cuda")
-
-        # Optional centering
-        if center:
-            self._xyz -= self._xyz.mean(dim=0, keepdim=True)
-
-        # Build camera for render_tcgs
-        from scene.cameras import Camera
-
-        # Extract camera parameters from K matrix
-        fx = K[0, 0]
-        fy = K[1, 1]
-
-        # Compute FoV from focal lengths
-        FoVx = 2 * math.atan(W / (2 * fx))
-        FoVy = 2 * math.atan(H / (2 * fy))
-
-        # Convert c2w to w2c for COLMAP convention
-        w2c = torch.linalg.inv(c2w)
-        R = w2c[:3, :3].cpu().numpy().T  # Transpose of w2c rotation
-        T = w2c[:3, 3].cpu().numpy()     # w2c translation
-
-        # Create viewpoint camera
-        viewpoint_camera = Camera(
-            colmap_id=0,
-            R=R,
-            T=T,
-            FoVx=FoVx,
-            FoVy=FoVy,
-            image=torch.zeros((3, H, W)),
-            gt_alpha_mask=None,
-            image_name="viewer",
-            uid=0,
-            x_threshold=render_tab_state.x_threshold,
-            data_device="cuda",
-        )
-
-        # Apply filtering mask for selective rendering
-        opacity = self.get_opacity
-        mask = create_mask(
-            opacity,
-            opacity_threshold=render_tab_state.opacity_threshold,
-            use_percentile=render_tab_state.use_opacity_percentile,
-            percentile=render_tab_state.opacity_percentile,
-        )
-
-        # Debug: Print mask statistics (uncomment if you want to see opacity info)
-        # print(f"Opacity range: [{opacity.min().item():.4f}, {opacity.max().item():.4f}]")
-        # print(f"Opacity threshold: {render_tab_state.opacity_threshold:.4f}")
-        # print(f"Mask: {mask.sum().item()} / {mask.shape[0]} Gaussians passed")
-
-        # Set background color
-        self.background = (
-            torch.tensor(render_tab_state.backgrounds, device="cuda") / 255.0
-        )
-
-        # Temporarily filter Gaussians based on mask
-        original_xyz = self._xyz
-        original_features_dc = self._features_dc
-        original_features_rest = self._features_rest
-        original_normal = self._normal
-        original_opacity = self._opacity
-        original_diags = self.diags
-        original_l_triangs = self.l_triangs
-
-        # Check if mask has any valid Gaussians
-        num_valid = mask.sum().item()
-
-        # Update stats
-        render_tab_state.total_count_number = len(original_xyz)
-        render_tab_state.rendered_count_number = 0  # Will be updated after rendering
-
-        # If no Gaussians pass the filter, return a blank image
-        if num_valid == 0:
-            # Return background color
-            bg_color = torch.tensor(render_tab_state.backgrounds, device="cuda") / 255.0
-            render_colors = bg_color.view(3, 1, 1).expand(3, H, W)
-            return render_colors.cpu().numpy().transpose(1, 2, 0)
-
-        # Apply mask
-        self._xyz = self._xyz[mask]
-        self._features_dc = self._features_dc[mask]
-        self._features_rest = self._features_rest[mask]
-        self._normal = self._normal[mask]
-        self._opacity = self._opacity[mask]
-        self.diags = self.diags[mask]
-        self.l_triangs = self.l_triangs[mask]
-
-        try:
-            # Call render_tcgs
-            render_output = self.render_tcgs(
-                viewpoint_camera,
-                render_mode=render_tab_state.render_mode,
-                use_tcgs=True,
-                is_test=False,
-                scaling_modifier=1.0,
-                tight_snugbox=render_tab_state.tight_snugbox
-            )
-
-            render_colors = render_output["render"]
-
-            # Update render stats with actual rendered count
-            render_tab_state.rendered_count_number = render_output["visibility_filter"].sum().item()
-
-            # Handle different render modes
-            if render_tab_state.render_mode == "Alpha":
-                # For alpha mode, show opacity
-                render_colors = render_output["visibility_filter"].float().unsqueeze(0)
-
-            # Handle depth colormap (if single channel output)
-            if render_colors.shape[0] == 1:
-                # Simple grayscale to RGB conversion for depth
-                render_colors = render_colors.repeat(3, 1, 1)
-
-        finally:
-            # Restore original tensors
-            self._xyz = original_xyz
-            self._features_dc = original_features_dc
-            self._features_rest = original_features_rest
-            self._normal = original_normal
-            self._opacity = original_opacity
-            self.diags = original_diags
-            self.l_triangs = original_l_triangs
-
-        # Convert from [C, H, W] to [H, W, C] for viewer
-        render_colors = render_colors.permute(1, 2, 0)
-
-        # Calculate and update FPS
-        elapsed_time = time.time() - start_time
-        if elapsed_time > 0:
-            render_tab_state.fps = 1.0 / elapsed_time
-        else:
-            render_tab_state.fps = 0.0
-
-        return render_colors.cpu().numpy()

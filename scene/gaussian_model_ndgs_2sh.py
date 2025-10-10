@@ -148,9 +148,10 @@ class GaussianModel:
         return m_cond, scale
 
 
-    def __init__(self, sh_degree : int):
+    def __init__(self, sh_degree : int, input_dim: int = 6):
         self.active_sh_degree = 0
         self.max_sh_degree = sh_degree
+        self.input_dim = input_dim  # 6 for 6DGS, 7 for 7DGS (with time)
         self._xyz = torch.empty(0)
         self._features_dc = [torch.empty(0), torch.empty(0)]  # Dual SH for multi-view
         self._features_rest = [torch.empty(0), torch.empty(0)]  # Dual SH for multi-view
@@ -163,10 +164,10 @@ class GaussianModel:
         self.percent_dense = 0
         self.spatial_lr_scale = 0
         self.background = torch.empty(0)  # Background color for rendering
-        
+
         self.n_projection_vecs = 8
         self.color_dim = 8
-        self.gs_dim = 6
+        self.gs_dim = input_dim  # Use input_dim instead of hardcoded 6
         self.init_color=1.0
         self.cov_bias=1e-1
         

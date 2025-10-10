@@ -26,15 +26,13 @@ def get_gaussian_model(mode: str):
     """Factory function to get the appropriate GaussianModel class based on mode.
 
     Args:
-        mode: One of "6dgs", "ddgs", "3dgs", "ubs", "ndgs"
+        mode: One of "ndgs", "ddgs", "3dgs", "ubs"
 
     Returns:
         GaussianModel class for the specified mode
     """
     if mode == "ddgs":  ## Neurips 2024
         from scene.gaussian_model_ddgs import GaussianModel
-    elif mode == "6dgs":  ## ICLR 2025
-        from scene.gaussian_model_6dgs_2sh import GaussianModel
     elif mode == "3dgs":  ## original 3DGS
         from scene.gaussian_model import GaussianModel
     elif mode == "ubs":  ## UBS (ICLR 2026)
