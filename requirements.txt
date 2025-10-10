@@ -1,0 +1,43 @@
+# Core dependencies
+torch==2.3.0
+torchvision==0.18.0
+torchaudio==2.3.0
+numpy<2.0.0
+pillow
+
+# Scientific computing and utilities
+scipy
+scikit-learn
+matplotlib
+pandas
+tabulate
+tqdm
+plyfile==1.1
+
+# Computer vision and image processing
+opencv-python
+imageio[ffmpeg]
+trimesh
+
+# 3D visualization
+viser
+nerfview @ git+https://github.com/RongLiu-Leo/nerfview.git
+glfw
+PyOpenGL
+
+# Training and metrics
+tensorboard
+torchmetrics[image]
+
+# Compression and optimization
+plas @ git+https://github.com/fraunhoferhhi/PLAS.git
+
+# SSIM loss (CUDA-accelerated)
+fused-ssim @ git+https://github.com/rahul-goel/fused-ssim@1272e21a282342e89537159e4bad508b19b34157
+
+# Submodules (install after cloning with submodules)
+# Install these manually with:
+# pip install -e submodules/diff-gaussian-rasterization
+# pip install -e submodules/simple-knn
+# pip install -e submodules/tcgs_speedy_rasterizer
+# pip install -e submodules/gsplat

@@ -4,14 +4,33 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-  - cudatoolkit=11.6
-  - plyfile
-  - python=3.7.13
-  - pip=22.3.1
-  - pytorch=1.12.1
-  - torchaudio=0.12.1
-  - torchvision=0.13.1
+  - python=3.11
+  - pip=24.2
+  - pytorch=2.3.0
+  - torchaudio=2.3.0
+  - torchvision=0.18.0
+  - pytorch-cuda=12.1
+  - plyfile=1.1
   - tqdm
+  - numpy<2.0.0
+  - pillow
   - pip:
+    - viser
+    - nerfview @ git+https://github.com/RongLiu-Leo/nerfview.git
+    - tensorboard
+    - opencv-python
+    - trimesh
+    - imageio[ffmpeg]
+    - glfw
+    - PyOpenGL
+    - torchmetrics[image]
+    - scikit-learn
+    - matplotlib
+    - pandas
+    - tabulate
+    - plas @ git+https://github.com/fraunhoferhhi/PLAS.git
     - submodules/diff-gaussian-rasterization
     - submodules/simple-knn
+    - submodules/tcgs_speedy_rasterizer
+    - submodules/gsplat
+    - fused-ssim @ git+https://github.com/rahul-goel/fused-ssim@1272e21a282342e89537159e4bad508b19b34157

@@ -13,12 +13,10 @@ import torch
 import torch.nn.functional as F
 from torch.autograd import Variable
 from math import exp
+from fused_ssim import fused_ssim
 
-def l1_loss(network_output, gt, weight_mask=None):
-    if weight_mask is not None:
-        return torch.abs((network_output - gt)*weight_mask).mean()
-    else:
-        return torch.abs(network_output - gt).mean()
+def l1_loss(network_output, gt):
+    return torch.abs(network_output - gt).mean()
 
 def l2_loss(network_output, gt):
     return ((network_output - gt) ** 2).mean()
@@ -33,15 +31,14 @@ def create_window(window_size, channel):
     window = Variable(_2D_window.expand(channel, 1, window_size, window_size).contiguous())
     return window
 
-def ssim(img1, img2, weight_mask=None, window_size=11, size_average=True):
-    channel = img1.size(-3)
-    window = create_window(window_size, channel)
-
-    if img1.is_cuda:
-        window = window.cuda(img1.get_device())
-    window = window.type_as(img1)
-
-    return _ssim(img1, img2, window, window_size, channel, weight_mask, size_average)
+def ssim(img1, img2, window_size=11, size_average=True):
+    # Use fused_ssim for better performance
+    # fused_ssim expects 4D tensors [B, C, H, W]
+    # Add batch dimension if not present
+    if img1.dim() == 3:
+        img1 = img1.unsqueeze(0)
+        img2 = img2.unsqueeze(0)
+    return fused_ssim(img1, img2)
 
 def _ssim(img1, img2, window, window_size, channel,  weight_mask=None, size_average=True):
     mu1 = F.conv2d(img1, window, padding=window_size // 2, groups=channel)
