@@ -18,16 +18,30 @@ from arguments import ModelParams
 from utils.camera_utils import cameraList_from_camInfos, camera_to_JSON
 
 
-MODE = "6dgs" # "ddgs", "3dgs", "6dgs", "ubs"
+def get_gaussian_model(mode: str):
+    """Factory function to get the appropriate GaussianModel class based on mode.
 
-if MODE == "ddgs": ## Neurips 2024
-    from scene.gaussian_model_ddgs import GaussianModel
-elif MODE == "6dgs": ## ICLR 2025
-    from scene.gaussian_model_6dgs import GaussianModel
-elif MODE == "3dgs": ## original 3DGS
-    from scene.gaussian_model import GaussianModel
-elif MODE == "ubs": ## UBS (ICLR 2026)
-    from scene.gaussian_model_ubs import GaussianModel
+    Args:
+        mode: One of "6dgs", "ddgs", "3dgs", "ubs"
+
+    Returns:
+        GaussianModel class for the specified mode
+    """
+    if mode == "ddgs":  ## Neurips 2024
+        from scene.gaussian_model_ddgs import GaussianModel
+    elif mode == "6dgs":  ## ICLR 2025
+        from scene.gaussian_model_6dgs import GaussianModel
+    elif mode == "3dgs":  ## original 3DGS
+        from scene.gaussian_model import GaussianModel
+    elif mode == "ubs":  ## UBS (ICLR 2026)
+        from scene.gaussian_model_ubs import GaussianModel
+    else:
+        raise ValueError(f"Unknown mode: {mode}. Must be one of: 6dgs, ddgs, 3dgs, ubs")
+    return GaussianModel
+
+# For backward compatibility, export a default MODE
+# This will be overridden by args.mode in train.py and render.py
+MODE = "6dgs"
 
 class Scene:
 

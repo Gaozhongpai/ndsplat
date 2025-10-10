@@ -1,5 +1,8 @@
 *.pyc
 .vscode
+__pycache__
+.venv
+.aux
 output
 build
 diff_rasterization/diff_rast.egg-info

@@ -44,7 +44,7 @@ class ParamGroup:
                 setattr(group, arg[0], arg[1])
         return group
 
-class ModelParams(ParamGroup): 
+class ModelParams(ParamGroup):
     def __init__(self, parser, sentinel=False):
         self.sh_degree = 3
         self._source_path = ""
@@ -54,6 +54,7 @@ class ModelParams(ParamGroup):
         self._white_background = False
         self.data_device = "cuda"
         self.eval = False
+        self.mode = "6dgs"  # Options: "6dgs", "ddgs", "3dgs", "ubs"
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
@@ -102,6 +103,12 @@ class OptimizationParams(ParamGroup):
         self.l_triangle_lr = 0.001
 
         super().__init__(parser, "Optimization Parameters")
+
+class ViewerParams(ParamGroup):
+    def __init__(self, parser):
+        self.port = 8080
+        self.disable_viewer = False
+        super().__init__(parser, "Viewer Parameters")
 
 def get_combined_args(parser : ArgumentParser):
     cmdlne_string = sys.argv[1:]

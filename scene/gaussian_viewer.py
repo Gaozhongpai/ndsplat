@@ -4,26 +4,24 @@ from typing import Literal
 from typing import Callable, Tuple
 
 
-class BetaRenderTabState(RenderTabState):
+class GaussianRenderTabState(RenderTabState):
     # non-controlable parameters
     total_count_number: int = 0
     rendered_count_number: int = 0
 
     # controlable parameters
-    timestamp: float = 0.0
     near_plane: float = 1e-3
     far_plane: float = 1e3
-    radius_clip: float = 0.0
-    b_xyz: Tuple[int, int] = (0, 100)
-    b_view: Tuple[int, int] = (0, 100)
-    b_time: Tuple[int, int] = (0, 100)
+    opacity_threshold: float = 0.01  # Minimum opacity for rendering
+    scale_threshold: float = 100.0  # Maximum scale for rendering
+    x_threshold: float = float('inf')  # X-axis threshold for cutting plane
     backgrounds: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     render_mode: Literal[
         "RGB", "Alpha", "Diffuse", "Specular", "Depth", "Normal"
     ] = "RGB"
 
 
-class BetaViewer(Viewer):
+class GaussianViewer(Viewer):
     def __init__(
         self,
         server: viser.ViserServer,
@@ -34,74 +32,75 @@ class BetaViewer(Viewer):
     ):
         self.input_dim = input_dim
         super().__init__(server, render_fn, mode=mode)
-        server.gui.set_panel_label("Beta Splatting Viewer")
+        server.gui.set_panel_label("6D Gaussian Splatting Viewer")
         if share_url:
             server.request_share_url()
 
     def _init_rendering_tab(self):
-        self.render_tab_state = BetaRenderTabState()
+        self.render_tab_state = GaussianRenderTabState()
         self._rendering_tab_handles = {}
         self._rendering_folder = self.server.gui.add_folder("Rendering")
 
     def _populate_rendering_tab(self):
         with self._rendering_folder:
 
-            if self.input_dim == 7:
-                self.gui_slider_time = self.server.gui.add_slider(
-                    "Time",
+            with self.server.gui.add_folder("Gaussian Filtering"):
+                self.opacity_threshold_slider = self.server.gui.add_slider(
+                    "Opacity Threshold",
                     min=0.0,
                     max=1.0,
-                    step=0.0001,
-                    initial_value=self.render_tab_state.timestamp,
+                    step=0.001,
+                    initial_value=self.render_tab_state.opacity_threshold,
+                    hint="Minimum opacity for rendering Gaussians",
                 )
 
-                @self.gui_slider_time.on_update
+                @self.opacity_threshold_slider.on_update
                 def _(_) -> None:
-                    self.render_tab_state.timestamp = self.gui_slider_time.value
+                    self.render_tab_state.opacity_threshold = self.opacity_threshold_slider.value
                     self.rerender(_)
 
-            with self.server.gui.add_folder("Geometry Dependency Control"):
-                self.gui_multi_slider_xyz = self.server.gui.add_multi_slider(
-                    "Geo quantile",
-                    min=0,
-                    max=100,
-                    step=1,
-                    initial_value=self.render_tab_state.b_xyz,
+                self.scale_threshold_slider = self.server.gui.add_slider(
+                    "Scale Threshold",
+                    min=0.1,
+                    max=200.0,
+                    step=0.1,
+                    initial_value=self.render_tab_state.scale_threshold,
+                    hint="Maximum scale for rendering Gaussians",
                 )
 
-                @self.gui_multi_slider_xyz.on_update
+                @self.scale_threshold_slider.on_update
                 def _(_) -> None:
-                    self.render_tab_state.b_xyz = self.gui_multi_slider_xyz.value
+                    self.render_tab_state.scale_threshold = self.scale_threshold_slider.value
                     self.rerender(_)
 
-            with self.server.gui.add_folder("View Dependency Control"):
-                self.gui_multi_slider_view = self.server.gui.add_multi_slider(
-                    "View quantile",
-                    min=0,
-                    max=100,
-                    step=1,
-                    initial_value=self.render_tab_state.b_view,
+            with self.server.gui.add_folder("Cutting Plane"):
+                self.x_threshold_slider = self.server.gui.add_slider(
+                    "X Threshold",
+                    min=-100.0,
+                    max=100.0,
+                    step=0.1,
+                    initial_value=0.0,
+                    hint="X-axis threshold for cutting plane (inf = disabled)",
                 )
 
-                @self.gui_multi_slider_view.on_update
+                @self.x_threshold_slider.on_update
                 def _(_) -> None:
-                    self.render_tab_state.b_view = self.gui_multi_slider_view.value
+                    self.render_tab_state.x_threshold = self.x_threshold_slider.value
                     self.rerender(_)
 
-            if self.input_dim == 7:
-                with self.server.gui.add_folder("Time Dependency Control"):
-                    self.gui_multi_slider_time = self.server.gui.add_multi_slider(
-                        "Time quantile",
-                        min=0,
-                        max=100,
-                        step=1,
-                        initial_value=self.render_tab_state.b_time,
-                    )
+                self.x_threshold_checkbox = self.server.gui.add_checkbox(
+                    "Enable X Threshold",
+                    initial_value=False,
+                    hint="Enable/disable cutting plane",
+                )
 
-                    @self.gui_multi_slider_time.on_update
-                    def _(_) -> None:
-                        self.render_tab_state.b_time = self.gui_multi_slider_time.value
-                        self.rerender(_)
+                @self.x_threshold_checkbox.on_update
+                def _(_) -> None:
+                    if self.x_threshold_checkbox.value:
+                        self.render_tab_state.x_threshold = self.x_threshold_slider.value
+                    else:
+                        self.render_tab_state.x_threshold = float('inf')
+                    self.rerender(_)
 
             with self.server.gui.add_folder("Render Mode"):
                 self.render_mode_dropdown = self.server.gui.add_dropdown(
@@ -174,17 +173,15 @@ class BetaViewer(Viewer):
 
         self._rendering_tab_handles.update(
             {
-                "timestamp": self.gui_slider_time if self.input_dim == 7 else 0.0,
-                "b_xyz": self.gui_multi_slider_xyz,
-                "b_view": self.gui_multi_slider_view,
-                "b_time": self.gui_multi_slider_time
-                if self.input_dim == 7
-                else (0, 100),
+                "opacity_threshold_slider": self.opacity_threshold_slider,
+                "scale_threshold_slider": self.scale_threshold_slider,
+                "x_threshold_slider": self.x_threshold_slider,
+                "x_threshold_checkbox": self.x_threshold_checkbox,
                 "total_count_number": self.total_count_number,
                 "rendered_count_number": self.rendered_count_number,
                 "near_far_plane_vec2": self.near_far_plane_vec2,
                 "radius_clip_slider": self.radius_clip_slider,
-                "rener_mode_dropdown": self.render_mode_dropdown,
+                "render_mode_dropdown": self.render_mode_dropdown,
                 "backgrounds_slider": self.backgrounds_slider,
             }
         )

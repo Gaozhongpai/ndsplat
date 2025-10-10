@@ -13,20 +13,28 @@ import os
 import torch
 from random import randint
 from utils.loss_utils import l1_loss, ssim
-from gaussian_renderer import render, network_gui
 import sys
-from scene import Scene, GaussianModel, MODE
+from scene import Scene, get_gaussian_model
 from utils.general_utils import safe_state
 import uuid
 from tqdm import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
-from arguments import ModelParams, PipelineParams, OptimizationParams
+from arguments import ModelParams, PipelineParams, OptimizationParams, ViewerParams
+import time
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True
 except ImportError:
     TENSORBOARD_FOUND = False
+
+try:
+    import viser
+    from scene.gaussian_viewer import GaussianViewer
+    VISER_FOUND = True
+except ImportError:
+    VISER_FOUND = False
+    print("Viser not found. Live viewer will be disabled.")
     
 def create_radial_weight_mask(height, width, center_weight=0.8, edge_weight=5):
     y, x = torch.meshgrid(torch.arange(height), torch.arange(width))
@@ -37,29 +45,44 @@ def create_radial_weight_mask(height, width, center_weight=0.8, edge_weight=5):
     weight_mask = center_weight + (edge_weight - center_weight) * normalized_distance
     return weight_mask
 
-def render_wrapper(viewpoint_cam, gaussians, pipe, bg, scaling_modifier=1.0):
-    """Wrapper function that handles both standard and model-specific rendering."""
-    if MODE == "ubs":
+def render_wrapper(viewpoint_cam, gaussians, pipe, bg, mode, scaling_modifier=1.0):
+    """Wrapper function that handles model-specific rendering.
+
+    All models now have render_tcgs as a class method, so we dispatch to the
+    appropriate signature based on mode.
+
+    Args:
+        viewpoint_cam: Camera viewpoint
+        gaussians: GaussianModel instance
+        pipe: Pipeline parameters
+        bg: Background color
+        mode: Rendering mode ("6dgs", "ddgs", "3dgs", "ubs")
+        scaling_modifier: Scaling modifier for rendering
+    """
+    if mode == "ubs":
         # UBS mode: use render_tcgs with CUDA-accelerated conditional slicing
         gaussians.background = bg
         return gaussians.render_tcgs(viewpoint_cam, render_mode="RGB", use_tcgs=False, scaling_modifier=scaling_modifier)
-    elif "6dgs" in MODE:
+    elif "6dgs" in mode:
         # 6DGS mode: use model's render_tcgs with conditional slicing
         gaussians.background = bg
         return gaussians.render_tcgs(viewpoint_cam, render_mode="RGB", use_tcgs=False, is_test=False, scaling_modifier=scaling_modifier)
-    elif "ddgs" in MODE or "3dgs" in MODE:
+    elif "ddgs" in mode or "3dgs" in mode:
         # DDGS/3DGS mode: use model's render_tcgs method
         return gaussians.render_tcgs(viewpoint_cam, pipe, bg, scaling_modifier)
     else:
-        # Fallback: use global renderer
-        return render(viewpoint_cam, gaussians, pipe, bg, scaling_modifier)
+        raise ValueError(f"Unknown mode: {mode}. All modes should have render_tcgs method.")
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
+def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
 
-    # Initialize model based on MODE
-    if MODE == "ubs":
+    # Get the appropriate GaussianModel class based on mode
+    mode = dataset.mode
+    GaussianModel = get_gaussian_model(mode)
+
+    # Initialize model based on mode
+    if mode == "ubs":
         # UBS model uses input_dim instead of sh_degree
         gaussians = GaussianModel(input_dim=6)  # 6D Gaussian (or 7 for time)
     else:
@@ -76,6 +99,21 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         bg_color = [1, 1, 1]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
+    # Initialize viser viewer if available and not disabled
+    viewer = None
+    if VISER_FOUND and not viewer_params.disable_viewer:
+        server = viser.ViserServer(port=viewer_params.port, verbose=False)
+        viewer = GaussianViewer(
+            server=server,
+            render_fn=lambda camera_state, render_tab_state: gaussians.view_tcgs(
+                camera_state, render_tab_state, center=False
+            ),
+            input_dim=getattr(gaussians, 'input_dim', 3),
+            mode="training",
+            share_url=False,
+        )
+        print(f"Viser viewer started on port {viewer_params.port}")
+
     iter_start = torch.cuda.Event(enable_timing = True)
     iter_end = torch.cuda.Event(enable_timing = True)
     
@@ -88,21 +126,13 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     ema_loss_for_log = 0.0
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
-    for iteration in range(first_iter, opt.iterations + 1):        
-        if network_gui.conn == None:
-            network_gui.try_connect()
-        while network_gui.conn != None:
-            try:
-                net_image_bytes = None
-                custom_cam, do_training, pipe.convert_SHs_python, pipe.compute_cov3D_python, keep_alive, scaling_modifer = network_gui.receive()
-                if custom_cam != None:
-                    net_image = render_wrapper(custom_cam, gaussians, pipe, background, scaling_modifer)["render"]
-                    net_image_bytes = memoryview((torch.clamp(net_image, min=0, max=1.0) * 255).byte().permute(1, 2, 0).contiguous().cpu().numpy())
-                network_gui.send(net_image_bytes, dataset.source_path)
-                if do_training and ((iteration < int(opt.iterations)) or not keep_alive):
-                    break
-            except Exception as e:
-                network_gui.conn = None
+    for iteration in range(first_iter, opt.iterations + 1):
+        # Handle viewer pause/resume
+        if viewer is not None:
+            while viewer.state == "paused":
+                time.sleep(0.01)
+            viewer.lock.acquire()
+            tic = time.time()
 
         iter_start.record()
 
@@ -125,8 +155,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
             bg = torch.rand((3), device="cuda") if opt.random_background else background
 
-            # Use unified render wrapper (handles both ubs and standard modes)
-            render_pkg = render_wrapper(viewpoint_cam, gaussians, pipe, bg)
+            # Use unified render wrapper (handles all model modes)
+            render_pkg = render_wrapper(viewpoint_cam, gaussians, pipe, bg, mode)
             image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
             # image_non_principle = render_pkg["render_non_principle"]
             # Loss
@@ -148,11 +178,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 progress_bar.close()
 
             # Log and save
-            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render_wrapper, (pipe, background))
+            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render_wrapper, (pipe, background, mode))
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 print("\nNnmber Gaussian: {}".format(gaussians.get_xyz.shape[0]))
-                if MODE == "ddgs" or MODE == "ddndgs":
+                if mode == "ddgs" or mode == "ddndgs":
                     print("\nNnmber Principle: {}".format(gaussians._is_principle.sum()))
                     print("\nNnmber Non-Principle: {}".format((~gaussians._is_principle).sum()))
                 scene.save(iteration)
@@ -165,7 +195,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                    min_opacity = 0.01 if "6dgs" in MODE else 0.005
+                    min_opacity = 0.01 if "6dgs" in mode else 0.005
                     gaussians.densify_and_prune(opt.densify_grad_threshold, min_opacity, scene.cameras_extent, size_threshold, iteration)
                 
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
@@ -175,6 +205,15 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if iteration < opt.iterations:
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none = True)
+
+            # Update viewer
+            if viewer is not None:
+                num_train_rays_per_step = gt_image.numel()
+                viewer.lock.release()
+                num_train_steps_per_sec = 1.0 / (time.time() - tic + 1e-8)
+                num_train_rays_per_sec = num_train_rays_per_step * num_train_steps_per_sec
+                viewer.render_tab_state.num_train_rays_per_sec = num_train_rays_per_sec
+                viewer.update(iteration, num_train_rays_per_step)
 
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
@@ -245,8 +284,7 @@ if __name__ == "__main__":
     lp = ModelParams(parser)
     op = OptimizationParams(parser)
     pp = PipelineParams(parser)
-    parser.add_argument('--ip', type=str, default="127.0.0.1")
-    parser.add_argument('--port', type=int, default=6011)
+    vp = ViewerParams(parser)
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
     parser.add_argument("--test_iterations", nargs="+", type=int, default=[500, 2_000, 7_000, 15_000, 30_000])
@@ -256,16 +294,15 @@ if __name__ == "__main__":
     parser.add_argument("--start_checkpoint", type=str, default = None)
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
-    
+
     print("Optimizing " + args.model_path)
 
     # Initialize system state (RNG)
     safe_state(args.quiet)
 
-    # Start GUI server, configure and run training
-    network_gui.init(args.ip, args.port)
+    # Configure and run training
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
-    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from)
+    training(lp.extract(args), op.extract(args), pp.extract(args), vp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from)
 
     # All done
     print("\nTraining complete.")

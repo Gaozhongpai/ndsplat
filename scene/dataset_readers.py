@@ -35,6 +35,9 @@ class CameraInfo(NamedTuple):
     image_name: str
     width: int
     height: int
+    x_threshold: float = None
+    label: list = None
+    color_idx: float = None
 
 class SceneInfo(NamedTuple):
     point_cloud: BasicPointCloud
@@ -100,7 +103,8 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
         image = Image.open(image_path)
 
         cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
-                              image_path=image_path, image_name=image_name, width=width, height=height)
+                              image_path=image_path, image_name=image_name, width=width, height=height,
+                              x_threshold=None, label=None, color_idx=None)
         cam_infos.append(cam_info)
     sys.stdout.write('\n')
     return cam_infos
@@ -188,6 +192,11 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
         for idx, frame in enumerate(tqdm(frames)):
             cam_name = os.path.join(path, frame["file_path"] + extension)
 
+            # Read cutting plane parameters if they exist in the JSON
+            x_threshold = frame.get("x_threshold", None)
+            color_idx = frame.get("color_idx", None)
+            label = frame.get("label", None)
+
             # NeRF 'transform_matrix' is a camera-to-world transform
             c2w = np.array(frame["transform_matrix"])
             # change from OpenGL/Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
@@ -211,12 +220,14 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
             image = Image.fromarray(np.array(arr*255.0, dtype=np.byte), "RGB")
 
             fovy = focal2fov(fov2focal(fovx, image.size[0]), image.size[1])
-            FovY = fovy 
+            FovY = fovy
             FovX = fovx
 
             cam_infos.append(CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
-                            image_path=image_path, image_name=image_name, width=image.size[0], height=image.size[1]))
-            
+                            image_path=image_path, image_name=image_name,
+                            width=image.size[0], height=image.size[1],
+                            x_threshold=x_threshold, color_idx=color_idx, label=label))
+
     return cam_infos
 
 def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):

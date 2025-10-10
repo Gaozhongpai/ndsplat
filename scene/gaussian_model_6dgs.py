@@ -14,6 +14,7 @@ import numpy as np
 from utils.general_utils import inverse_sigmoid, get_expon_lr_func, build_rotation
 from torch import nn
 import os
+import math
 from utils.system_utils import mkdir_p
 from plyfile import PlyData, PlyElement
 from simple_knn._C import distCUDA2
@@ -920,6 +921,9 @@ class GaussianModel:
         # Use background from model if set, otherwise default to black
         bg_color = self.background if self.background.numel() > 0 else torch.tensor([0, 0, 0], dtype=torch.float32, device="cuda")
 
+        # Get x_threshold from viewpoint_camera if it exists, otherwise use infinity
+        x_threshold = viewpoint_camera.x_threshold if hasattr(viewpoint_camera, 'x_threshold') and viewpoint_camera.x_threshold is not None else float('inf')
+
         raster_settings = TCGSRasterizationSettings(
             image_height=int(viewpoint_camera.image_height),
             image_width=int(viewpoint_camera.image_width),
@@ -931,6 +935,7 @@ class GaussianModel:
             projmatrix=viewpoint_camera.full_proj_transform,
             sh_degree=self.active_sh_degree,
             campos=viewpoint_camera.camera_center,
+            x_threshold=x_threshold,
             prefiltered=False,
             use_tcgs=use_tcgs,
             tight_snugbox=True,
@@ -958,3 +963,169 @@ class GaussianModel:
             "visibility_filter": radii > 0,
             "radii": radii,
         }
+
+    @torch.no_grad()
+    def view_tcgs(self, camera_state, render_tab_state, center=None):
+        """Callable function for the viewer using TCGS rasterizer.
+
+        This method provides interactive viewing capabilities for the 6DGS model,
+        allowing real-time visualization through the GaussianViewer interface.
+
+        Args:
+            camera_state: Camera state from the viewer (contains c2w, K)
+            render_tab_state: Render settings from viewer (GaussianRenderTabState)
+            center: Optional centering of the scene
+
+        Returns:
+            numpy array: Rendered image in [H, W, C] format for display
+        """
+        from scene.gaussian_viewer import GaussianRenderTabState
+        assert isinstance(render_tab_state, GaussianRenderTabState)
+
+        def create_mask(opacity, scale, opacity_threshold, scale_threshold):
+            """
+            Create mask based on opacity and scale thresholds for 6DGS.
+
+            Args:
+                opacity: [N, 1] Gaussian opacities
+                scale: [N, 3] Gaussian scales
+                opacity_threshold: Minimum opacity to render
+                scale_threshold: Maximum scale to render
+
+            Returns:
+                mask: [N] Boolean mask for valid Gaussians
+            """
+            # Filter by opacity (remove transparent Gaussians)
+            opacity_mask = opacity.squeeze() > opacity_threshold
+
+            # Filter by scale (remove too large Gaussians)
+            max_scale = scale.max(dim=1).values
+            scale_mask = max_scale < scale_threshold
+
+            # Combine masks
+            mask = opacity_mask & scale_mask
+
+            return mask
+
+        # Determine render resolution
+        if render_tab_state.preview_render:
+            W = render_tab_state.render_width
+            H = render_tab_state.render_height
+        else:
+            W = render_tab_state.viewer_width
+            H = render_tab_state.viewer_height
+
+        # Extract camera parameters
+        c2w = camera_state.c2w
+        K = camera_state.get_K((W, H))
+        c2w = torch.from_numpy(c2w).float().to("cuda")
+        K = torch.from_numpy(K).float().to("cuda")
+
+        # Optional centering
+        if center:
+            self._xyz -= self._xyz.mean(dim=0, keepdim=True)
+
+        # Build camera for render_tcgs
+        from scene.cameras import Camera
+
+        # Extract camera parameters from K matrix
+        fx = K[0, 0]
+        fy = K[1, 1]
+
+        # Compute FoV from focal lengths
+        FoVx = 2 * math.atan(W / (2 * fx))
+        FoVy = 2 * math.atan(H / (2 * fy))
+
+        # Convert c2w to w2c for COLMAP convention
+        w2c = torch.linalg.inv(c2w)
+        R = w2c[:3, :3].cpu().numpy().T  # Transpose of w2c rotation
+        T = w2c[:3, 3].cpu().numpy()     # w2c translation
+
+        # Create viewpoint camera
+        viewpoint_camera = Camera(
+            colmap_id=0,
+            R=R,
+            T=T,
+            FoVx=FoVx,
+            FoVy=FoVy,
+            image=torch.zeros((3, H, W)),
+            gt_alpha_mask=None,
+            image_name="viewer",
+            uid=0,
+            x_threshold=render_tab_state.x_threshold,
+            data_device="cuda",
+        )
+
+        # Apply filtering mask for selective rendering
+        opacity = self.get_opacity
+        scale = self.get_scaling
+        mask = create_mask(
+            opacity,
+            scale,
+            opacity_threshold=render_tab_state.opacity_threshold,
+            scale_threshold=render_tab_state.scale_threshold,
+        )
+
+        # Set background color
+        self.background = (
+            torch.tensor(render_tab_state.backgrounds, device="cuda") / 255.0
+        )
+
+        # Temporarily filter Gaussians based on mask
+        original_xyz = self._xyz
+        original_features_dc = self._features_dc
+        original_features_rest = self._features_rest
+        original_normal = self._normal
+        original_opacity = self._opacity
+        original_diags = self.diags
+        original_l_triangs = self.l_triangs
+
+        # Apply mask
+        self._xyz = self._xyz[mask]
+        self._features_dc = self._features_dc[mask]
+        self._features_rest = self._features_rest[mask]
+        self._normal = self._normal[mask]
+        self._opacity = self._opacity[mask]
+        self.diags = self.diags[mask]
+        self.l_triangs = self.l_triangs[mask]
+
+        try:
+            # Call render_tcgs
+            render_output = self.render_tcgs(
+                viewpoint_camera,
+                render_mode=render_tab_state.render_mode,
+                use_tcgs=True,
+                is_test=False,
+                scaling_modifier=1.0
+            )
+
+            render_colors = render_output["render"]
+
+            # Update render stats
+            render_tab_state.total_count_number = len(original_xyz)
+            render_tab_state.rendered_count_number = render_output["visibility_filter"].sum().item()
+
+            # Handle different render modes
+            if render_tab_state.render_mode == "Alpha":
+                # For alpha mode, show opacity
+                render_colors = render_output["visibility_filter"].float().unsqueeze(0)
+
+            # Handle depth colormap (if single channel output)
+            if render_colors.shape[0] == 1:
+                # Simple grayscale to RGB conversion for depth
+                render_colors = render_colors.repeat(3, 1, 1)
+
+        finally:
+            # Restore original tensors
+            self._xyz = original_xyz
+            self._features_dc = original_features_dc
+            self._features_rest = original_features_rest
+            self._normal = original_normal
+            self._opacity = original_opacity
+            self.diags = original_diags
+            self.l_triangs = original_l_triangs
+
+        # Convert from [C, H, W] to [H, W, C] for viewer
+        render_colors = render_colors.permute(1, 2, 0)
+
+        return render_colors.cpu().numpy()
