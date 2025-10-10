@@ -54,7 +54,8 @@ class ModelParams(ParamGroup):
         self._white_background = False
         self.data_device = "cuda"
         self.eval = False
-        self.mode = "6dgs"  # Options: "6dgs", "ddgs", "3dgs", "ubs"
+        self.mode = "ndgs"  # Options: "6dgs", "ddgs", "3dgs", "ubs", "ndgs"
+        self.input_dim = 6  # Gaussian dimension: 6 for 6DGS/UBS, 7 for 7DGS (with time)
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):

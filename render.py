@@ -148,7 +148,7 @@ def render_sets(dataset: ModelParams, iteration: int, pipeline: PipelineParams, 
         mode = dataset.mode
         GaussianModel = get_gaussian_model(mode)
 
-        gaussians = GaussianModel(dataset.sh_degree)
+        gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim)
         scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
 
         # Set background color

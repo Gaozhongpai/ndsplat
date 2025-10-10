@@ -72,7 +72,7 @@ class GaussianModel:
         self.l_triangs_activation = lambda x: x
         self.l_triangs_inverse_activation = lambda x: x
 
-    def __init__(self, input_dim: int = 6, sh_degree: int = 3):
+    def __init__(self, sh_degree: int = 3, input_dim: int = 6):
         self.input_dim = input_dim
         self.active_sh_degree = 0
         self.max_sh_degree = sh_degree

@@ -26,7 +26,7 @@ def get_gaussian_model(mode: str):
     """Factory function to get the appropriate GaussianModel class based on mode.
 
     Args:
-        mode: One of "6dgs", "ddgs", "3dgs", "ubs"
+        mode: One of "6dgs", "ddgs", "3dgs", "ubs", "ndgs"
 
     Returns:
         GaussianModel class for the specified mode
@@ -39,8 +39,10 @@ def get_gaussian_model(mode: str):
         from scene.gaussian_model import GaussianModel
     elif mode == "ubs":  ## UBS (ICLR 2026)
         from scene.gaussian_model_ubs import GaussianModel
+    elif mode == "ndgs":  ## N-DGS (supports both 6DGS and 7DGS with time)
+        from scene.gaussian_model_ndgs import GaussianModel
     else:
-        raise ValueError(f"Unknown mode: {mode}. Must be one of: 6dgs, ddgs, 3dgs, ubs")
+        raise ValueError(f"Unknown mode: {mode}. Must be one of: 6dgs, ddgs, 3dgs, ubs, ndgs")
     return GaussianModel
 
 
@@ -112,8 +114,8 @@ class Scene:
         else:
             if "ddgs" in args.mode:
                 self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent, args.source_path)
-            elif args.mode == "ubs":
-                # UBS model only needs spatial_lr_scale (no sh_degree parameter)
+            elif args.mode == "ubs" or args.mode == "ndgs":
+                # UBS and N-DGS models only need spatial_lr_scale (no sh_degree parameter)
                 self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent)
             else:
                 self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent)

@@ -57,11 +57,11 @@ def render_wrapper(viewpoint_cam, gaussians, pipe, bg, mode, scaling_modifier=1.
         gaussians: GaussianModel instance
         pipe: Pipeline parameters
         bg: Background color
-        mode: Rendering mode ("6dgs", "ddgs", "3dgs", "ubs")
+        mode: Rendering mode ("6dgs", "ddgs", "3dgs", "ubs", "ndgs")
         scaling_modifier: Scaling modifier for rendering
     """
-    if mode == "ubs":
-        # UBS mode: use render_tcgs with CUDA-accelerated conditional slicing
+    if mode == "ubs" or mode == "ndgs":
+        # UBS/N-DGS mode: use render_tcgs with CUDA-accelerated conditional slicing
         gaussians.background = bg
         return gaussians.render_tcgs(viewpoint_cam, render_mode="RGB", use_tcgs=False, scaling_modifier=scaling_modifier)
     elif "6dgs" in mode:
@@ -84,11 +84,7 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
     GaussianModel = get_gaussian_model(mode)
 
     # Initialize model based on mode
-    if mode == "ubs":
-        # UBS model uses input_dim instead of sh_degree
-        gaussians = GaussianModel(input_dim=6)  # 6D Gaussian (or 7 for time)
-    else:
-        gaussians = GaussianModel(dataset.sh_degree)
+    gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim)
 
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
