@@ -15,6 +15,7 @@ from utils.general_utils import inverse_sigmoid, get_expon_lr_func, build_rotati
 from torch import nn
 import os
 import math
+import time
 from utils.system_utils import mkdir_p
 from plyfile import PlyData, PlyElement
 from simple_knn._C import distCUDA2
@@ -774,26 +775,39 @@ class GaussianModel:
         Returns:
             numpy array: Rendered image in [H, W, C] format for display
         """
+        # Start timing for FPS calculation
+        start_time = time.time()
+
         from scene.gaussian_viewer import GaussianRenderTabState
         assert isinstance(render_tab_state, GaussianRenderTabState)
 
-        def create_mask(opacity, opacity_threshold):
+        def create_mask(opacity, opacity_threshold, use_percentile=False, percentile=0.0):
             """
-            Create mask based on opacity threshold for 6DGS.
+            Create mask based on opacity threshold or percentile for 6DGS.
 
             Args:
                 opacity: [N, 1] Gaussian opacities (after sigmoid activation)
-                opacity_threshold: Minimum opacity to render
+                opacity_threshold: Minimum opacity to render (if not using percentile)
+                use_percentile: Use percentile filtering instead of absolute threshold
+                percentile: Show top (100-percentile)% most opaque Gaussians
 
             Returns:
                 mask: [N] Boolean mask for valid Gaussians
             """
-            # Filter by opacity (remove transparent Gaussians)
-            # Opacity is already activated (sigmoid applied in get_opacity)
+            # Squeeze opacity to 1D
             if opacity.dim() > 1:
-                opacity_mask = opacity.squeeze(-1) > opacity_threshold
+                opacity_1d = opacity.squeeze(-1)
             else:
-                opacity_mask = opacity > opacity_threshold
+                opacity_1d = opacity
+
+            if use_percentile and percentile > 0.0:
+                # Percentile filtering: show top (100-percentile)% most opaque
+                # E.g., percentile=90 means show top 10% (above 90th percentile)
+                threshold_value = torch.quantile(opacity_1d, percentile / 100.0)
+                opacity_mask = opacity_1d > threshold_value
+            else:
+                # Absolute threshold filtering
+                opacity_mask = opacity_1d > opacity_threshold
 
             return opacity_mask
 
@@ -851,6 +865,8 @@ class GaussianModel:
         mask = create_mask(
             opacity,
             opacity_threshold=render_tab_state.opacity_threshold,
+            use_percentile=render_tab_state.use_opacity_percentile,
+            percentile=render_tab_state.opacity_percentile,
         )
 
         # Debug: Print mask statistics (uncomment if you want to see opacity info)
@@ -932,5 +948,12 @@ class GaussianModel:
 
         # Convert from [C, H, W] to [H, W, C] for viewer
         render_colors = render_colors.permute(1, 2, 0)
+
+        # Calculate and update FPS
+        elapsed_time = time.time() - start_time
+        if elapsed_time > 0:
+            render_tab_state.fps = 1.0 / elapsed_time
+        else:
+            render_tab_state.fps = 0.0
 
         return render_colors.cpu().numpy()

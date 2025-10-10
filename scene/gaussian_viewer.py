@@ -8,12 +8,17 @@ class GaussianRenderTabState(RenderTabState):
     # non-controlable parameters
     total_count_number: int = 0
     rendered_count_number: int = 0
+    fps: float = 0.0  # Frames per second
+    _fps_smoothed: float = 0.0  # Internal smoothed FPS for display
+    _fps_alpha: float = 0.1  # EMA smoothing factor (lower = smoother)
 
     # controlable parameters
     near_plane: float = 1e-3
     far_plane: float = 1e3
     radius_clip: float = 0.0  # 2D radius clip for rendering
-    opacity_threshold: float = 0.005  # Minimum opacity for rendering (default very low to show most Gaussians)
+    opacity_threshold: float = 0.005  # Minimum opacity for rendering (only used when percentile is off)
+    opacity_percentile: float = 0.0  # Show top X% most opaque Gaussians (0 = all, 90 = top 10%)
+    use_opacity_percentile: bool = True  # Use percentile instead of absolute threshold (default: True)
     scale_threshold: float = 100.0  # Maximum scale for rendering
     x_threshold: float = float('inf')  # X-axis threshold for cutting plane
     backgrounds: Tuple[float, float, float] = (0.0, 0.0, 0.0)
@@ -36,7 +41,9 @@ class GaussianViewer(Viewer):
         self.input_dim = input_dim
         self.scene_bounds = scene_bounds
         super().__init__(server, render_fn, mode=mode)
+        # Configure the panel
         server.gui.set_panel_label("6D Gaussian Splatting Viewer")
+        server.gui.configure_theme(control_width="large")
         if share_url:
             server.request_share_url()
 
@@ -47,21 +54,63 @@ class GaussianViewer(Viewer):
 
     def _populate_rendering_tab(self):
         with self._rendering_folder:
+            # FPS display at the very top
+            self.fps_number = self.server.gui.add_number(
+                "FPS",
+                initial_value=self.render_tab_state.fps,
+                disabled=True,
+                hint="Frames per second (rendering performance)",
+            )
 
             with self.server.gui.add_folder("Gaussian Filtering"):
+                # Toggle between absolute threshold and percentile
+                self.use_opacity_percentile_checkbox = self.server.gui.add_checkbox(
+                    "Use Opacity Percentile",
+                    initial_value=self.render_tab_state.use_opacity_percentile,
+                    hint="Use percentile filtering instead of absolute threshold",
+                )
+
+                @self.use_opacity_percentile_checkbox.on_update
+                def _(_) -> None:
+                    self.render_tab_state.use_opacity_percentile = self.use_opacity_percentile_checkbox.value
+                    # Toggle slider visibility
+                    self.opacity_threshold_slider.disabled = self.use_opacity_percentile_checkbox.value
+                    self.opacity_percentile_slider.disabled = not self.use_opacity_percentile_checkbox.value
+                    self.rerender(_)
+
+                # Absolute threshold slider
                 self.opacity_threshold_slider = self.server.gui.add_slider(
                     "Opacity Threshold",
                     min=0.0,
-                    max=0.5,
+                    max=1.0,
                     step=0.001,
                     initial_value=self.render_tab_state.opacity_threshold,
-                    hint="Minimum opacity for rendering Gaussians (0.005 = show most, 0.1 = only opaque)",
+                    hint="Minimum opacity for rendering Gaussians (0.0 = show all, 0.5 = half transparent+, 1.0 = fully opaque only)",
+                    disabled=self.render_tab_state.use_opacity_percentile,
                 )
 
                 @self.opacity_threshold_slider.on_update
                 def _(_) -> None:
-                    self.render_tab_state.opacity_threshold = self.opacity_threshold_slider.value
-                    self.rerender(_)
+                    if not self.render_tab_state.use_opacity_percentile:
+                        self.render_tab_state.opacity_threshold = self.opacity_threshold_slider.value
+                        self.rerender(_)
+
+                # Percentile slider
+                self.opacity_percentile_slider = self.server.gui.add_slider(
+                    "Opacity Percentile",
+                    min=0.0,
+                    max=100.0,
+                    step=0.1,
+                    initial_value=self.render_tab_state.opacity_percentile,
+                    hint="Show top X% most opaque Gaussians (0 = all, 50 = top 50%, 90 = top 10%, 99 = top 1%)",
+                    disabled=not self.render_tab_state.use_opacity_percentile,
+                )
+
+                @self.opacity_percentile_slider.on_update
+                def _(_) -> None:
+                    if self.render_tab_state.use_opacity_percentile:
+                        self.render_tab_state.opacity_percentile = self.opacity_percentile_slider.value
+                        self.rerender(_)
 
                 self.scale_threshold_slider = self.server.gui.add_slider(
                     "Scale Threshold",
@@ -95,6 +144,12 @@ class GaussianViewer(Viewer):
                     slider_initial = 0.0
                     slider_step = 0.1
 
+                self.x_threshold_checkbox = self.server.gui.add_checkbox(
+                    "Enable X Threshold",
+                    initial_value=False,
+                    hint="Enable/disable cutting plane",
+                )
+
                 self.x_threshold_slider = self.server.gui.add_slider(
                     "X Threshold",
                     min=slider_min,
@@ -102,26 +157,26 @@ class GaussianViewer(Viewer):
                     step=slider_step,
                     initial_value=slider_initial,
                     hint=f"X-axis threshold for cutting plane (range: {slider_min:.1f} to {slider_max:.1f})",
-                )
-
-                @self.x_threshold_slider.on_update
-                def _(_) -> None:
-                    self.render_tab_state.x_threshold = self.x_threshold_slider.value
-                    self.rerender(_)
-
-                self.x_threshold_checkbox = self.server.gui.add_checkbox(
-                    "Enable X Threshold",
-                    initial_value=False,
-                    hint="Enable/disable cutting plane",
+                    disabled=True,  # Disabled by default until checkbox is enabled
                 )
 
                 @self.x_threshold_checkbox.on_update
                 def _(_) -> None:
+                    # Enable/disable the slider based on checkbox
+                    self.x_threshold_slider.disabled = not self.x_threshold_checkbox.value
+
                     if self.x_threshold_checkbox.value:
                         self.render_tab_state.x_threshold = self.x_threshold_slider.value
                     else:
                         self.render_tab_state.x_threshold = float('inf')
                     self.rerender(_)
+
+                @self.x_threshold_slider.on_update
+                def _(_) -> None:
+                    # Only update if checkbox is enabled
+                    if self.x_threshold_checkbox.value:
+                        self.render_tab_state.x_threshold = self.x_threshold_slider.value
+                        self.rerender(_)
             
             with self.server.gui.add_folder("Color Interpolation (Dual SH)"):
                 self.color_interpolation_slider = self.server.gui.add_slider(
@@ -209,11 +264,14 @@ class GaussianViewer(Viewer):
 
         self._rendering_tab_handles.update(
             {
+                "use_opacity_percentile_checkbox": self.use_opacity_percentile_checkbox,
                 "opacity_threshold_slider": self.opacity_threshold_slider,
+                "opacity_percentile_slider": self.opacity_percentile_slider,
                 "scale_threshold_slider": self.scale_threshold_slider,
                 "x_threshold_slider": self.x_threshold_slider,
                 "x_threshold_checkbox": self.x_threshold_checkbox,
                 "color_interpolation_slider": self.color_interpolation_slider,
+                "fps_number": self.fps_number,
                 "total_count_number": self.total_count_number,
                 "rendered_count_number": self.rendered_count_number,
                 "near_far_plane_vec2": self.near_far_plane_vec2,
@@ -226,6 +284,20 @@ class GaussianViewer(Viewer):
 
     def _after_render(self):
         # Update the GUI elements with current values
+        # Apply exponential moving average to smooth FPS display
+        if self.render_tab_state._fps_smoothed == 0.0:
+            # Initialize on first frame
+            self.render_tab_state._fps_smoothed = self.render_tab_state.fps
+        else:
+            # EMA: smoothed = alpha * new + (1 - alpha) * old
+            self.render_tab_state._fps_smoothed = (
+                self.render_tab_state._fps_alpha * self.render_tab_state.fps +
+                (1.0 - self.render_tab_state._fps_alpha) * self.render_tab_state._fps_smoothed
+            )
+
+        self._rendering_tab_handles[
+            "fps_number"
+        ].value = round(self.render_tab_state._fps_smoothed, 1)
         self._rendering_tab_handles[
             "total_count_number"
         ].value = self.render_tab_state.total_count_number
