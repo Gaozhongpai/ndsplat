@@ -57,18 +57,13 @@ def render_wrapper(viewpoint_cam, gaussians, pipe, bg, mode, scaling_modifier=1.
         gaussians: GaussianModel instance
         pipe: Pipeline parameters
         bg: Background color
-        mode: Rendering mode ("6dgs", "ddgs", "3dgs", "ubs", "ndgs")
+        mode: Rendering mode ("ddgs", "3dgs", "ubs", "ndgs")
         scaling_modifier: Scaling modifier for rendering
     """
     if mode == "ubs" or mode == "ndgs":
         # UBS/N-DGS mode: use render_tcgs with CUDA-accelerated conditional slicing
         gaussians.background = bg
         return gaussians.render_tcgs(viewpoint_cam, render_mode="RGB", use_tcgs=False, scaling_modifier=scaling_modifier)
-    elif "6dgs" in mode:
-        # 6DGS mode: use model's render_tcgs with conditional slicing
-        gaussians.background = bg
-        return gaussians.render_tcgs(viewpoint_cam, render_mode="RGB", use_tcgs=False, is_test=False,
-                                     scaling_modifier=scaling_modifier)
     elif "ddgs" in mode or "3dgs" in mode:
         # DDGS/3DGS mode: use model's render_tcgs method
         return gaussians.render_tcgs(viewpoint_cam, pipe, bg, scaling_modifier)
@@ -231,7 +226,7 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
 
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                    min_opacity = 0.01 if "6dgs" in mode else 0.005
+                    min_opacity = 0.01 if "ndgs" in mode else 0.005
                     gaussians.densify_and_prune(opt.densify_grad_threshold, min_opacity, scene.cameras_extent, size_threshold, iteration)
                 
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):

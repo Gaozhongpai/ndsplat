@@ -870,10 +870,10 @@ class GaussianModel:
         self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True)
         self.denom[update_filter] += 1
 
-    def render_tcgs(self, viewpoint_camera, render_mode="RGB", use_tcgs=False, is_test=False, scaling_modifier=1.0, tight_snugbox=True):
+    def render_tcgs(self, viewpoint_camera, render_mode="RGB", scaling_modifier=1.0, use_tcgs=False, tight_snugbox=False):
         """
-        Render using 6DGS conditional slicing with diff-gaussian-rasterization.
-        This encapsulates the 6DGS-specific rendering logic with dual SH support.
+        Render using NDGS conditional slicing with diff-gaussian-rasterization.
+        This encapsulates the NDGS-specific rendering logic with dual SH support.
 
         Args:
             viewpoint_camera: Camera viewpoint

@@ -36,20 +36,16 @@ def render_wrapper(view, gaussians, pipeline, background, mode, is_test=False):
         gaussians: GaussianModel instance
         pipeline: Pipeline parameters
         background: Background color
-        mode: Rendering mode ("6dgs", "ddgs", "3dgs", "ubs")
+        mode: Rendering mode ("ndgs", "ddgs", "3dgs", "ubs")
         is_test: Whether in test mode
 
     Returns:
         Dictionary containing render outputs
     """
-    if mode == "ubs":
+    if mode == "ubs" or mode == "ndgs":
         # UBS mode: use render_tcgs with CUDA-accelerated conditional slicing
         gaussians.background = background
-        return gaussians.render_tcgs(view, render_mode="RGB", use_tcgs=True)
-    elif "6dgs" in mode:
-        # 6DGS mode: use model's render_tcgs with conditional slicing
-        gaussians.background = background
-        return gaussians.render_tcgs(view, render_mode="RGB", is_test=is_test)
+        return gaussians.render_tcgs(view, render_mode="RGB", use_tcgs=is_test)
     elif "ddgs" in mode or "3dgs" in mode:
         # DDGS/3DGS mode: use model's render_tcgs method
         return gaussians.render_tcgs(view, pipeline, background, is_test=is_test)

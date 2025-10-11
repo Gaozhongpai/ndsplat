@@ -38,6 +38,8 @@ def get_gaussian_model(mode: str):
     elif mode == "ubs":  ## UBS (ICLR 2026)
         from scene.gaussian_model_ubs import GaussianModel
     elif mode == "ndgs":  ## N-DGS (supports both 6DGS and 7DGS with time, with merged parametrization)
+        from scene.gaussian_model_ndgs import GaussianModel
+    elif mode == "ndgs-2sh":  ## N-DGS (supports both 6DGS and 7DGS with time, with merged parametrization)
         from scene.gaussian_model_ndgs_2sh import GaussianModel
     else:
         raise ValueError(f"Unknown mode: {mode}. Must be one of: ndgs, ddgs, 3dgs, ubs, ndgs_original")

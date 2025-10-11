@@ -10,7 +10,7 @@ from scene.gaussian_viewer import GaussianViewer
 
 @torch.no_grad()
 def viewing(model_params, viewer_params, ply_path, input_dim=6, auto_camera=True, share_url=False):
-    """Launch interactive viewer for trained 6DGS models.
+    """Launch interactive viewer for trained NDGS models.
 
     Args:
         model_params: ModelParams object containing model settings
@@ -96,18 +96,12 @@ def viewing(model_params, viewer_params, ply_path, input_dim=6, auto_camera=True
 
 
 if __name__ == "__main__":
-    parser = ArgumentParser(description="6DGS Viewing script")
+    parser = ArgumentParser(description="NDGS Viewing script")
     model_params = ModelParams(parser)
     viewer_params = ViewerParams(parser)
 
     # Add view-specific arguments (avoid duplicates with ModelParams)
     parser.add_argument("--ply", type=str, required=True, help="Path to the .ply file")
-    parser.add_argument(
-        "--input_dim",
-        type=int,
-        default=6,
-        help="Input dimension for UBS model (default: 6)",
-    )
     parser.add_argument(
         "--share_url",
         action="store_true",
