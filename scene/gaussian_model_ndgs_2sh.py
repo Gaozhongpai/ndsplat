@@ -644,7 +644,14 @@ class GaussianModel:
         v_cond = (v_11 - torch.bmm(self.v_regr, v_21))
         self.cov3D_precomp = strip_lower_diag(v_cond)
         self.shs = self.get_features
-        self.direction = self.get_normal / self.get_normal.norm(dim=1, keepdim=True)
+
+        # Precompute direction for test-time slicing
+        # For 7DGS, direction includes both normal and time
+        if self.input_dim == 7 and hasattr(self, '_mean_time'):
+            normal_normalized = self.get_normal / self.get_normal.norm(dim=1, keepdim=True)
+            self.direction = torch.cat([normal_normalized, self._mean_time], dim=-1)  # [N, 4]
+        else:
+            self.direction = self.get_normal / self.get_normal.norm(dim=1, keepdim=True)  # [N, 3]
 
         self.active_sh_degree = self.max_sh_degree
 
@@ -918,7 +925,7 @@ class GaussianModel:
         else:
             lambda_opc = 0.35
 
-        is_test = use_tcgs  # Use_tcgs indicates test mode here
+        is_test = False  # Use_tcgs indicates test mode here
         if is_test:
             # Test mode: use precomputed values
             m_cond, pdf_cond = self.slice_gaussian_test(cond_params, lambda_opc=lambda_opc)

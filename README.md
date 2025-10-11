@@ -8,12 +8,14 @@ This repository implements **6D Gaussian Splatting (6DGS)**, extending tradition
 
 ### Key Features
 
-- **6D Gaussian Representation**: Extends 3D Gaussians with additional dimensions for view-dependent rendering
+- **6D/7D Gaussian Representation**: Extends 3D Gaussians with view-direction (6D) or view-direction + time (7D)
 - **Conditional Slicing**: CUDA-accelerated conditional Gaussian slicing based on viewing direction
+- **Learnable Lambda Opacity**: Per-Gaussian learnable opacity scaling for fine-grained view control
+- **Dual Parametrization**: Switch between NDGS-style and UBS-style covariance parametrization
 - **TCGS Rasterization**: High-performance rasterization with support for cutting planes
-- **Live Training Viewer**: Real-time web-based viewer powered by Viser for monitoring training progress
-- **Multiple Model Support**: Configurable architecture supporting 6DGS, DDGS, 3DGS, and UBS modes
-- **Cutting Plane Functionality**: Support for spatial filtering via x_threshold parameter
+- **Live Training Viewer**: Real-time web-based viewer with time animation and dual SH blending
+- **Dual SH Support**: Multi-view color consistency with interpolatable SH features
+- **Multiple Model Modes**: Configurable architecture supporting NDGS, DDGS, 3DGS, and UBS modes
 
 ## Installation
 
@@ -72,6 +74,31 @@ The repository is organized into three main categories:
 
 See [ORGANIZATION.md](ORGANIZATION.md) for complete documentation.
 
+## What's New (v3.0)
+
+### Recent Major Updates
+
+**✨ Unified Model Architecture:**
+- Consolidated and cleaned codebase with two main models:
+  - `gaussian_model_ndgs.py` - Single SH for standard rendering
+  - `gaussian_model_ndgs_2sh.py` - Dual SH for multi-view consistency
+- Removed legacy experimental code and unused features
+
+**🎯 New Features:**
+- **Learnable Lambda Opacity** (`--learnable_lambda_opc`): Per-Gaussian learnable opacity scaling
+- **Dual Parametrization** (`--use_rot_scale_l_triangle`): Switch between NDGS and UBS covariance modes
+- **7DGS Time Support** (`--input_dim 7`): Full temporal dimension with viewer animation
+- **Dual SH Blending**: Real-time color interpolation in viewer
+
+**🔧 Unified Naming:**
+- New parameter names: `_scale`, `_l_triangle` (replaces old `diags`, `l_triangs`)
+- Backward compatible: Old models load automatically
+- Consistent API across all model variants
+
+**📖 Documentation:**
+- See [CHANGELOG.md](CHANGELOG.md) for detailed version history
+- See [ORGANIZATION.md](ORGANIZATION.md) for project structure
+
 ## Usage
 
 ### Training
@@ -97,8 +124,11 @@ The training script will automatically launch a live viewer on port 8080 (unless
 - `--white_background` / `-w`: Use white background instead of black
 
 #### Model Parameters
-- `--mode`: Model architecture (`6dgs`, `ddgs`, `3dgs`, `ubs`) - default: `6dgs`
+- `--mode`: Model architecture (`ndgs`, `ddgs`, `3dgs`, `ubs`) - default: `ndgs`
+- `--input_dim`: Gaussian dimensionality (6 for 6DGS, 7 for 7DGS with time) - default: `7`
 - `--sh_degree`: Spherical harmonics degree (max 3) - default: `3`
+- `--learnable_lambda_opc`: Make lambda_opc learnable per Gaussian - default: `False`
+- `--use_rot_scale_l_triangle`: Use UBS-style parametrization instead of NDGS-style - default: `False`
 
 #### Training Parameters
 - `--iterations`: Total training iterations - default: `30000`
@@ -106,8 +136,9 @@ The training script will automatically launch a live viewer on port 8080 (unless
 - `--position_lr_final`: Final position learning rate - default: `0.0000016`
 - `--feature_lr`: Feature learning rate - default: `0.0025`
 - `--opacity_lr`: Opacity learning rate - default: `0.05`
-- `--diags_lr`: Diagonal covariance learning rate - default: `0.005`
-- `--l_triangs_lr`: Lower triangular covariance learning rate - default: `0.001`
+- `--scale_lr`: Scale parameters learning rate - default: `0.005` (replaces `--diags_lr`)
+- `--l_triangle_lr`: L-triangle parameters learning rate - default: `0.001` (replaces `--l_triangs_lr`)
+  - Note: Old names (`--diags_lr`, `--l_triangs_lr`) still work for backward compatibility
 
 #### Densification Parameters
 - `--densify_from_iter`: Start densification iteration - default: `500`
@@ -182,28 +213,41 @@ The training process includes a real-time web viewer powered by [Viser](https://
 
 - **Monitor Training**: Watch the scene reconstruction in real-time
 - **Interactive Camera Control**: Navigate the scene with mouse/keyboard
-- **Gaussian Filtering**: Adjust opacity and scale thresholds to filter visible Gaussians
+- **Time Animation (7DGS)**: Auto-loop and manual time control for temporal models
+- **Dual SH Blending**: Smooth interpolation between two SH color representations
+- **Gaussian Filtering**: Percentile-based or absolute opacity thresholding
 - **Cutting Plane**: Enable spatial filtering with x_threshold control
-- **Render Modes**: Switch between RGB, Alpha, Depth, and other visualization modes
-- **Pause/Resume**: Control training flow interactively
+- **Render Modes**: Switch between RGB, Alpha, Depth, Normal, and other visualization modes
+- **Performance Monitoring**: Real-time FPS display with smoothing
 
 The viewer automatically starts when training begins. Access it at `http://localhost:8080` (or custom port specified with `--port`).
 
 ### Viewer Controls
 
+**Time Animation (7DGS only):**
+- **Auto Loop**: Automatically cycle through time dimension
+- **Loop Duration**: Adjust animation speed (0.5 - 10.0 seconds)
+- **Time Slider**: Manual time control (0.0 - 1.0)
+
+**Color Interpolation (Dual SH models):**
+- **Color Blend**: Smooth interpolation between SH_0 and SH_1 (0.0 - 1.0)
+
 **Gaussian Filtering:**
-- **Opacity Threshold**: Filter out low-opacity Gaussians (0.0 - 1.0)
-- **Scale Threshold**: Filter out large-scale Gaussians (0.1 - 200.0)
+- **Use Opacity Percentile**: Toggle between percentile and absolute threshold modes
+- **Opacity Percentile**: Show top X% most opaque Gaussians (0 - 100)
+- **Opacity Threshold**: Absolute minimum opacity (0.0 - 1.0)
+- **Scale Threshold**: Maximum Gaussian scale (0.1 - 200.0)
 
 **Cutting Plane:**
-- **X Threshold**: Set cutting plane position along X-axis (-100.0 - 100.0)
 - **Enable X Threshold**: Toggle cutting plane on/off
+- **X Threshold**: Set cutting plane position along X-axis (scene-dependent range)
 
-**Render Mode:**
-- RGB, Alpha, Diffuse, Specular, Depth, Normal
-- Total/Rendered Gaussian counts
-- Near/Far plane settings
-- Background color
+**Render Settings:**
+- **Render Mode**: RGB, Alpha, Depth, Normal, Diffuse, Specular
+- **Tight Snugbox**: Enable/disable TCGS optimization
+- **Background Color**: RGB color picker
+- **Near/Far Planes**: Depth clipping range
+- **FPS Display**: Real-time performance monitoring
 
 ## Dataset Format
 

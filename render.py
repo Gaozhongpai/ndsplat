@@ -42,7 +42,7 @@ def render_wrapper(view, gaussians, pipeline, background, mode, is_test=False):
     Returns:
         Dictionary containing render outputs
     """
-    if mode == "ubs" or mode == "ndgs":
+    if "ubs" in mode or "ndgs" in mode:
         # UBS mode: use render_tcgs with CUDA-accelerated conditional slicing
         gaussians.background = background
         return gaussians.render_tcgs(view, render_mode="RGB", use_tcgs=is_test)

@@ -60,7 +60,7 @@ def render_wrapper(viewpoint_cam, gaussians, pipe, bg, mode, scaling_modifier=1.
         mode: Rendering mode ("ddgs", "3dgs", "ubs", "ndgs")
         scaling_modifier: Scaling modifier for rendering
     """
-    if mode == "ubs" or mode == "ndgs":
+    if "ubs" in mode or "ndgs" in mode:
         # UBS/N-DGS mode: use render_tcgs with CUDA-accelerated conditional slicing
         gaussians.background = bg
         return gaussians.render_tcgs(viewpoint_cam, render_mode="RGB", use_tcgs=False, scaling_modifier=scaling_modifier)
@@ -80,7 +80,7 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
 
     # Initialize model based on mode
     # For NDGS mode, pass the use_rot_scale_l_triangle flag
-    if mode == "ndgs":
+    if "ndgs" in mode:
         gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim,
                                    use_rot_scale_l_triangle=dataset.use_rot_scale_l_triangle)
     else:
@@ -213,7 +213,7 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 print("\nNumber Gaussian: {}".format(gaussians.get_xyz.shape[0]))
-                if mode == "ddgs" or mode == "ddndgs":
+                if "ddgs" in mode:
                     print("\nNumber Principle: {}".format(gaussians._is_principle.sum()))
                     print("\nNumber Non-Principle: {}".format((~gaussians._is_principle).sum()))
                 scene.save(iteration)
