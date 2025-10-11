@@ -39,10 +39,6 @@ from tcgs_speedy_rasterizer import (
     GaussianRasterizer as TCGSRasterizer,
 )
 
-# from utils.ndgs_utils import project_vectors_gaussians
-# from evaluators.lsh_evaluator import EvaluatorLSH
-# import taichi as ti
-
 
 def randomly_sample_point_cloud(point_cloud, num_samples=15000):
     # Check if the point cloud has fewer points than the number of samples requested
@@ -267,12 +263,6 @@ class GaussianModel:
         if self.input_dim == 7 and hasattr(self, '_mean_time'):
             return torch.cat([self._xyz, self._normal, self._mean_time], dim=-1)
         return torch.cat([self._xyz, self._normal], dim=-1)
-    
-    # def cull(self, q, total_m, total_v):
-    #     q_projections, _ = project_vectors_gaussians(vecs=q, projection_vecs=self.projection_vecs, n_hashes=self.n_projection_vecs)
-    #     m_projections, m_projections_range = project_vectors_gaussians(vecs=total_m, projection_vecs=self.projection_vecs, cov=total_v, n_hashes=self.n_projection_vecs)
-    #     mask = EvaluatorLSH.cull(q_projections.contiguous(), m_projections.contiguous(), m_projections_range.contiguous())
-    #     return mask
 
     @property
     def get_rotation(self):
@@ -318,11 +308,7 @@ class GaussianModel:
         features_dc = self._features_dc
         features_rest = self._features_rest
         return torch.cat((features_dc, features_rest), dim=1)
-    
-    # def get_color(self, cond_params):
-    #     color = self.color_net(torch.cat([self._features_dc, cond_params, cond_params - self.get_normal], dim=-1))
-    #     return color
-        
+
     @property
     def get_opacity(self):
         return self.opacity_activation(self._opacity)
@@ -365,12 +351,6 @@ class GaussianModel:
         # Compute conditional covariance
         v_cond = v_11 - torch.bmm(v_12, torch.linalg.inv(v_22).bmm(v_21))
 
-        ## Perform eigendecomposition
-        # eigenvalues, eigenvectors = torch.linalg.eigh(v_cond)
-        ## Extract scale and rotation
-        # scale = torch.sqrt(torch.abs(eigenvalues))
-        # rotation = eigenvectors
-        
         U, S, _ = torch.linalg.svd(v_cond)
         scale = torch.sqrt(S)
         rotation = U
@@ -387,16 +367,6 @@ class GaussianModel:
     def create_from_pcd(self, pcd : BasicPointCloud, spatial_lr_scale : float):
         self.spatial_lr_scale = spatial_lr_scale
         fused_point_cloud = torch.tensor(np.asarray(pcd.points)).float().cuda()
-        from scene.dataset_readers import fetchPly
-
-        # pcd_sparse = fetchPly(os.path.join(path, "points3d_sparse.ply"))
-        # scatter_point_clcoud = torch.tensor(np.asarray(pcd_sparse.points)).float().cuda()
-        # scatter_point_clcoud = scatter_point_clcoud + torch.randn_like(scatter_point_clcoud)*10
-        # fused_point_cloud = torch.cat([fused_point_cloud, scatter_point_clcoud], dim=0)
-        # fused_color = RGB2SH(torch.tensor(
-        #                         np.concatenate([np.asarray(pcd.colors), np.asarray(pcd_sparse.colors)])
-        #                     ).float().cuda())
-        
         fused_color = RGB2SH(torch.tensor(np.asarray(pcd.colors)).float().cuda())
         
         features = torch.zeros((fused_color.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda()
@@ -415,10 +385,6 @@ class GaussianModel:
             self._mean_time = nn.Parameter(mean_time.requires_grad_(True))
 
         print("Number of points at initialisation : ", fused_point_cloud.shape[0])
-
-        # dist2 = torch.clamp_min(distCUDA2(torch.from_numpy(np.asarray(pcd.points)).float().cuda()), 0.0000001)
-        # scales = torch.sqrt(dist2)[...,None].repeat(1, 3)
-        # self.diags = torch.nn.Parameter(self.diags_act_inv(torch.cat([scales, scales], dim=-1)))
 
         opacities = inverse_sigmoid(0.1 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda"))
         lambda_opcs = inverse_sigmoid(0.35 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda"))
@@ -555,9 +521,6 @@ class GaussianModel:
         el = PlyElement.describe(elements, 'vertex')
         PlyData([el]).write(path)
 
-        # # Save color_net
-        # torch.save(self.color_net.state_dict(), path.replace(".ply", "_color_net.pth"))
-        
     def reset_opacity(self):
         opacities_new = inverse_sigmoid(torch.min(self.get_opacity, torch.ones_like(self.get_opacity)*0.01))
         optimizable_tensors = self.replace_tensor_to_optimizer(opacities_new, "opacity")
@@ -641,12 +604,11 @@ class GaussianModel:
         # Load time parameter for 7DGS
         if self.input_dim == 7 and mean_time is not None:
             self._mean_time = nn.Parameter(torch.tensor(mean_time, dtype=torch.float, device="cuda").requires_grad_(True))
-    
-        ### test ####
+
+        ### Precompute test-time values ###
         c_dim = 3
-        # Use CUDA-accelerated covariance
         v = self.get_pc_v  # [N, D, D] via CUDA
-        
+
         v_11 = v[:, :c_dim, :c_dim]
         v_12 = v[:, :c_dim, c_dim:]
         v_21 = v[:, c_dim:, :c_dim]
@@ -654,17 +616,10 @@ class GaussianModel:
 
         self.v_22_inv = torch.inverse(v_22)
         self.v_regr = torch.bmm(v_12, self.v_22_inv)
-        v_cond = (v_11 - torch.bmm(self.v_regr, v_21)) # * scale.unsqueeze(-1)
+        v_cond = (v_11 - torch.bmm(self.v_regr, v_21))
         self.cov3D_precomp = strip_lower_diag(v_cond)
-        self.shs = self.get_features 
-        self.direction = self.get_normal/self.get_normal.norm(dim=1, keepdim=True)
-    
-        # # Load color_net
-        # color_net_path = path.replace(".ply", "_color_net.pth")
-        # if os.path.exists(color_net_path):
-        #     self.color_net.load_state_dict(torch.load(color_net_path))
-        # else:
-        #     print(f"Warning: Color net state dict not found at {color_net_path}")
+        self.shs = self.get_features
+        self.direction = self.get_normal / self.get_normal.norm(dim=1, keepdim=True)
 
         self.active_sh_degree = self.max_sh_degree
 
