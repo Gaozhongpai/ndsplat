@@ -867,6 +867,78 @@ class GaussianModel:
         scale = self.get_scale
         return rotation, scale
 
+    @property
+    def get_scaling_cond(self):
+        """
+        Alternative scaling method using conditional covariance from 6D Gaussian.
+        Computes scale by slicing the 6D covariance and computing conditional covariance.
+        Uses beta parameters to adjust for uncertainty/bandwidth (UBS-specific).
+        """
+        v = self.get_covariance
+
+        # Slice the 6D covariance matrix
+        v_11 = v[:, :3, :3]
+        v_12 = v[:, :3, 3:]
+        v_21 = v[:, 3:, :3]
+        v_22 = v[:, :3, :3]
+
+        # Get beta parameters for uncertainty adjustment
+        # beta shape: [N, input_dim-2] = [N, C] where C = D-3 (conditional dims)
+        # For 6D: [N, 4] (1 spatial + 3 view), For 7D: [N, 5] (1 spatial + 3 view + 1 time)
+        beta = self.get_beta[:, 1:]  # [N, C] - exclude first beta (used elsewhere)
+        beta_adj = torch.clamp_max(beta / 4.0, 1.0)  # [N, C] - clamp like gsplat
+        v_22_inv = torch.linalg.inv(v_22)
+
+        # Compute regression matrix with per-dimension beta adjustment (like gsplat CUDA impl)
+        v_regr = torch.bmm(v_12, v_22_inv)  # [N, 3, C]
+        v_regr_beta = v_regr * beta_adj.unsqueeze(1)  # [N, 3, C] * [N, 1, C] -> [N, 3, C]
+
+        # Compute beta-adjusted conditional covariance
+        v_change = torch.bmm(v_regr_beta, v_21)  # [N, 3, 3]
+        v_cond = v_11 - v_change
+
+        U, S, _ = torch.linalg.svd(v_cond)
+        scale = torch.sqrt(S)
+        return scale
+
+    @property
+    def get_rotation_scale_cond(self):
+        """
+        Alternative rotation/scale method using conditional covariance from 6D Gaussian.
+        Computes both rotation and scale from the conditional covariance.
+        Uses beta parameters to adjust for uncertainty/bandwidth (UBS-specific).
+        """
+        v = self.get_covariance
+
+        # Slice the 6D covariance matrix
+        v_11 = v[:, :3, :3]
+        v_12 = v[:, :3, 3:]
+        v_21 = v[:, 3:, :3]
+        v_22 = v[:, 3:, 3:]
+
+        # Get beta parameters for uncertainty adjustment
+        # beta shape: [N, input_dim-2] = [N, C] where C = D-3 (conditional dims)
+        beta = self.get_beta[:, 1:]  # [N, C] - exclude first beta (used elsewhere)
+        beta_adj = torch.clamp_max(beta / 4.0, 1.0)  # [N, C] - clamp like gsplat
+        v_22_inv = torch.linalg.inv(v_22)
+
+        # Compute regression matrix with per-dimension beta adjustment (like gsplat CUDA impl)
+        v_regr = torch.bmm(v_12, v_22_inv)  # [N, 3, C]
+        v_regr_beta = v_regr * beta_adj.unsqueeze(1)  # [N, 3, C] * [N, 1, C] -> [N, 3, C]
+
+        # Compute beta-adjusted conditional covariance
+        v_change = torch.bmm(v_regr_beta, v_21)  # [N, 3, 3]
+        v_cond = v_11 - v_change
+
+        U, S, _ = torch.linalg.svd(v_cond)
+        scale = torch.sqrt(S)
+        rotation = U
+
+        # Ensure right-handed coordinate system
+        det = torch.linalg.det(rotation)
+        rotation[:, :, -1] *= det.sign().unsqueeze(-1)
+        return rotation, scale
+
     def reset_opacity(self):
         """Reset opacity for all Gaussians (called during training)."""
         opacities_new = inverse_sigmoid(torch.min(self.get_opacity, torch.ones_like(self.get_opacity)*0.01))
@@ -878,8 +950,12 @@ class GaussianModel:
         # Extract points that satisfy the gradient condition
         selected_pts_mask = torch.where(torch.norm(grads, dim=-1) >= grad_threshold, True, False)
 
-        selected_pts_mask = torch.logical_and(selected_pts_mask,
-                                              torch.max(self.get_scaling()[:, :3], dim=1).values <= self.percent_dense*scene_extent)
+        # Use conditional covariance-based scaling for determining small Gaussians
+        scale = self.get_scaling_cond
+        selected_pts_mask = torch.logical_and(
+            selected_pts_mask,
+            torch.max(scale[:, :3], dim=1).values <= self.percent_dense * scene_extent
+        )
 
         new_xyz = self._xyz[selected_pts_mask]
         new_mean = self._mean[selected_pts_mask]
@@ -892,11 +968,19 @@ class GaussianModel:
 
         self.densification_postfix(new_xyz, new_mean, new_features_dc, new_features_rest, new_opacity, new_beta, new_scale, new_l_triangle)
 
-    def densify_and_split(self, grads, grad_threshold, scene_extent, N=2):
+    def densify_and_split(self, grads, grad_threshold, scene_extent, rotation, scale, N=2):
         """Split large Gaussians with high gradients.
 
         Note: grads is from BEFORE densify_and_clone, so it only covers the original points.
         We only consider the original points for splitting (not the newly cloned ones).
+
+        Args:
+            grads: Gradient accumulation for original points
+            grad_threshold: Gradient threshold for splitting
+            scene_extent: Scene extent for percent_dense calculation
+            rotation: Rotation matrices from conditional covariance [N, 3, 3]
+            scale: Scale vectors from conditional covariance [N, 3]
+            N: Number of splits per Gaussian (default 2)
         """
         n_original_points = grads.shape[0]
         n_current_points = self.get_xyz.shape[0]
@@ -909,28 +993,23 @@ class GaussianModel:
         selected_pts_mask = torch.zeros((n_current_points), device="cuda", dtype=bool)
         selected_pts_mask[:n_original_points] = grads_squeezed >= grad_threshold
 
-        # Also check scale threshold (large Gaussians)
-        scale = self.get_scale
+        # Also check scale threshold (large Gaussians) - use passed scale from conditional covariance
         selected_pts_mask = torch.logical_and(selected_pts_mask,
                                               torch.max(scale[:, :3], dim=1).values > self.percent_dense*scene_extent)
 
-        # Sample new positions in spatial space (3D) and ND mean space separately
-        stds_spatial = scale[selected_pts_mask][:, :3].repeat(N, 1)  # Spatial scales (xyz)
-        stds_mean = scale[selected_pts_mask][:, 3:].repeat(N, 1) if self.input_dim > 3 else None  # Mean scales
+        # Sample new positions in spatial space (3D) using conditional covariance scale/rotation
+        stds_spatial = scale[selected_pts_mask][:, :3].repeat(N, 1)  # Spatial scales (xyz) from conditional cov
 
         # Sample spatial offsets
         spatial_samples = torch.normal(mean=0, std=stds_spatial)
-        rots = self.get_rotation[selected_pts_mask].repeat(N, 1, 1)
+        # Use rotation from conditional covariance (passed as parameter)
+        rots = rotation[selected_pts_mask].repeat(N, 1, 1)
 
         # Transform spatial samples to world space
         new_xyz = torch.bmm(rots, spatial_samples.unsqueeze(-1)).squeeze(-1) + self._xyz[selected_pts_mask].repeat(N, 1)
 
-        # Sample mean offsets (no rotation, just noise)
-        if self.input_dim > 3:
-            mean_samples = torch.normal(mean=0, std=stds_mean)
-            new_mean_rest = mean_samples + self._mean[selected_pts_mask].repeat(N, 1)
-        else:
-            new_mean_rest = self._mean[selected_pts_mask].repeat(N, 1)
+        # Mean parameters: just copy without modification (they're view/appearance parameters)
+        new_mean = self._mean[selected_pts_mask].repeat(N, 1)
 
         new_features_dc = self._features_dc[selected_pts_mask].repeat(N, 1, 1)
         new_features_rest = self._features_rest[selected_pts_mask].repeat(N, 1, 1)
@@ -941,7 +1020,7 @@ class GaussianModel:
         new_scale = self.scale_inverse_activation(self.scale_activation(new_scale) * 0.8).repeat(N, 1)
         new_l_triangle = self._l_triangle[selected_pts_mask].repeat(N, 1)
 
-        self.densification_postfix(new_xyz, new_mean_rest, new_features_dc, new_features_rest, new_opacity, new_beta, new_scale, new_l_triangle)
+        self.densification_postfix(new_xyz, new_mean, new_features_dc, new_features_rest, new_opacity, new_beta, new_scale, new_l_triangle)
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
@@ -951,16 +1030,17 @@ class GaussianModel:
         grads = self.xyz_gradient_accum / self.denom
         grads[grads.isnan()] = 0.0
 
-        # Clone and split (methods access scale/rotation internally)
+        # Clone and split (compute scale/rotation using conditional covariance for current state)
         self.densify_and_clone(grads, max_grad, extent)
-        self.densify_and_split(grads, max_grad, extent)
+        rotation, scale = self.get_rotation_scale_cond
+        self.densify_and_split(grads, max_grad, extent, rotation, scale)
 
         # Prune low opacity and large Gaussians
         prune_mask = (self.get_opacity < min_opacity).squeeze()
 
         if max_screen_size:
             big_points_vs = self.max_radii2D > max_screen_size
-            big_points_ws = self.get_scaling()[:, :3].max(dim=1).values > 0.1 * extent
+            big_points_ws = self.get_scaling_cond[:, :3].max(dim=1).values > 0.1 * extent
             prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
         self.prune_points(prune_mask)
 
@@ -1312,7 +1392,11 @@ class GaussianModel:
                 ...
             )
         """
-        assert isinstance(render_tab_state, BetaRenderTabState)
+        # Start timing for FPS calculation
+        start_time = time.time()
+
+        if BetaRenderTabState is not None:
+            assert isinstance(render_tab_state, BetaRenderTabState)
 
         def quantile_mask(beta, b_xyz=(0, 100), b_view=(0, 100), b_time=(0, 100)):
             """
@@ -1395,9 +1479,9 @@ class GaussianModel:
             gt_alpha_mask=None,
             image_name="viewer",
             uid=0,
+            x_threshold=render_tab_state.x_threshold,
             data_device="cuda",
-            timestamp=render_tab_state.timestamp if self.input_dim == 7 else 0.0,
-            resolution=(W, H)
+            timestamp=render_tab_state.timestamp if self.input_dim == 7 else 0.0
         )
 
         # Apply beta mask
@@ -1439,5 +1523,12 @@ class GaussianModel:
 
         # Convert from [C, H, W] to [H, W, C] for viewer
         render_colors = render_colors.permute(1, 2, 0)
+
+        # Calculate and update FPS
+        elapsed_time = time.time() - start_time
+        if elapsed_time > 0:
+            render_tab_state.fps = 1.0 / elapsed_time
+        else:
+            render_tab_state.fps = 0.0
 
         return render_colors.cpu().numpy()

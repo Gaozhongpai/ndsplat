@@ -6,6 +6,7 @@ from argparse import ArgumentParser
 from arguments import ModelParams, ViewerParams
 from scene import get_gaussian_model
 from scene.gaussian_viewer import GaussianViewer
+from scene.beta_viewer import BetaViewer
 
 
 @torch.no_grad()
@@ -73,17 +74,29 @@ def viewing(model_params, viewer_params, ply_path, input_dim=6, auto_camera=True
             client.camera.look_at = tuple(scene_center)
             client.camera.up_direction = (0.0, 1.0, 0.0)
 
-    # Create viewer
-    viewer = GaussianViewer(
-        server=server,
-        render_fn=lambda camera_state, render_tab_state: gaussian_model.view_tcgs(
-            camera_state, render_tab_state
-        ),
-        input_dim=6,  # 6D Gaussians
-        mode="rendering",
-        share_url=share_url,
-        scene_bounds=scene_bounds,
-    )
+    # Create viewer - Use BetaViewer for UBS mode, GaussianViewer for others
+    if "ubs" in model_params.mode:
+        viewer = BetaViewer(
+            server=server,
+            render_fn=lambda camera_state, render_tab_state: gaussian_model.view_tcgs(
+                camera_state, render_tab_state
+            ),
+            input_dim=input_dim,
+            mode="rendering",
+            share_url=share_url,
+            scene_bounds=scene_bounds,
+        )
+    else:
+        viewer = GaussianViewer(
+            server=server,
+            render_fn=lambda camera_state, render_tab_state: gaussian_model.view_tcgs(
+                camera_state, render_tab_state
+            ),
+            input_dim=input_dim,
+            mode="rendering",
+            share_url=share_url,
+            scene_bounds=scene_bounds,
+        )
 
     print(f"Viewer running on http://localhost:{viewer_params.port}")
     print("Ctrl+C to exit.")
