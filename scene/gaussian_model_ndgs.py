@@ -94,12 +94,10 @@ class GaussianModel:
         """
         m_1 = self.get_xyz  # [N, 3]
 
-        # For 7DGS, m_2 includes both normal (3D) and time (1D)
-        if self.input_dim == 7 and hasattr(self, '_mean_time'):
-            normal_normalized = self.get_normal / self.get_normal.norm(dim=1, keepdim=True)  # [N, 3]
-            m_2 = torch.cat([normal_normalized, self._mean_time], dim=-1)  # [N, 4]
-        else:
-            m_2 = self.get_normal / self.get_normal.norm(dim=1, keepdim=True)  # [N, 3]
+        # Normalize _mean for directional consistency (only the first 3 dimensions)
+        mean_normalized = self._mean.clone()
+        mean_normalized[:, :3] = self._mean[:, :3] / self._mean[:, :3].norm(dim=1, keepdim=True)
+        m_2 = mean_normalized  # [N, 3] for 6DGS or [N, 4] for 7DGS
 
         # Build covariance matrix from diagonal and lower triangular elements
         v = self.get_pc_v
@@ -167,7 +165,7 @@ class GaussianModel:
         self._xyz = torch.empty(0)
         self._features_dc = torch.empty(0)  # Single SH
         self._features_rest = torch.empty(0)  # Single SH
-        self._normal = torch.empty(0)
+        self._mean = torch.empty(0)  # Unified mean: [N, 3] for 6DGS, [N, 4] for 7DGS
         self._opacity = torch.empty(0)
         self._lambda_opc = torch.empty(0)  # Learnable opacity scaling parameter
         self.max_radii2D = torch.empty(0)
@@ -222,7 +220,7 @@ class GaussianModel:
             self._xyz,
             self._features_dc,
             self._features_rest,
-            self._normal,
+            self._mean,
             self._opacity,
             self.max_radii2D,
             self.xyz_gradient_accum,
@@ -230,18 +228,18 @@ class GaussianModel:
             self.optimizer.state_dict(),
             self.spatial_lr_scale,
         )
-    
+
     def restore(self, model_args, training_args):
-        (self.active_sh_degree, 
-        self._xyz, 
-        self._features_dc, 
+        (self.active_sh_degree,
+        self._xyz,
+        self._features_dc,
         self._features_rest,
-        self._normal, 
+        self._mean,
         self._opacity,
-        self.max_radii2D, 
-        xyz_gradient_accum, 
+        self.max_radii2D,
+        xyz_gradient_accum,
         denom,
-        opt_dict, 
+        opt_dict,
         self.spatial_lr_scale) = model_args
         self.training_setup(training_args)
         self.xyz_gradient_accum = xyz_gradient_accum
@@ -251,18 +249,11 @@ class GaussianModel:
     @property
     def get_xyz(self):
         return self._xyz
-    
+
     @property
-    def get_normal(self):
-        return self._normal
-    
-    @property
-    def get_xyz_normal(self):
-        # For 6DGS: [xyz, normal_xyz] -> 6D
-        # For 7DGS: [xyz, normal_xyz, time] -> 7D (if _mean_time exists)
-        if self.input_dim == 7 and hasattr(self, '_mean_time'):
-            return torch.cat([self._xyz, self._normal, self._mean_time], dim=-1)
-        return torch.cat([self._xyz, self._normal], dim=-1)
+    def get_mean(self):
+        """Get full mean [xyz, mean] where mean includes direction (+ time for 7DGS)."""
+        return torch.cat([self._xyz, self._mean], dim=-1)
 
     @property
     def get_rotation(self):
@@ -376,13 +367,14 @@ class GaussianModel:
         init_n_gs = fused_color.shape[0]
         device = "cuda"
         
+        # Initialize mean parameter (direction for 6DGS, direction + time for 7DGS)
         dir = torch.randn((init_n_gs, 3), device=device)
-        normal = (dir / dir.norm(dim=1, keepdim=True)).float().cuda()
+        mean = (dir / dir.norm(dim=1, keepdim=True)).float().cuda()  # [N, 3]
 
-        # For 7DGS, initialize time dimension
+        # For 7DGS, append time dimension
         if self.input_dim == 7:
             mean_time = torch.empty(init_n_gs, 1, device=device).uniform_(0.0, 1.0)
-            self._mean_time = nn.Parameter(mean_time.requires_grad_(True))
+            mean = torch.cat([mean, mean_time], dim=-1)  # [N, 4]
 
         print("Number of points at initialisation : ", fused_point_cloud.shape[0])
 
@@ -420,7 +412,7 @@ class GaussianModel:
         self._xyz = nn.Parameter(fused_point_cloud.requires_grad_(True))
         self._features_dc = nn.Parameter(features[:,:,0:1].transpose(1, 2).contiguous().requires_grad_(True))
         self._features_rest = nn.Parameter(features[:,:,1:].transpose(1, 2).contiguous().requires_grad_(True))
-        self._normal = nn.Parameter(normal.requires_grad_(True))
+        self._mean = nn.Parameter(mean.requires_grad_(True))
         self._opacity = nn.Parameter(opacities.requires_grad_(True))
         self._lambda_opc = nn.Parameter(lambda_opcs.requires_grad_(self.learnable_lambda_opc))
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
@@ -434,7 +426,7 @@ class GaussianModel:
             {'params': [self._xyz], 'lr': training_args.position_lr_init * self.spatial_lr_scale, "name": "xyz"},
             {'params': [self._features_dc], 'lr': training_args.feature_lr, "name": "f_dc"},
             {'params': [self._features_rest], 'lr': training_args.feature_lr / 20.0, "name": "f_rest"},
-            {'params': [self._normal], 'lr': training_args.feature_lr, "name": "normal"},
+            {'params': [self._mean], 'lr': training_args.feature_lr, "name": "mean"},
             {'params': [self._opacity], 'lr': training_args.opacity_lr, "name": "opacity"},
         ]
 
@@ -452,10 +444,6 @@ class GaussianModel:
             # Still add to optimizer but with requires_grad=False for consistency
             l.append({'params': [self._lambda_opc], 'lr': 0.0, "name": "lambda_opc"})
 
-        # Add time parameter for 7DGS
-        if self.input_dim == 7 and hasattr(self, '_mean_time'):
-            l.append({'params': [self._mean_time], 'lr': training_args.feature_lr, "name": "mean_time"})
-
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
         self.xyz_scheduler_args = get_expon_lr_func(lr_init=training_args.position_lr_init*self.spatial_lr_scale,
                                                     lr_final=training_args.position_lr_final*self.spatial_lr_scale,
@@ -471,7 +459,10 @@ class GaussianModel:
                 return lr
 
     def construct_list_of_attributes(self):
-        l = ['x', 'y', 'z', 'nx', 'ny', 'nz']
+        l = ['x', 'y', 'z']
+        # Mean attributes (direction + optional time)
+        for i in range(self._mean.shape[1]):
+            l.append('mean_{}'.format(i))
         # All channels except the 3 DC
         for i in range(self._features_dc.shape[1]*self._features_dc.shape[2]):
             l.append('f_dc_{}'.format(i))
@@ -479,9 +470,6 @@ class GaussianModel:
             l.append('f_rest_{}'.format(i))
         l.append('opacity')
         l.append('lambda_opc')
-        # Add time for 7DGS
-        if self.input_dim == 7 and hasattr(self, '_mean_time'):
-            l.append('mean_time')
 
         # Use unified naming
         for i in range(self._scale.shape[1]):
@@ -495,7 +483,7 @@ class GaussianModel:
         mkdir_p(os.path.dirname(path))
 
         xyz = self._xyz.detach().cpu().numpy()
-        normals = self._normal.detach().cpu().numpy()
+        mean = self._mean.detach().cpu().numpy()
         f_dc = self._features_dc.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
         f_rest = self._features_rest.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
         opacities = self._opacity.detach().cpu().numpy()
@@ -505,11 +493,8 @@ class GaussianModel:
 
         elements = np.empty(xyz.shape[0], dtype=dtype_full)
 
-        # Build attributes list, including time for 7DGS
-        attr_list = [xyz, normals, f_dc, f_rest, opacities, lambda_opcs]
-        if self.input_dim == 7 and hasattr(self, '_mean_time'):
-            mean_time = self._mean_time.detach().cpu().numpy()
-            attr_list.append(mean_time)
+        # Build attributes list
+        attr_list = [xyz, mean, f_dc, f_rest, opacities, lambda_opcs]
 
         # Add covariance parameters (unified naming)
         scales = self._scale.detach().cpu().numpy()
@@ -533,9 +518,28 @@ class GaussianModel:
                         np.asarray(plydata.elements[0]["y"]),
                         np.asarray(plydata.elements[0]["z"])),  axis=1)
 
-        normal = np.stack((np.asarray(plydata.elements[0]["nx"]),
-                        np.asarray(plydata.elements[0]["ny"]),
-                        np.asarray(plydata.elements[0]["nz"])),  axis=1)
+        # Load mean parameter with backward compatibility for old format (nx, ny, nz, mean_time)
+        mean_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("mean_")]
+        if mean_names:
+            # New unified format: mean_0, mean_1, mean_2, (mean_3 for 7DGS)
+            mean_names = sorted(mean_names, key=lambda x: int(x.split('_')[-1]))
+            mean = np.zeros((xyz.shape[0], len(mean_names)))
+            for idx, attr_name in enumerate(mean_names):
+                mean[:, idx] = np.asarray(plydata.elements[0][attr_name])
+        else:
+            # Old format: convert from nx, ny, nz + optional mean_time
+            normal = np.stack((np.asarray(plydata.elements[0]["nx"]),
+                            np.asarray(plydata.elements[0]["ny"]),
+                            np.asarray(plydata.elements[0]["nz"])),  axis=1)
+            mean = normal  # [N, 3]
+
+            # For 7DGS, append time dimension from old format
+            if self.input_dim == 7:
+                try:
+                    mean_time = np.asarray(plydata.elements[0]["mean_time"])[..., np.newaxis]
+                except:
+                    mean_time = np.zeros((xyz.shape[0], 1), dtype=np.float32)
+                mean = np.concatenate([mean, mean_time], axis=1)  # [N, 4]
 
         opacities = np.asarray(plydata.elements[0]["opacity"])[..., np.newaxis]
         opacities = np.ascontiguousarray(opacities, dtype=np.float32)
@@ -547,15 +551,6 @@ class GaussianModel:
             # Default to 0.35 if not present in file
             lambda_opcs = np.full((xyz.shape[0], 1), inverse_sigmoid(0.35), dtype=np.float32)
         lambda_opcs = np.ascontiguousarray(lambda_opcs, dtype=np.float32)
-
-        # Load time dimension for 7DGS
-        mean_time = None
-        if self.input_dim == 7:
-            try:
-                mean_time = np.asarray(plydata.elements[0]["mean_time"])[..., np.newaxis]
-            except:
-                # Initialize with default values if not present
-                mean_time = np.zeros((xyz.shape[0], 1), dtype=np.float32)
 
         features_dc = np.zeros((xyz.shape[0], 3, 1))
         features_dc[:, 0, 0] = np.asarray(plydata.elements[0]["f_dc_0"])
@@ -599,11 +594,7 @@ class GaussianModel:
         self._features_rest = nn.Parameter(torch.tensor(features_extra, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
         self._opacity = nn.Parameter(torch.tensor(opacities, dtype=torch.float, device="cuda").requires_grad_(True))
         self._lambda_opc = nn.Parameter(torch.tensor(lambda_opcs, dtype=torch.float, device="cuda").requires_grad_(self.learnable_lambda_opc))
-        self._normal = nn.Parameter(torch.tensor(normal, dtype=torch.float, device="cuda").requires_grad_(True))
-
-        # Load time parameter for 7DGS
-        if self.input_dim == 7 and mean_time is not None:
-            self._mean_time = nn.Parameter(torch.tensor(mean_time, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._mean = nn.Parameter(torch.tensor(mean, dtype=torch.float, device="cuda").requires_grad_(True))
 
         ### Precompute test-time values ###
         c_dim = 3
@@ -621,12 +612,10 @@ class GaussianModel:
         self.shs = self.get_features
 
         # Precompute direction for test-time slicing
-        # For 7DGS, direction includes both normal and time
-        if self.input_dim == 7 and hasattr(self, '_mean_time'):
-            normal_normalized = self.get_normal / self.get_normal.norm(dim=1, keepdim=True)
-            self.direction = torch.cat([normal_normalized, self._mean_time], dim=-1)  # [N, 4]
-        else:
-            self.direction = self.get_normal / self.get_normal.norm(dim=1, keepdim=True)  # [N, 3]
+        # Normalize _mean for directional consistency (only the first 3 dimensions)
+        mean_normalized = self._mean.clone()
+        mean_normalized[:, :3] = self._mean[:, :3] / self._mean[:, :3].norm(dim=1, keepdim=True)
+        self.direction = mean_normalized  # [N, 3] for 6DGS or [N, 4] for 7DGS
 
         self.active_sh_degree = self.max_sh_degree
 
@@ -672,16 +661,12 @@ class GaussianModel:
         self._xyz = optimizable_tensors["xyz"]
         self._features_dc = optimizable_tensors["f_dc"]
         self._features_rest = optimizable_tensors["f_rest"]
-        self._normal = optimizable_tensors["normal"]
+        self._mean = optimizable_tensors["mean"]
         self._opacity = optimizable_tensors["opacity"]
         self._lambda_opc = optimizable_tensors["lambda_opc"]
         # Update covariance tensors (unified naming)
         self._scale = optimizable_tensors["scale"]
         self._l_triangle = optimizable_tensors["l_triangle"]
-
-        # Handle time parameter for 7DGS
-        if self.input_dim == 7 and "mean_time" in optimizable_tensors:
-            self._mean_time = optimizable_tensors["mean_time"]
 
         self.xyz_gradient_accum = self.xyz_gradient_accum[valid_points_mask]
         self.denom = self.denom[valid_points_mask]
@@ -712,8 +697,8 @@ class GaussianModel:
 
         return optimizable_tensors
 
-    def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_normal,
-                                    new_opacities, new_lambda_opc, new_scale, new_l_triangle, new_mean_time=None):
+    def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_mean,
+                                    new_opacities, new_lambda_opc, new_scale, new_l_triangle):
         """
         Add new Gaussians to the model after densification.
 
@@ -721,35 +706,28 @@ class GaussianModel:
             new_scale: New scale parameters (unified naming)
             new_l_triangle: New l_triangle parameters (unified naming)
             new_lambda_opc: New lambda_opc parameters
+            new_mean: New mean parameters (unified - includes direction + time for 7DGS)
         """
         d = {"xyz": new_xyz,
             "f_dc": new_features_dc,
             "f_rest": new_features_rest,
-            "normal": new_normal,
+            "mean": new_mean,
             "opacity": new_opacities,
             "lambda_opc": new_lambda_opc,
             "scale": new_scale,
             "l_triangle": new_l_triangle,
             }
 
-        # Add time parameter for 7DGS
-        if self.input_dim == 7 and new_mean_time is not None:
-            d["mean_time"] = new_mean_time
-
         optimizable_tensors = self.cat_tensors_to_optimizer(d)
         self._xyz = optimizable_tensors["xyz"]
         self._features_dc = optimizable_tensors["f_dc"]
         self._features_rest = optimizable_tensors["f_rest"]
-        self._normal = optimizable_tensors["normal"]
+        self._mean = optimizable_tensors["mean"]
         self._opacity = optimizable_tensors["opacity"]
         self._lambda_opc = optimizable_tensors["lambda_opc"]
         # Update covariance tensors (unified naming)
         self._scale = optimizable_tensors["scale"]
         self._l_triangle = optimizable_tensors["l_triangle"]
-
-        # Handle time parameter for 7DGS
-        if self.input_dim == 7 and "mean_time" in optimizable_tensors:
-            self._mean_time = optimizable_tensors["mean_time"]
 
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
@@ -770,7 +748,7 @@ class GaussianModel:
         samples = torch.normal(mean=means, std=stds)
         rots = rotation[selected_pts_mask].repeat(N,1,1) # build_rotation(self._rotation[selected_pts_mask]).repeat(N,1,1)
         new_xyz = torch.bmm(rots, samples.unsqueeze(-1)).squeeze(-1) + self.get_xyz[selected_pts_mask].repeat(N, 1)
-        new_normal = self._normal[selected_pts_mask].repeat(N,1)
+        new_mean = self._mean[selected_pts_mask].repeat(N,1)
 
         new_features_dc = self._features_dc[selected_pts_mask].repeat(N,1,1)
         new_features_rest = self._features_rest[selected_pts_mask].repeat(N,1,1)
@@ -781,13 +759,8 @@ class GaussianModel:
         new_scale = self.scale_inverse_activation(self.scale_activation(new_scale) * 0.8).repeat(N, 1)
         new_l_triangle = self._l_triangle[selected_pts_mask].repeat(N, 1)
 
-        # Handle time parameter for 7DGS
-        new_mean_time = None
-        if self.input_dim == 7 and hasattr(self, '_mean_time'):
-            new_mean_time = self._mean_time[selected_pts_mask].repeat(N, 1)
-
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_normal,
-                                   new_opacity, new_lambda_opc, new_scale, new_l_triangle, new_mean_time)
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_mean,
+                                   new_opacity, new_lambda_opc, new_scale, new_l_triangle)
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
@@ -807,7 +780,7 @@ class GaussianModel:
         new_xyz = self._xyz[selected_pts_mask]
         new_features_dc = self._features_dc[selected_pts_mask]
         new_features_rest = self._features_rest[selected_pts_mask]
-        new_normal = self._normal[selected_pts_mask]
+        new_mean = self._mean[selected_pts_mask]
         new_opacities = self._opacity[selected_pts_mask]
         new_lambda_opc = self._lambda_opc[selected_pts_mask]
 
@@ -815,13 +788,8 @@ class GaussianModel:
         new_scale = self._scale[selected_pts_mask]
         new_l_triangle = self._l_triangle[selected_pts_mask]
 
-        # Handle time parameter for 7DGS
-        new_mean_time = None
-        if self.input_dim == 7 and hasattr(self, '_mean_time'):
-            new_mean_time = self._mean_time[selected_pts_mask]
-
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_normal,
-                                   new_opacities, new_lambda_opc, new_scale, new_l_triangle, new_mean_time)
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_mean,
+                                   new_opacities, new_lambda_opc, new_scale, new_l_triangle)
 
     def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size, iteration):
         """Main densification and pruning routine."""
@@ -870,7 +838,7 @@ class GaussianModel:
             pass
 
         # Compute view direction for conditional slicing
-        dir_pp = (self.get_xyz - viewpoint_camera.camera_center.repeat(self.get_normal.shape[0], 1))
+        dir_pp = (self.get_xyz - viewpoint_camera.camera_center.repeat(self._mean.shape[0], 1))
         view_dir = dir_pp / dir_pp.norm(dim=1, keepdim=True)
 
         # For 7DGS, append timestamp to query
@@ -1089,27 +1057,22 @@ class GaussianModel:
         _xyz_masked = self._xyz[mask]
         _features_dc_masked = self._features_dc[mask]
         _features_rest_masked = self._features_rest[mask]
-        _normal_masked = self._normal[mask]
+        _mean_masked = self._mean[mask]
         _opacity_masked = self._opacity[mask]
         _lambda_opc_masked = self._lambda_opc[mask]
         _scale_masked = self._scale[mask]
         _l_triangle_masked = self._l_triangle[mask]
-        _mean_time_masked = self._mean_time[mask] if (self.input_dim == 7 and hasattr(self, '_mean_time')) else None
 
         # Temporarily swap in masked tensors using direct assignment
         # This is still save/restore but at least we're not allocating new storage
         orig_xyz, self._xyz = self._xyz, _xyz_masked
         orig_features_dc, self._features_dc = self._features_dc, _features_dc_masked
         orig_features_rest, self._features_rest = self._features_rest, _features_rest_masked
-        orig_normal, self._normal = self._normal, _normal_masked
+        orig_mean, self._mean = self._mean, _mean_masked
         orig_opacity, self._opacity = self._opacity, _opacity_masked
         orig_lambda_opc, self._lambda_opc = self._lambda_opc, _lambda_opc_masked
         orig_scale, self._scale = self._scale, _scale_masked
         orig_l_triangle, self._l_triangle = self._l_triangle, _l_triangle_masked
-
-        orig_mean_time = None
-        if _mean_time_masked is not None:
-            orig_mean_time, self._mean_time = self._mean_time, _mean_time_masked
 
         try:
             # Call render_tcgs with masked Gaussians
@@ -1137,13 +1100,11 @@ class GaussianModel:
             self._xyz = orig_xyz
             self._features_dc = orig_features_dc
             self._features_rest = orig_features_rest
-            self._normal = orig_normal
+            self._mean = orig_mean
             self._opacity = orig_opacity
             self._lambda_opc = orig_lambda_opc
             self._scale = orig_scale
             self._l_triangle = orig_l_triangle
-            if orig_mean_time is not None:
-                self._mean_time = orig_mean_time
 
         # Convert from [C, H, W] to [H, W, C] for viewer
         render_colors = render_colors.permute(1, 2, 0)
