@@ -1,20 +1,21 @@
 # 6D Gaussian Splatting (6DGS)
 
-Implementation of 6D Gaussian Splatting for real-time novel view synthesis with view-dependent rendering.
+Implementation of N-Dimensional Gaussian Splatting for real-time novel view synthesis with view-dependent rendering.
 
 ## Overview
 
-This repository implements **6D Gaussian Splatting (6DGS)**, extending traditional 3D Gaussian Splatting with conditional Gaussian slicing for view-dependent appearance modeling. The method represents scenes using 6-dimensional Gaussians that are conditionally sliced based on viewing direction, enabling efficient capture of view-dependent effects.
+This repository implements **N-Dimensional Gaussian Splatting (N-DGS)**, extending traditional 3D Gaussian Splatting with conditional Gaussian slicing for view-dependent appearance modeling. The method represents scenes using N-dimensional Gaussians (6D or 7D) that are conditionally sliced based on viewing direction (and optionally time), enabling efficient capture of view-dependent effects.
 
 ### Key Features
 
 - **6D/7D Gaussian Representation**: Extends 3D Gaussians with view-direction (6D) or view-direction + time (7D)
 - **Conditional Slicing**: CUDA-accelerated conditional Gaussian slicing based on viewing direction
-- **Learnable Lambda Opacity**: Per-Gaussian learnable opacity scaling for fine-grained view control
+- **Learnable Lambda Opacity**: Per-Gaussian learnable opacity scaling for fine-grained control
 - **Dual Parametrization**: Switch between NDGS-style and UBS-style covariance parametrization
 - **TCGS Rasterization**: High-performance rasterization with support for cutting planes
 - **Live Training Viewer**: Real-time web-based viewer with time animation and dual SH blending
-- **Dual SH Support**: Multi-view color consistency with interpolatable SH features
+- **Dual SH Support**: Multi-view color consistency with interpolatable SH features (ndgs-2sh model)
+- **Optimized Viewer**: Efficient tensor view masking for real-time filtering without copying
 - **Multiple Model Modes**: Configurable architecture supporting NDGS, DDGS, 3DGS, and UBS modes
 
 ## Installation
@@ -56,7 +57,7 @@ pip install submodules/simple-knn
 
 The repository is organized into three main categories:
 
-- **Core Scripts** (root): `train.py`, `render.py`, `metrics.py` - Main pipeline
+- **Core Scripts** (root): `train.py`, `render.py`, `metrics.py`, `view.py` - Main pipeline
 - **tools/**: Data preprocessing and evaluation utilities
   - `preprocessing/`: COLMAP conversion, cloud dataset generation
   - `evaluation/`: Automated benchmarking tools
@@ -79,34 +80,48 @@ See [ORGANIZATION.md](ORGANIZATION.md) for complete documentation.
 ### Recent Major Updates
 
 **✨ Unified Model Architecture:**
-- Consolidated and cleaned codebase with two main models:
+- Consolidated and cleaned codebase with two main N-DGS models:
   - `gaussian_model_ndgs.py` - Single SH for standard rendering
   - `gaussian_model_ndgs_2sh.py` - Dual SH for multi-view consistency
-- Removed legacy experimental code and unused features
+- Both models support 6DGS and 7DGS (with time dimension)
+- Removed legacy experimental code (color_net, LSH culling, Taichi imports)
 
 **🎯 New Features:**
-- **Learnable Lambda Opacity** (`--learnable_lambda_opc`): Per-Gaussian learnable opacity scaling
-- **Dual Parametrization** (`--use_rot_scale_l_triangle`): Switch between NDGS and UBS covariance modes
-- **7DGS Time Support** (`--input_dim 7`): Full temporal dimension with viewer animation
-- **Dual SH Blending**: Real-time color interpolation in viewer
+- **Learnable Lambda Opacity** (`--learnable_lambda_opc`): Per-Gaussian learnable opacity scaling parameter
+- **Dual Parametrization** (`--use_rot_scale_l_triangle`): Switch between NDGS-style and UBS-style covariance modes
+- **Full 7DGS Time Support** (`--input_dim 7`): Complete temporal dimension with viewer animation controls
+- **Dual SH Blending**: Real-time color interpolation in viewer for multi-view consistency
+- **Optimized Viewer**: Efficient pointer-swap masking instead of tensor copying (significant FPS improvement)
 
-**🔧 Unified Naming:**
-- New parameter names: `_scale`, `_l_triangle` (replaces old `diags`, `l_triangs`)
-- Backward compatible: Old models load automatically
-- Consistent API across all model variants
+**🚀 Performance Optimizations:**
+- Viewer masking now uses tensor views with pointer swaps (no memory allocation per frame)
+- Test mode precomputed values properly handled
+- Eliminated redundant save/restore operations
 
 **📖 Documentation:**
-- See [CHANGELOG.md](CHANGELOG.md) for detailed version history
 - See [ORGANIZATION.md](ORGANIZATION.md) for project structure
 
 ## Usage
 
 ### Training
 
-Train a 6DGS model on your dataset:
+Train an N-DGS model on your dataset:
 
 ```shell
-python train.py -s <path to COLMAP dataset> --mode 6dgs
+# Basic 6DGS training
+python train.py -s <path to COLMAP dataset> --mode ndgs --input_dim 6
+
+# 7DGS with time dimension
+python train.py -s <path to dataset> --mode ndgs --input_dim 7
+
+# With learnable lambda opacity
+python train.py -s <path to dataset> --mode ndgs --learnable_lambda_opc
+
+# UBS-style parametrization
+python train.py -s <path to dataset> --mode ndgs --use_rot_scale_l_triangle
+
+# Dual SH for multi-view consistency
+python train.py -s <path to dataset> --mode ndgs-2sh --input_dim 6
 ```
 
 The training script will automatically launch a live viewer on port 8080 (unless disabled with `--disable_viewer`). Open your browser to `http://localhost:8080` to monitor training in real-time.
@@ -124,8 +139,8 @@ The training script will automatically launch a live viewer on port 8080 (unless
 - `--white_background` / `-w`: Use white background instead of black
 
 #### Model Parameters
-- `--mode`: Model architecture (`ndgs`, `ddgs`, `3dgs`, `ubs`) - default: `ndgs`
-- `--input_dim`: Gaussian dimensionality (6 for 6DGS, 7 for 7DGS with time) - default: `7`
+- `--mode`: Model architecture (`ndgs`, `ndgs-2sh`, `ddgs`, `3dgs`, `ubs`) - default: `ndgs`
+- `--input_dim`: Gaussian dimensionality (6 for 6DGS, 7 for 7DGS with time) - default: `6`
 - `--sh_degree`: Spherical harmonics degree (max 3) - default: `3`
 - `--learnable_lambda_opc`: Make lambda_opc learnable per Gaussian - default: `False`
 - `--use_rot_scale_l_triangle`: Use UBS-style parametrization instead of NDGS-style - default: `False`
@@ -136,7 +151,8 @@ The training script will automatically launch a live viewer on port 8080 (unless
 - `--position_lr_final`: Final position learning rate - default: `0.0000016`
 - `--feature_lr`: Feature learning rate - default: `0.0025`
 - `--opacity_lr`: Opacity learning rate - default: `0.05`
-- `--scale_lr`: Scale parameters learning rate - default: `0.005` (replaces `--diags_lr`)
+- `--scaling_lr`: Normal scaling learning rate - default: `0.005`
+- `--scale_lr`: Scale/diagonal parameters learning rate - default: `0.005` (replaces `--diags_lr`)
 - `--l_triangle_lr`: L-triangle parameters learning rate - default: `0.001` (replaces `--l_triangs_lr`)
   - Note: Old names (`--diags_lr`, `--l_triangs_lr`) still work for backward compatibility
 
@@ -180,6 +196,18 @@ python render.py -m <path to trained model> -s <path to dataset>
 
 </details>
 
+### Live Viewing
+
+View a trained model interactively:
+
+```shell
+# View trained model
+python view.py -m <model_path> --ply <ply_file> --mode ndgs
+
+# Custom port
+python view.py -m <model_path> --ply <ply_file> --mode ndgs --port 8080
+```
+
 ### Evaluation
 
 Compute metrics on rendered images:
@@ -214,11 +242,12 @@ The training process includes a real-time web viewer powered by [Viser](https://
 - **Monitor Training**: Watch the scene reconstruction in real-time
 - **Interactive Camera Control**: Navigate the scene with mouse/keyboard
 - **Time Animation (7DGS)**: Auto-loop and manual time control for temporal models
-- **Dual SH Blending**: Smooth interpolation between two SH color representations
+- **Dual SH Blending**: Smooth interpolation between two SH color representations (ndgs-2sh models)
 - **Gaussian Filtering**: Percentile-based or absolute opacity thresholding
 - **Cutting Plane**: Enable spatial filtering with x_threshold control
 - **Render Modes**: Switch between RGB, Alpha, Depth, Normal, and other visualization modes
 - **Performance Monitoring**: Real-time FPS display with smoothing
+- **Optimized Rendering**: Efficient masking without memory allocation overhead
 
 The viewer automatically starts when training begins. Access it at `http://localhost:8080` (or custom port specified with `--port`).
 
@@ -229,24 +258,22 @@ The viewer automatically starts when training begins. Access it at `http://local
 - **Loop Duration**: Adjust animation speed (0.5 - 10.0 seconds)
 - **Time Slider**: Manual time control (0.0 - 1.0)
 
-**Color Interpolation (Dual SH models):**
+**Color Interpolation (ndgs-2sh models only):**
 - **Color Blend**: Smooth interpolation between SH_0 and SH_1 (0.0 - 1.0)
 
 **Gaussian Filtering:**
 - **Use Opacity Percentile**: Toggle between percentile and absolute threshold modes
 - **Opacity Percentile**: Show top X% most opaque Gaussians (0 - 100)
 - **Opacity Threshold**: Absolute minimum opacity (0.0 - 1.0)
-- **Scale Threshold**: Maximum Gaussian scale (0.1 - 200.0)
 
 **Cutting Plane:**
 - **Enable X Threshold**: Toggle cutting plane on/off
-- **X Threshold**: Set cutting plane position along X-axis (scene-dependent range)
+- **X Threshold**: Set cutting plane position along X-axis
 
 **Render Settings:**
-- **Render Mode**: RGB, Alpha, Depth, Normal, Diffuse, Specular
+- **Render Mode**: RGB, Alpha, Depth, Normal
 - **Tight Snugbox**: Enable/disable TCGS optimization
 - **Background Color**: RGB color picker
-- **Near/Far Planes**: Depth clipping range
 - **FPS Display**: Real-time performance monitoring
 
 ## Dataset Format
@@ -278,8 +305,8 @@ For datasets with cutting plane support, use a `transforms.json` file:
       "file_path": "./images/image_001.jpg",
       "transform_matrix": [...],
       "x_threshold": 5.0,      // Optional: cutting plane position
-      "color_idx": 0,          // Optional: color index for labeling
-      "label": [1, 0, 0]       // Optional: label vector
+      "color_idx": 0,          // Optional: color index for dual SH
+      "timestamp": 0.5         // Optional: time value for 7DGS (0.0 - 1.0)
     }
   ]
 }
@@ -287,35 +314,51 @@ For datasets with cutting plane support, use a `transforms.json` file:
 
 ## Technical Details
 
-### 6D Gaussian Representation
+### N-Dimensional Gaussian Representation
 
 Each Gaussian is represented with:
-- **Mean** (6D): `[x, y, z, nx, ny, nz]` - position and normal direction
-- **Covariance** (6×6): Parameterized by diagonal and lower triangular elements
-- **Color**: Spherical harmonics coefficients
+- **6DGS**: `[x, y, z, nx, ny, nz]` - position and normal direction
+- **7DGS**: `[x, y, z, nx, ny, nz, t]` - position, normal, and time
+- **Covariance** (N×N): Parameterized by scale/diagonal and lower triangular elements
+- **Color**: Spherical harmonics coefficients (single or dual)
 - **Opacity**: Sigmoid-activated opacity value
+- **Lambda Opacity** (optional): Learnable per-Gaussian opacity scaling
+
+### Parametrizations
+
+**NDGS-style** (default, `use_rot_scale_l_triangle=False`):
+- `_scale`: Exponential activation for diagonal elements
+- `_l_triangle`: Sigmoid bounded [-1, 1] for off-diagonal elements
+- Direct lower-triangular covariance construction
+
+**UBS-style** (`use_rot_scale_l_triangle=True`):
+- `_scale`: Softplus activation for smooth positive scales
+- `_l_triangle`: First 3 elements encode 6D rotation matrix
+- Rotation-scale-l_triangle covariance construction with KNN initialization
 
 ### Conditional Slicing
 
-The 6D Gaussians are conditionally sliced based on viewing direction:
+The N-D Gaussians are conditionally sliced based on viewing direction:
 1. Compute view direction from camera to Gaussian center
-2. Perform conditional Gaussian slicing (see `slice_gaussian` in [gaussian_model_6dgs.py](scene/gaussian_model_6dgs.py#L84-L117))
-3. Obtain 3D conditional mean and covariance
-4. Scale opacity based on viewing direction alignment
+2. For 7DGS, append timestamp to query vector
+3. Perform conditional Gaussian slicing (see `slice_gaussian` in model files)
+4. Obtain 3D conditional mean and covariance
+5. Scale opacity based on viewing direction alignment
 
 ### TCGS Rasterization
 
 The TCGS (Tile-based CUDA Gaussian Splatting) rasterizer provides:
 - Efficient tile-based rendering
 - Cutting plane support via `x_threshold`
-- Precomputed covariance support
+- Precomputed covariance support (for test mode)
 - Tight bounding box optimization
 
 ## Model Modes
 
 This codebase supports multiple Gaussian splatting variants:
 
-- **6dgs** (default): 6D Gaussian Splatting with conditional slicing
+- **ndgs** (default): N-Dimensional GS with conditional slicing (single SH)
+- **ndgs-2sh**: N-Dimensional GS with dual SH features for multi-view consistency
 - **ddgs**: Deformable DGS variant
 - **3dgs**: Standard 3D Gaussian Splatting
 - **ubs**: UBS variant
@@ -327,41 +370,48 @@ Select the mode with `--mode <mode_name>` during training.
 ```
 6dgs-iclr/
 ├── scene/
-│   ├── gaussian_model_6dgs.py    # 6DGS model implementation
-│   ├── gaussian_model_ddgs.py    # DDGS model
-│   ├── gaussian_model.py         # 3DGS model
-│   ├── gaussian_model_ubs.py     # UBS model
-│   ├── gaussian_viewer.py        # Viser-based live viewer
-│   ├── cameras.py                # Camera classes
-│   └── dataset_readers.py        # Dataset loading
+│   ├── gaussian_model_ndgs.py       # N-DGS single SH implementation
+│   ├── gaussian_model_ndgs_2sh.py   # N-DGS dual SH implementation
+│   ├── gaussian_model_ddgs.py       # DDGS model
+│   ├── gaussian_model.py            # 3DGS model
+│   ├── gaussian_model_ubs.py        # UBS model
+│   ├── gaussian_viewer.py           # Viser-based live viewer
+│   ├── cameras.py                   # Camera classes
+│   └── dataset_readers.py           # Dataset loading
 ├── utils/
-│   ├── loss_utils.py             # Loss functions
-│   ├── camera_utils.py           # Camera utilities
+│   ├── loss_utils.py                # Loss functions
+│   ├── camera_utils.py              # Camera utilities
+│   ├── ndgs_utils.py                # N-DGS specific utilities
 │   └── ...
 ├── arguments/
-│   └── __init__.py               # Command-line arguments
+│   └── __init__.py                  # Command-line arguments
 ├── submodules/
-│   ├── gsplat/                   # N-DGS CUDA operations
-│   ├── tcgs-speedy-rasterizer/   # TCGS rasterizer
-│   └── simple-knn/               # KNN utilities
-├── train.py                      # Training script
-├── render.py                     # Rendering script
-└── metrics.py                    # Evaluation metrics
+│   ├── gsplat/                      # N-DGS CUDA operations
+│   ├── tcgs-speedy-rasterizer/      # TCGS rasterizer
+│   └── simple-knn/                  # KNN utilities
+├── train.py                         # Training script
+├── render.py                        # Rendering script
+├── view.py                          # Interactive viewer script
+└── metrics.py                       # Evaluation metrics
 ```
 
 ## Key Implementation Files
 
-- [gaussian_model_6dgs.py](scene/gaussian_model_6dgs.py): Core 6DGS implementation with conditional slicing
-- [gaussian_viewer.py](scene/gaussian_viewer.py): Interactive training viewer
+- [gaussian_model_ndgs.py](scene/gaussian_model_ndgs.py): Core N-DGS implementation with conditional slicing (single SH)
+- [gaussian_model_ndgs_2sh.py](scene/gaussian_model_ndgs_2sh.py): N-DGS with dual SH features
+- [gaussian_viewer.py](scene/gaussian_viewer.py): Interactive training viewer with optimized masking
 - [train.py](train.py): Main training loop with viewer integration
 - [render.py](render.py): Rendering script for evaluation
+- [view.py](view.py): Standalone interactive viewer
 
 ## Performance Tips
 
 - Use `--data_device cpu` for large/high-resolution datasets to reduce VRAM usage
 - Adjust densification parameters (`--densify_grad_threshold`, `--densification_interval`) for memory-constrained setups
 - Set `--test_iterations -1` to skip testing during training and reduce memory spikes
-- For large scenes, reduce learning rates: `--position_lr_init 0.000016 --diags_lr 0.001`
+- For large scenes, reduce learning rates: `--position_lr_init 0.000016 --scale_lr 0.001`
+- Enable learnable lambda opacity for scenes with complex view-dependent effects: `--learnable_lambda_opc`
+- Use UBS-style parametrization for scenes with wide scale variation: `--use_rot_scale_l_triangle`
 
 ## Acknowledgments
 

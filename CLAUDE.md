@@ -4,15 +4,51 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a research implementation of **6D Gaussian Splatting (6DGS)**, an extension of the original 3D Gaussian Splatting method for real-time radiance field rendering. The codebase builds on the GRAPHDECO group's 3D Gaussian Splatting foundation and implements multiple Gaussian model variants including:
+This is a research implementation of **N-Dimensional Gaussian Splatting (N-DGS)**, an extension of 3D Gaussian Splatting for real-time radiance field rendering with view-dependent effects. The codebase implements multiple Gaussian model variants with focus on:
 
-- **3DGS**: Original 3D Gaussian Splatting
-- **NDGS**: N-dimensional Gaussian Splatting with spherical harmonics
-- **DDGS**: Double D Gaussian Splatting
-- **X-Gaussian**: Alternative Gaussian representation
-- **Combined/DDNDGS**: Hybrid models
+- **N-DGS**: N-dimensional (6D/7D) Gaussian Splatting with conditional slicing
+- **Dual SH Support**: Multi-view consistency via interpolatable spherical harmonics
+- **3DGS**: Original 3D Gaussian Splatting baseline
+- **DDGS**: Deformable DGS variant
+- **UBS**: Alternative parametrization approach
 
-The current active mode is **NDGS** (configured in [scene/__init__.py:21](scene/__init__.py#L21)).
+The current primary modes are **ndgs** and **ndgs-2sh** (configured via `--mode` argument).
+
+## Recent Major Changes (v3.0)
+
+### Unified Architecture & Cleanup
+- **Consolidated models**: Two main N-DGS implementations
+  - `gaussian_model_ndgs.py`: Single SH for standard rendering
+  - `gaussian_model_ndgs_2sh.py`: Dual SH for multi-view consistency
+- **Removed legacy code**: Cleaned out experimental features (color_net, LSH culling, Taichi imports)
+- **Both models support**: 6DGS and 7DGS (with time dimension)
+
+### New Features
+- **Learnable Lambda Opacity** (`--learnable_lambda_opc`): Per-Gaussian learnable opacity scaling
+- **Full 7DGS Time Support**: Complete temporal dimension with:
+  - `_mean_time` parameter
+  - Viewer time animation controls (auto-loop, manual slider)
+  - Timestamp passing to rendering pipeline
+- **Dual SH Blending**: Real-time color interpolation in viewer (ndgs-2sh only)
+
+### Unified Parameter Naming
+**IMPORTANT**: Parameters have been renamed for consistency:
+- **Old names**: `diags`, `l_triangs`
+- **New names**: `_scale`, `_l_triangle`
+- **Backward compatible**: PLY files with old names load automatically
+- **Learning rates**: `--scale_lr`, `--l_triangle_lr` (old `--diags_lr`, `--l_triangs_lr` still work)
+
+The semantic meaning differs by parametrization:
+- **NDGS-style** (`use_rot_scale_l_triangle=False`): `_scale` = diagonal elements with exp() activation
+- **UBS-style** (`use_rot_scale_l_triangle=True`): `_scale` = scale parameters with softplus() activation
+
+### Performance Optimizations
+- **Viewer masking**: Now uses efficient pointer swaps instead of tensor copying
+  - Old approach: Save all tensors, modify `self._xyz`, restore (slow)
+  - New approach: Create masked views, swap Python references, restore pointers (fast)
+  - Location: `view_tcgs()` method in both model files (lines ~1088-1148 in ndgs.py, ~1146-1205 in ndgs_2sh.py)
+- **Test mode**: Precomputed values (`direction`, `v_22_inv`, `v_regr`, `cov3D_precomp`, `shs`) handled correctly
+- **No memory allocation per frame** in viewer
 
 ## Environment Setup
 
@@ -23,109 +59,30 @@ The current active mode is **NDGS** (configured in [scene/__init__.py:21](scene/
 conda env create --file environment.yml
 conda activate gaussian_splatting
 
-# Install custom CUDA extensions (submodules)
-pip install submodules/diff-gaussian-rasterization
-pip install submodules/simple-knn
+# Install CUDA extensions (submodules)
+pip install submodules/gsplat                 # N-DGS operations
+pip install submodules/tcgs-speedy-rasterizer  # TCGS rasterizer
+pip install submodules/simple-knn              # KNN utilities
 ```
 
 **Requirements:**
-- CUDA SDK 11.6+ (environment.yml specifies 11.6)
-- Python 3.7.13
-- PyTorch 1.12.1 with CUDA support
+- CUDA SDK 11 or 12
+- Python 3.8+
+- PyTorch with CUDA support
 - 24GB+ VRAM recommended for full training
 
 ### Custom Rasterizers
 
 The project includes multiple rasterization backends in `submodules/`:
-- `diff-gaussian-rasterization`: Original differentiable Gaussian rasterizer
-- `diff-ddgs-rasterization`: DDGS-specific rasterizer
-- `tcgs_speedy_rasterizer`: Fast TCGS rasterizer with **cutting plane** and **beta splatting** support
-- `tcgs_speedy_rasterizer_beta`: Reference implementation for beta splatting (features integrated into main TCGS)
+- `tcgs_speedy_rasterizer`: Fast TCGS rasterizer with **cutting plane** support
+- `gsplat`: N-DGS conditional slicing operations
+- `simple-knn`: KNN for initialization
 
 **TCGS Rasterizer Features:**
-
-The TCGS rasterizer has been enhanced with multiple advanced features:
-
-1. **Cutting Plane Support** (`x_threshold` parameter)
-   - Truncates Gaussians at a specified world-space X coordinate
-   - Uses error function-based truncation for smooth transitions
-   - Adjusts mean and covariance to account for truncation
-   - Gradients properly backpropagate through cutting plane
-
-2. **Beta Splatting** (`betas` parameter)
-   - Alternative to exponential Gaussian falloff using power-law: `α = opacity · (1-σ)^β`
-   - Standard mode (when `betas=nullptr`): `α = opacity · exp(-0.5·σ)`
-   - Provides learnable per-Gaussian shape control via β parameter
-   - Automatic snugbox cutoff computation: `σ_max = 1 - (α_thresh/opacity)^(1/β)`
-   - Full gradient support for β parameter
-
-3. **SnugBox Tile Culling**
-   - Computes exact ellipse-tile intersections instead of conservative radius bounds
-   - Adaptively processes tiles by Y or X slices depending on ellipse aspect ratio
-   - Significantly reduces tile over-coverage and improves performance
-
-4. **Optimizations Applied:**
-   - **Fixed variance clamping bug** ([backward.cu:242](submodules/tcgs_speedy_rasterizer/cuda_rasterizer/backward.cu#L242)): Corrected `var_expr_clamped` computation for accurate gradients
-   - **Early exit optimization** ([backward.cu:137-142](submodules/tcgs_speedy_rasterizer/cuda_rasterizer/backward.cu#L137)): Skips gradient computation when magnitudes < 1e-8
-   - **Alpha saturation handling**: Properly zeros gradients when α > 0.99 to prevent numerical instability
-
-**Usage Modes:**
-```python
-# Create rasterization settings
-raster_settings = GaussianRasterizationSettings(
-    image_height=512,
-    image_width=512,
-    tanfovx=1.0,
-    tanfovy=1.0,
-    bg=bg_color,
-    scale_modifier=1.0,
-    viewmatrix=viewmatrix,
-    projmatrix=projmatrix,
-    sh_degree=3,
-    campos=camera_center,
-    x_threshold=float('inf'),  # Optional: default is inf (no cutting)
-    use_tcgs=True,              # Optional: default is True (TCGS fast path)
-    prefiltered=False,          # Optional: default is False
-    debug=False                 # Optional: default is False
-)
-
-# Standard Gaussian splatting (TCGS fast)
-output = rasterizer(means3D, means2D, opacities, scores, shs=shs, scales=scales, rotations=rotations)
-
-# Beta splatting mode
-output = rasterizer(means3D, means2D, opacities, scores, shs=shs, scales=scales, rotations=rotations, betas=beta_values)
-
-# Use standard rendering (FP32, slower but more accurate)
-raster_settings = GaussianRasterizationSettings(..., use_tcgs=False)
-
-# Cutting plane only
-raster_settings = GaussianRasterizationSettings(..., x_threshold=threshold_value)
-
-# Combined: cutting plane + beta splatting
-output = rasterizer(..., betas=beta_values)  # with x_threshold in settings
-```
-
-**Important Notes:**
-- **Both standard and TCGS Tensor Core paths** now support beta splatting and cutting plane features
-- **Runtime TCGS selection** - You can now switch between TCGS and standard rendering **without recompilation**:
-  - Set `use_tcgs=True` in `GaussianRasterizationSettings` for TCGS Tensor Core path (default)
-  - Set `use_tcgs=False` for standard rendering path
-  - No need to modify [config.h:19](submodules/tcgs_speedy_rasterizer/cuda_rasterizer/config.h#L19) anymore
-- **TCGS Tensor Core path** (`use_tcgs=True`)
-  - Fully supports beta splatting with FP16 operations and shared memory optimization
-  - Uses specialized matrix operations (mma_16x8x8_f16_f16) for maximum performance
-  - Implements dual-mode blending: standard exponential vs. power-law falloff
-  - Runtime feature detection via nullptr checks (betas=nullptr → standard mode)
-- **Standard rendering path** (`use_tcgs=False`)
-  - Full-precision (FP32) rendering
-  - May be preferred during training for maximum accuracy
-- Features are backward compatible: when `betas=nullptr`, the system uses standard Gaussian rendering
-
-**Key Implementation Files:**
-- [auxiliary.h:182](submodules/tcgs_speedy_rasterizer/cuda_rasterizer/auxiliary.h#L182): `computeSnugboxCutoff()` - computes cutoff for beta/standard modes
-- [forward.cu:157](submodules/tcgs_speedy_rasterizer/cuda_rasterizer/forward.cu#L157): Preprocess kernel with beta support
-- [forward.cu:357](submodules/tcgs_speedy_rasterizer/cuda_rasterizer/forward.cu#L357): Render kernel with dual-mode alpha computation
-- [backward.cu:714](submodules/tcgs_speedy_rasterizer/cuda_rasterizer/backward.cu#L714): Backward kernel with beta gradients
+- Cutting plane support (`x_threshold` parameter)
+- Tight snugbox tile culling
+- FP16 tensor core operations
+- Runtime mode selection (`use_tcgs` parameter)
 
 To rebuild after modifications:
 ```bash
@@ -138,20 +95,41 @@ python setup.py build_ext --inplace
 ### Basic Training
 
 ```bash
-# Train on COLMAP or NeRF Synthetic dataset
-python train.py -s <path_to_dataset> --eval
+# Train N-DGS model (6D)
+python train.py -s <path_to_dataset> --mode ndgs --input_dim 6
 
-# Train with custom output directory
-python train.py -s <dataset_path> --model_path <output_path> --eval
+# Train with 7DGS (time dimension)
+python train.py -s <path_to_dataset> --mode ndgs --input_dim 7
+
+# Train with learnable lambda opacity
+python train.py -s <path_to_dataset> --mode ndgs --learnable_lambda_opc
+
+# Train with UBS-style parametrization
+python train.py -s <path_to_dataset> --mode ndgs --use_rot_scale_l_triangle
+
+# Train dual SH model
+python train.py -s <path_to_dataset> --mode ndgs-2sh --input_dim 6
 ```
 
 ### Important Training Parameters
 
-- `--eval`: Use train/test split for evaluation (MipNeRF360-style)
+**Model Configuration:**
+- `--mode`: Model architecture (`ndgs`, `ndgs-2sh`, `ddgs`, `3dgs`, `ubs`)
+- `--input_dim`: Dimensionality (6 for 6DGS, 7 for 7DGS with time)
+- `--learnable_lambda_opc`: Enable per-Gaussian learnable opacity scaling
+- `--use_rot_scale_l_triangle`: Use UBS-style parametrization instead of NDGS-style
+
+**Training Control:**
 - `--iterations`: Total iterations (default: 30,000)
-- `--white_background` / `-w`: Use white background (for NeRF Synthetic datasets)
-- `--resolution` / `-r`: Image resolution (1=original, 2=half, 4=quarter, 8=eighth)
-- `--data_device`: Where to store images (`cuda` or `cpu`, use `cpu` for large datasets to reduce VRAM)
+- `--position_lr_init`: Initial position LR (default: 0.00016)
+- `--scale_lr`: Scale/diagonal parameters LR (default: 0.005) - replaces `--diags_lr`
+- `--l_triangle_lr`: L-triangle parameters LR (default: 0.001) - replaces `--l_triangs_lr`
+- `--white_background` / `-w`: Use white background (for NeRF Synthetic)
+- `--eval`: Use train/test split for evaluation
+
+**Viewer:**
+- `--port`: Viewer port (default: 8080)
+- `--disable_viewer`: Disable live viewer
 
 ### Training Scripts for Batch Processing
 
@@ -176,9 +154,7 @@ Experiment scripts are organized in the `scripts/` directory by category:
 - `scripts/ablations/` - Ablation study scripts (nerf_synthetic, deepdrr, deepdrr_entangled)
 - `scripts/tests/` - Development and debugging scripts (ct_data, dicom, etc.)
 
-These scripts iterate through dataset subdirectories, train models, render at multiple checkpoints (500, 2000, 7000, 15000, 30000 iterations), and compute metrics.
-
-**See [scripts/README.md](scripts/README.md) for detailed documentation.**
+See [scripts/README.md](scripts/README.md) for detailed documentation.
 
 ## Rendering and Evaluation
 
@@ -195,7 +171,15 @@ python render.py -m <model_path> --iteration 30000
 python render.py -m <model_path> --skip_train
 ```
 
-**Note:** The codebase uses `render_flash` by default ([render.py:18](render.py#L18)) for faster rendering.
+### Live Viewing
+
+```bash
+# View trained model interactively
+python view.py -m <model_path> --ply <ply_file> --mode ndgs
+
+# Custom port
+python view.py --ply <ply_file> --mode ndgs --port 8080
+```
 
 ### Compute Metrics
 
@@ -224,15 +208,15 @@ python tools/evaluation/full_eval.py -o <pretrained_models_dir> --skip_training 
 python tools/evaluation/full_eval.py -m <images_dir> --skip_training --skip_rendering
 ```
 
-**See [tools/README.md](tools/README.md) for more utility scripts.**
+See [tools/README.md](tools/README.md) for more utility scripts.
 
 ## Project Structure
 
 ```
 6dgs-iclr/
 ├── Core Scripts (Root)
-│   ├── train.py, render.py, metrics.py  # Main pipeline
-│   └── run.sh                           # Master experiment runner
+│   ├── train.py, render.py, metrics.py, view.py  # Main pipeline
+│   └── run.sh                                      # Master experiment runner
 │
 ├── tools/                               # Utility scripts
 │   ├── preprocessing/                   # Data preparation
@@ -254,7 +238,7 @@ python tools/evaluation/full_eval.py -m <images_dir> --skip_training --skip_rend
     └── submodules/                      # CUDA extensions
 ```
 
-**See [ORGANIZATION.md](ORGANIZATION.md) for complete documentation.**
+See [ORGANIZATION.md](ORGANIZATION.md) for complete documentation.
 
 ## Code Architecture
 
@@ -262,49 +246,181 @@ python tools/evaluation/full_eval.py -m <images_dir> --skip_training --skip_rend
 
 1. **Scene Management** (`scene/`)
    - `Scene`: Loads datasets, manages cameras, handles train/test splits
-   - Multiple `GaussianModel` implementations for different Gaussian representations
+   - Multiple `GaussianModel` implementations for different representations
    - `dataset_readers.py`: Parsers for COLMAP, NeRF Synthetic, and custom formats
    - `cameras.py`: Camera parameter handling
 
 2. **Gaussian Models** (`scene/gaussian_model_*.py`)
-   - `gaussian_model.py`: Base 3DGS model
-   - `gaussian_model_ndgs_sh.py`: Current active model (NDGS with spherical harmonics)
-   - `gaussian_model_ddgs.py`, `gaussian_model_combined.py`, etc.: Variant implementations
-   - `gaussian_model_dgs.py`: DGS-specific implementation
+   - **`gaussian_model_ndgs.py`**: Primary N-DGS implementation (single SH)
+     - Supports both 6DGS and 7DGS
+     - Learnable lambda opacity support
+     - Unified naming with dual parametrization
+     - Optimized viewer with pointer-swap masking
 
-   **To switch models:** Modify the `MODE` variable in [scene/__init__.py:21](scene/__init__.py#L21)
+   - **`gaussian_model_ndgs_2sh.py`**: Dual SH N-DGS implementation
+     - Two sets of SH features for multi-view consistency
+     - Color interpolation in viewer
+     - Same structure as ndgs.py except for dual SH handling
 
-3. **Rendering** (`gaussian_renderer/`)
+   - **`gaussian_model.py`**: Base 3DGS model
+   - **`gaussian_model_ddgs.py`**: DDGS variant
+   - **`gaussian_model_ubs.py`**: UBS-specific implementation
+
+   **To switch models:** Use `--mode` argument: `ndgs`, `ndgs-2sh`, `ddgs`, `3dgs`, `ubs`
+
+3. **Live Viewer** (`scene/gaussian_viewer.py`)
+   - Viser-based real-time training viewer
+   - Features:
+     - Time animation controls (7DGS only)
+     - Dual SH color blending slider (ndgs-2sh only)
+     - Opacity filtering (percentile or absolute threshold)
+     - Cutting plane support
+     - Render mode switching (RGB, Alpha, Depth, Normal)
+     - FPS monitoring
+   - **Performance**: Optimized masking with tensor views (no per-frame allocation)
+
+4. **Rendering** (`gaussian_renderer/`)
    - `__init__.py`: Main differentiable rendering functions
-   - `network_gui.py`: Real-time viewer communication
+   - `network_gui.py`: Real-time viewer communication (legacy SIBR support)
 
-4. **Utilities** (`utils/`)
-   - `ndgs_utils.py`: NDGS-specific utilities (Cholesky decomposition, covariance handling)
+5. **Utilities** (`utils/`)
+   - `ndgs_utils.py`: N-DGS-specific utilities (Cholesky decomposition, covariance handling)
    - `loss_utils.py`: Loss functions (L1, SSIM)
    - `graphics_utils.py`: Graphics math (FOV, projection, point clouds)
    - `sh_utils.py`: Spherical harmonics utilities
 
-5. **Training Arguments** (`arguments/`)
-   - `ModelParams`: Dataset/model paths, resolution, background color
+6. **Training Arguments** (`arguments/__init__.py`)
+   - `ModelParams`: Dataset/model paths, resolution, background color, **learnable_lambda_opc flag**
    - `PipelineParams`: Rendering pipeline configuration
-   - `OptimizationParams`: Learning rates, densification parameters
+   - `OptimizationParams`: Learning rates (updated parameter names), densification parameters
 
 ### Key Training Loop Details
 
 The training loop ([train.py](train.py)) includes:
-- **Adaptive densification**: Points are densified based on position gradient threshold (controlled by `--densify_grad_threshold`, `--densification_interval`, `--densify_from_iter`, `--densify_until_iter`)
-- **Opacity reset**: Periodic opacity reset every 3000 iterations (by default)
+- **Adaptive densification**: Points densified based on position gradient threshold
+- **Opacity reset**: Periodic opacity reset every 3000 iterations
 - **Spherical harmonics degree increase**: SH degree increases every 1000 iterations
-- **Multi-view training**: Can train with multiple views per iteration (`pipe.mv` parameter)
-- **Network viewer support**: Can connect SIBR viewer during training for real-time visualization
+- **Live viewer**: Web-based real-time monitoring with Viser
+- **7DGS time support**: Timestamp handling throughout pipeline
 
-### NDGS-Specific Architecture
+### N-DGS-Specific Architecture
 
-The NDGS model uses:
-- **6D covariance representation**: Stores lower-triangular Cholesky decomposition (`_diags`, `_l_triangs`)
-- **Projection vectors**: 8 projection vectors per Gaussian for direction-aware rendering
-- **Custom rasterization**: Uses modified rasterization with covariance handling
-- Functions in `utils/ndgs_utils.py`: `create_cholesky()`, `create_cholesky_v2()`, `strip_lower_diag()`
+The N-DGS models use:
+- **N-D covariance representation**: 6×6 or 7×7 full covariance matrices
+- **Unified parameter naming**: `_scale` and `_l_triangle` (replaces old `diags`/`l_triangs`)
+- **Dual parametrization support**:
+  - NDGS-style: Direct diagonal-l_triangle with exp/sigmoid activations
+  - UBS-style: Rotation-scale-l_triangle with softplus/identity activations
+- **Conditional slicing**: View-dependent Gaussian slicing via CUDA kernels
+- **Custom rasterization**: TCGS rasterizer with cutting plane support
+- **Test-time optimization**: Precomputed values (`v_22_inv`, `v_regr`, `direction`, `cov3D_precomp`)
+
+Functions in `utils/ndgs_utils.py`: `create_cholesky()`, `l_triangle_to_covar()`, `strip_lower_diag()`
+
+## Important Implementation Details
+
+### Unified Parameter Naming
+
+**All models now use:**
+- `self._scale`: Scale/diagonal parameters (unified name)
+- `self._l_triangle`: Lower-triangular elements (unified name)
+- Properties: `get_scale`, `get_l_triangle` (apply activation functions)
+
+**Activation functions differ by parametrization:**
+
+**NDGS-style** (`use_rot_scale_l_triangle=False`):
+```python
+self.scale_activation = lambda x: torch.exp(x)  # Diagonal elements
+self.l_triangle_activation = lambda x: torch.sigmoid(x) * 2.0 - 1.0  # Bounded
+```
+
+**UBS-style** (`use_rot_scale_l_triangle=True`):
+```python
+self.scale_activation = torch.nn.functional.softplus  # Smooth positive
+self.l_triangle_activation = lambda x: x  # Identity (first 3 encode rotation)
+```
+
+### 7DGS Time Dimension Support
+
+**Parameters:**
+- `self._mean_time`: Per-Gaussian time parameter [N, 1]
+- `viewpoint_camera.timestamp`: Per-frame timestamp value (0.0 - 1.0)
+
+**Key locations:**
+- Initialization: `create_from_pcd()` - initialize time to 0.5
+- Conditional query: `slice_gaussian()` - concatenate `[view_dir, timestamp]`
+- Viewer control: `view_tcgs()` - pass `render_tab_state.timestamp` to camera
+- PLY I/O: `save_ply()`/`load_ply()` - handle time parameter with backward compatibility
+
+### Learnable Lambda Opacity
+
+**Purpose**: Per-Gaussian learnable opacity scaling for view-dependent control
+
+**Implementation:**
+```python
+# In __init__:
+self.learnable_lambda_opc = learnable_lambda_opc
+if learnable_lambda_opc:
+    self._lambda_opc = nn.Parameter(...)  # Learnable
+else:
+    self._lambda_opc = torch.ones(...)  # Fixed
+
+# In rendering:
+if self.learnable_lambda_opc:
+    opacity = self.get_opacity * pdf_cond * self.get_lambda_opc
+else:
+    opacity = self.get_opacity * pdf_cond
+```
+
+**Argument:** `--learnable_lambda_opc` (boolean flag in `ModelParams`)
+
+### Optimized Viewer Masking
+
+**Old approach (inefficient):**
+```python
+# Save all tensors
+original_xyz = self._xyz
+# ...
+# Modify self
+self._xyz = self._xyz[mask]
+# Render
+# Restore
+self._xyz = original_xyz
+```
+
+**New approach (efficient):**
+```python
+# Create masked views (just tensor slices, no copies)
+_xyz_masked = self._xyz[mask]
+# Swap pointers (O(1) operation)
+orig_xyz, self._xyz = self._xyz, _xyz_masked
+# Render
+# Restore pointers
+self._xyz = orig_xyz
+```
+
+**Location:** `view_tcgs()` method in:
+- `gaussian_model_ndgs.py`: lines 1088-1148
+- `gaussian_model_ndgs_2sh.py`: lines 1146-1205
+
+### Dual SH Support (ndgs-2sh only)
+
+**Structure:**
+```python
+# Single SH (ndgs.py):
+self._features_dc = torch.empty(0)
+self._features_rest = torch.empty(0)
+
+# Dual SH (ndgs_2sh.py):
+self._features_dc = [torch.empty(0), torch.empty(0)]  # Two sets
+self._features_rest = [torch.empty(0), torch.empty(0)]
+```
+
+**Viewer blending:**
+```python
+# In viewer (ndgs_2sh only):
+shs = (1.0 - color_interpolation) * self.shs[0] + color_interpolation * self.shs[1]
+```
 
 ## Dataset Structure
 
@@ -330,6 +446,23 @@ The NDGS model uses:
 └── test/             # Test images
 ```
 
+### JSON with Time/Cutting Plane Support
+
+```json
+{
+  "camera_angle_x": 0.857,
+  "frames": [
+    {
+      "file_path": "./images/img_001.jpg",
+      "transform_matrix": [...],
+      "timestamp": 0.5,      // Optional: time value for 7DGS (0.0 - 1.0)
+      "x_threshold": 5.0,    // Optional: cutting plane position
+      "color_idx": 0         // Optional: color index for dual SH (0 or 1)
+    }
+  ]
+}
+```
+
 ### Data Preprocessing
 
 ```bash
@@ -343,49 +476,23 @@ python tools/preprocessing/colmap_convert.py -s <location> --skip_matching [--re
 python tools/preprocessing/cloud_dataset_preprocessing.py
 ```
 
-**See [tools/README.md](tools/README.md) for detailed preprocessing documentation.**
-
-## SIBR Viewer (Interactive Visualization)
-
-### Build SIBR Viewer
-
-```bash
-cd SIBR_viewers
-cmake -Bbuild . -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j24 --target install
-```
-
-### Real-time Viewer
-
-```bash
-# View trained model
-./SIBR_viewers/bin/SIBR_gaussianViewer_app -m <model_path>
-
-# Specify resolution
-./SIBR_viewers/bin/SIBR_gaussianViewer_app -m <model_path> --rendering-size 1920 1080
-```
-
-### Network Viewer (During Training)
-
-```bash
-# Connect to running training process
-./SIBR_viewers/bin/SIBR_remoteGaussian_app
-
-# Specify connection
-./SIBR_viewers/bin/SIBR_remoteGaussian_app --ip <ip> --port 6009
-```
+See [tools/README.md](tools/README.md) for detailed preprocessing documentation.
 
 ## Development Notes
 
 ### Switching Between Model Variants
 
-To switch between different Gaussian model implementations, edit the `MODE` variable in [scene/__init__.py:21](scene/__init__.py#L21):
+Use the `--mode` argument:
 
-```python
-MODE = "ndgs"  # Options: "3dgs", "ndgs", "ddgs", "ddndgs", "combined", "x-gaussian"
+```bash
+python train.py --mode ndgs         # N-DGS single SH (default)
+python train.py --mode ndgs-2sh     # N-DGS dual SH
+python train.py --mode ddgs         # Deformable DGS
+python train.py --mode 3dgs         # Standard 3DGS
+python train.py --mode ubs          # UBS variant
 ```
 
-This controls which `GaussianModel` class is imported and used throughout the codebase.
+The mode is selected in [scene/__init__.py](scene/__init__.py) via `get_gaussian_model()` factory function.
 
 ### Output Structure
 
@@ -393,6 +500,19 @@ Trained models are saved to `output/<model_name>/` with:
 - `point_cloud/iteration_<N>/point_cloud.ply`: Gaussian parameters at iteration N
 - `cameras.json`: Camera parameters
 - Rendered images in subdirectories when using `render.py`
+
+### PLY File Format
+
+**New unified naming** (v3.0+):
+- Position: `x`, `y`, `z`
+- Normal: `nx`, `ny`, `nz`
+- Features: `f_dc_*`, `f_rest_*` (or dual lists for ndgs-2sh)
+- Covariance: `scale_*`, `l_triangle_*` (unified names)
+- Opacity: `opacity`
+- Lambda opacity: `lambda_opc` (if learnable_lambda_opc=True)
+- Time: `mean_time` (if input_dim=7)
+
+**Backward compatibility**: Old files with `diags_*`/`l_triangs_*` load automatically.
 
 ### Git Submodules
 
@@ -405,13 +525,33 @@ git clone <repo_url> --recursive
 git submodule update --init --recursive
 ```
 
-**Note:** The `.gitmodules` file has been modified (shown in git status) and some submodules (like `simple-knn`) have been reorganized.
-
 ## Common Issues
 
 - **VRAM limitations**: Reduce `--densify_grad_threshold`, increase `--densification_interval`, or decrease `--densify_until_iter`. Set `--test_iterations -1` to avoid testing memory spikes.
-- **Large-scale scenes**: Lower `--position_lr_init`, `--position_lr_final`, and `--scaling_lr` (try 0.3x or 0.1x of defaults)
-- **Building CUDA extensions**: Ensure CUDA toolkit version matches PyTorch CUDA version and Visual Studio is properly configured (Windows)
+- **Large-scale scenes**: Lower learning rates: `--position_lr_init 0.000016 --scale_lr 0.001`
+- **Building CUDA extensions**: Ensure CUDA toolkit version matches PyTorch CUDA version
+- **NaN losses**: Reduce learning rates for covariance parameters (`--scale_lr`, `--l_triangle_lr`)
+- **Slow convergence**: Try UBS-style parametrization: `--use_rot_scale_l_triangle`
+
+## Key Files for Common Tasks
+
+### Adding New Model Features
+- `scene/gaussian_model_ndgs.py` - Primary model implementation
+- `scene/gaussian_model_ndgs_2sh.py` - Dual SH variant (keep consistent with ndgs.py)
+- `arguments/__init__.py` - Add new command-line arguments
+
+### Modifying Training Loop
+- `train.py` - Main training loop
+- `utils/loss_utils.py` - Loss functions
+- `gaussian_renderer/__init__.py` - Rendering functions
+
+### Viewer Modifications
+- `scene/gaussian_viewer.py` - Viewer state and UI controls
+- Model `view_tcgs()` method - Viewer rendering logic
+
+### Rasterization Changes
+- `submodules/tcgs_speedy_rasterizer/` - TCGS CUDA kernels
+- `submodules/gsplat/` - N-DGS conditional slicing operations
 
 ## Citation
 
