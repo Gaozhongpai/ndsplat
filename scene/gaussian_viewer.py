@@ -52,7 +52,11 @@ class GaussianViewer(Viewer):
         if input_dim == 7:
             panel_label += " (with Time)"
         server.gui.set_panel_label(panel_label)
-        server.gui.configure_theme(control_width="large")
+        server.gui.configure_theme(
+            control_width="large",
+            dark_mode=True,
+            brand_color=(255, 211, 105),
+        )
         if share_url:
             server.request_share_url()
 
