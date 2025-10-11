@@ -379,10 +379,31 @@ class GaussianModel:
         if self.active_sh_degree < self.max_sh_degree:
             self.active_sh_degree += 1
         
-    def create_from_pcd(self, pcd : BasicPointCloud, spatial_lr_scale : float):
+    def create_from_pcd(self, pcd : BasicPointCloud, spatial_lr_scale : float, mcmc_cap_max=None, densification_strategy="standard"):
+        """
+        Initialize Gaussians from point cloud data.
+
+        Args:
+            pcd: Point cloud data with points and colors
+            spatial_lr_scale: Spatial learning rate scale
+            mcmc_cap_max: Maximum number of Gaussians for MCMC (optional)
+            densification_strategy: "standard" or "mcmc" (default: "standard")
+        """
         self.spatial_lr_scale = spatial_lr_scale
-        fused_point_cloud = torch.tensor(np.asarray(pcd.points)).float().cuda()
-        fused_color = RGB2SH(torch.tensor(np.asarray(pcd.colors)).float().cuda())
+
+        # Get point cloud as numpy array
+        pcd_points = np.asarray(pcd.points)
+        pcd_colors = np.asarray(pcd.colors)
+
+        # Apply random sampling if MCMC is enabled and points exceed cap
+        if densification_strategy == "mcmc" and mcmc_cap_max is not None and len(pcd_points) > mcmc_cap_max:
+            print(f"\n[MCMC Init] Point cloud has {len(pcd_points)} points, sampling {mcmc_cap_max} for initialization")
+            sampled_indices = np.random.choice(len(pcd_points), mcmc_cap_max, replace=False)
+            pcd_points = pcd_points[sampled_indices]
+            pcd_colors = pcd_colors[sampled_indices]
+
+        fused_point_cloud = torch.tensor(pcd_points).float().cuda()
+        fused_color = RGB2SH(torch.tensor(pcd_colors).float().cuda())
         
         features = torch.zeros((fused_color.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda()
         features[:, :3, 0 ] = fused_color
@@ -1026,18 +1047,22 @@ class GaussianModel:
 
             stored_state = self.optimizer.state.get(group["params"][0], None)
 
-            if inds is not None:
-                # Reset only specified indices
-                stored_state["exp_avg"][inds] = 0
-                stored_state["exp_avg_sq"][inds] = 0
-            else:
-                # Reset all
-                stored_state["exp_avg"] = torch.zeros_like(tensor)
-                stored_state["exp_avg_sq"] = torch.zeros_like(tensor)
+            if stored_state is not None:
+                if inds is not None:
+                    # Reset only specified indices
+                    stored_state["exp_avg"][inds] = 0
+                    stored_state["exp_avg_sq"][inds] = 0
+                else:
+                    # Reset all
+                    stored_state["exp_avg"] = torch.zeros_like(tensor)
+                    stored_state["exp_avg_sq"] = torch.zeros_like(tensor)
 
-            del self.optimizer.state[group["params"][0]]
-            group["params"][0] = nn.Parameter(tensor.requires_grad_(True))
-            self.optimizer.state[group["params"][0]] = stored_state
+                del self.optimizer.state[group["params"][0]]
+                group["params"][0] = nn.Parameter(tensor.requires_grad_(True))
+                self.optimizer.state[group["params"][0]] = stored_state
+            else:
+                # No optimizer state yet, just update the parameter
+                group["params"][0] = nn.Parameter(tensor.requires_grad_(True))
 
             optimizable_tensors[group["name"]] = group["params"][0]
 

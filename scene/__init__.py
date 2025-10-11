@@ -50,13 +50,15 @@ class Scene:
 
     gaussians : "GaussianModel"
 
-    def __init__(self, args : ModelParams, gaussians : "GaussianModel", load_iteration=None, shuffle=True, resolution_scales=[1.0]):
+    def __init__(self, args : ModelParams, gaussians : "GaussianModel", load_iteration=None, shuffle=True, resolution_scales=[1.0], opt_params=None):
         """b
         :param path: Path to colmap scene main folder.
+        :param opt_params: Optional optimization parameters for MCMC initialization
         """
         self.model_path = args.model_path
         self.loaded_iter = None
         self.gaussians = gaussians
+        self.opt_params = opt_params
 
         if load_iteration:
             if load_iteration == -1:
@@ -112,11 +114,20 @@ class Scene:
             #     self.gaussians.save_ply_decoupled()
             # self.gaussians.save_ply_decoupled(os.path.join(point_cloud_path, "point_cloud.ply"))
         else:
+            # Prepare MCMC parameters for initialization if provided
+            mcmc_cap_max = None
+            densification_strategy = "standard"
+            if self.opt_params is not None:
+                mcmc_cap_max = getattr(self.opt_params, 'mcmc_cap_max', None)
+                densification_strategy = getattr(self.opt_params, 'densification_strategy', "standard")
+
             if "ddgs" in args.mode:
                 self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent, args.source_path)
-            elif args.mode == "ubs" or args.mode == "ndgs":
-                # UBS and N-DGS models only need spatial_lr_scale (no sh_degree parameter)
-                self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent)
+            elif "ubs" in args.mode or "ndgs" in args.mode:
+                # UBS and N-DGS models support MCMC initialization sampling
+                self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent,
+                                                mcmc_cap_max=mcmc_cap_max,
+                                                densification_strategy=densification_strategy)
             else:
                 self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent)
 
