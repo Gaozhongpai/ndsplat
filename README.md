@@ -9,14 +9,15 @@ This repository implements **N-Dimensional Gaussian Splatting (N-DGS)**, extendi
 ### Key Features
 
 - **6D/7D Gaussian Representation**: Extends 3D Gaussians with view-direction (6D) or view-direction + time (7D)
-- **Conditional Slicing**: CUDA-accelerated conditional Gaussian slicing based on viewing direction
-- **Learnable Lambda Opacity**: Per-Gaussian learnable opacity scaling for fine-grained control
+- **Conditional Slicing (NDGS)**: CUDA-accelerated conditional Gaussian slicing based on viewing direction
+- **Beta-Based Bandwidth Control (UBS)**: Uncertainty-aware rendering with per-dimension beta parameters
+- **Learnable Lambda Opacity (NDGS)**: Per-Gaussian learnable opacity scaling for fine-grained control
 - **Dual Parametrization**: Switch between NDGS-style and UBS-style covariance parametrization
 - **TCGS Rasterization**: High-performance rasterization with support for cutting planes
 - **Live Training Viewer**: Real-time web-based viewer with time animation and dual SH blending
 - **Dual SH Support**: Multi-view color consistency with interpolatable SH features (ndgs-2sh model)
 - **Optimized Viewer**: Efficient tensor view masking for real-time filtering without copying
-- **Multiple Model Modes**: Configurable architecture supporting NDGS, DDGS, 3DGS, and UBS modes
+- **Multiple Model Modes**: Configurable architecture supporting NDGS, NDGS-2SH, DDGS, 3DGS, and UBS modes
 
 ## Installation
 
@@ -122,9 +123,14 @@ python train.py -s <path to dataset> --mode ndgs --use_rot_scale_l_triangle
 
 # Dual SH for multi-view consistency
 python train.py -s <path to dataset> --mode ndgs-2sh --input_dim 6
+
+# UBS with beta-based bandwidth control
+python train.py -s <path to dataset> --mode ubs --input_dim 6
 ```
 
 The training script will automatically launch a live viewer on port 8080 (unless disabled with `--disable_viewer`). Open your browser to `http://localhost:8080` to monitor training in real-time.
+
+**Note:** UBS and NDGS use different approaches for view-dependent rendering. See [Model Modes](#model-modes) section for comparison.
 
 <details>
 <summary><span style="font-weight: bold;">Command Line Arguments for train.py</span></summary>
@@ -320,9 +326,12 @@ Each Gaussian is represented with:
 - **6DGS**: `[x, y, z, nx, ny, nz]` - position and normal direction
 - **7DGS**: `[x, y, z, nx, ny, nz, t]` - position, normal, and time
 - **Covariance** (N×N): Parameterized by scale/diagonal and lower triangular elements
-- **Color**: Spherical harmonics coefficients (single or dual)
+- **Color**:
+  - NDGS: Spherical harmonics coefficients (single or dual)
+  - UBS: Direct RGB values
 - **Opacity**: Sigmoid-activated opacity value
-- **Lambda Opacity** (optional): Learnable per-Gaussian opacity scaling
+- **Lambda Opacity** (NDGS, optional): Learnable per-Gaussian opacity scaling
+- **Beta Parameters** (UBS): Per-dimension bandwidth control [N, input_dim-2]
 
 ### Parametrizations
 
@@ -361,9 +370,51 @@ This codebase supports multiple Gaussian splatting variants:
 - **ndgs-2sh**: N-Dimensional GS with dual SH features for multi-view consistency
 - **ddgs**: Deformable DGS variant
 - **3dgs**: Standard 3D Gaussian Splatting
-- **ubs**: UBS variant
+- **ubs**: Uncertainty-Based Splatting with beta parameters
 
 Select the mode with `--mode <mode_name>` during training.
+
+### NDGS vs UBS: Choosing the Right Model
+
+Both NDGS and UBS extend 3DGS to N-dimensions (6D/7D) but use different approaches for view-dependent rendering:
+
+| Feature | NDGS (`--mode ndgs`) | UBS (`--mode ubs`) |
+|---------|----------------------|---------------------|
+| **Color Model** | Spherical harmonics (DC + rest) | Direct RGB values |
+| **View-Dependence** | Conditional Gaussian slicing | Beta-adjusted covariance |
+| **Opacity Control** | Lambda opacity (learnable/fixed) | Beta parameters per dimension |
+| **Parametrization** | Flexible (NDGS/UBS-style) | Fixed rot-scale-l_triangle |
+| **Best For** | General scenes, SH appearance | Uncertainty quantification, direct RGB |
+| **Complexity** | More complex (SH evaluation) | Simpler (direct RGB) |
+| **Test Optimization** | Precomputed values supported | Full computation each frame |
+
+**Usage Examples:**
+
+```shell
+# NDGS with default NDGS-style parametrization
+python train.py -s <dataset> --mode ndgs --input_dim 6
+
+# NDGS with UBS-style parametrization (hybrid approach)
+python train.py -s <dataset> --mode ndgs --use_rot_scale_l_triangle
+
+# NDGS with learnable lambda opacity
+python train.py -s <dataset> --mode ndgs --learnable_lambda_opc
+
+# UBS with beta-based bandwidth control
+python train.py -s <dataset> --mode ubs --input_dim 6
+
+# UBS with 7D (time dimension)
+python train.py -s <dataset> --mode ubs --input_dim 7
+```
+
+**Key Differences:**
+
+1. **Color Representation**: NDGS uses SH for rich view-dependent appearance, UBS uses direct RGB for simplicity
+2. **View-Dependence**: NDGS slices N-D Gaussians, UBS adjusts covariance bandwidth with beta parameters
+3. **Viewer Filtering**: NDGS filters by opacity (percentile/threshold), UBS filters by beta quantiles
+4. **Opacity Control**: NDGS uses lambda opacity scalar, UBS uses per-dimension beta vectors
+
+See [CLAUDE.md](CLAUDE.md) for detailed technical comparison and implementation details.
 
 ## Code Structure
 

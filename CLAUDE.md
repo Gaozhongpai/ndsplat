@@ -10,9 +10,69 @@ This is a research implementation of **N-Dimensional Gaussian Splatting (N-DGS)*
 - **Dual SH Support**: Multi-view consistency via interpolatable spherical harmonics
 - **3DGS**: Original 3D Gaussian Splatting baseline
 - **DDGS**: Deformable DGS variant
-- **UBS**: Alternative parametrization approach
+- **UBS**: Uncertainty-Based Splatting with beta parameters for bandwidth control
 
 The current primary modes are **ndgs** and **ndgs-2sh** (configured via `--mode` argument).
+
+### UBS vs NDGS: Key Architectural Differences
+
+Both UBS and NDGS extend 3DGS to N-dimensions (6D/7D) but take fundamentally different approaches to view-dependent rendering:
+
+**NDGS (N-Dimensional Gaussian Splatting)** - [gaussian_model_ndgs.py](scene/gaussian_model_ndgs.py):
+- **Color Representation**: Spherical harmonics (DC + rest coefficients) for rich view-dependent appearance
+- **View-Dependence Method**: Conditional Gaussian slicing via `slice_gaussian_ndgs()` CUDA kernel
+- **Opacity Control**: Lambda opacity parameter (learnable via `--learnable_lambda_opc` or fixed at 0.35)
+- **Parametrization**: Flexible - supports both NDGS-style (diagonal-l_triangle) and UBS-style (rot-scale-l_triangle)
+- **Covariance Construction**: CUDA-accelerated with test-time optimization (precomputed `v_22_inv`, `v_regr`, `cov3D_precomp`)
+- **Mean Parameter**: Normalized direction vector [N, 3] (+ time [N, 1] for 7DGS)
+- **Best For**: General N-D scene representation, multi-view consistency, flexible parametrization, SH appearance
+
+**UBS (Uncertainty-Based Splatting)** - [gaussian_model_ubs.py](scene/gaussian_model_ubs.py):
+- **Color Representation**: Direct RGB values (no SH encoding) for simpler, faster evaluation
+- **View-Dependence Method**: Beta-adjusted conditional covariance with per-dimension bandwidth control
+- **Opacity Control**: Beta parameters [N, input_dim-2] for uncertainty modeling (spatial + view dimensions)
+- **Parametrization**: Fixed rot-scale-l_triangle with beta-scaled regression
+- **Covariance Construction**: Beta adjustment `v_regr * beta_adj` with clamping `torch.clamp_max(beta/4.0, 1.0)`
+- **Mean Parameter**: Random uniform [-1, 1] in non-spatial dimensions
+- **Best For**: Uncertainty quantification, direct RGB control, bandwidth-aware view synthesis, simplified color model
+
+**Key Implementation Differences:**
+
+1. **Rendering Pipeline**:
+   ```python
+   # NDGS (ndgs.py lines 869-879)
+   m_cond, cov3D_precomp, pdf_cond = self.slice_gaussian(cond_params, c_dim=3, lambda_opc=lambda_opc)
+   opacity = self.get_opacity * pdf_cond  # Optional: * self.get_lambda_opc
+
+   # UBS (ubs.py lines 1024-1028)
+   means, convs, opacities = self.get_cond_mean_convariance_opacity(query)
+   # Beta controls covariance bandwidth via beta-adjusted regression
+   ```
+
+2. **Conditional Covariance**:
+   ```python
+   # NDGS: CUDA kernel (gsplat.slice_gaussian_ndgs)
+   # Clean slicing with lambda_opc scaling
+
+   # UBS: Beta-adjusted (ubs.py lines 866-872)
+   v_regr = torch.bmm(v_12, v_22_inv)
+   v_regr_beta = v_regr * beta_adj.unsqueeze(1)  # Per-dimension beta scaling
+   v_cond = v_11 - torch.bmm(v_regr_beta, v_21)
+   ```
+
+3. **Viewer Filtering**:
+   ```python
+   # NDGS: Opacity-based (ndgs.py lines 951-979)
+   mask = opacity > opacity_threshold  # Or percentile-based
+
+   # UBS: Beta-based (ubs.py lines 1201-1225)
+   mask = quantile_mask(self._beta, b_xyz=(0,100), b_view=(0,100), b_time=(0,100))
+   ```
+
+**When to Use Which:**
+- **NDGS**: Standard novel view synthesis, need SH appearance modeling, want flexible parametrization options, require test-time optimization
+- **UBS**: Uncertainty-aware rendering, direct RGB is sufficient, need per-dimension bandwidth control, want simpler color representation
+- **NDGS + `--use_rot_scale_l_triangle`**: Hybrid approach using NDGS slicing with UBS-style covariance parametrization
 
 ## Recent Major Changes (v3.0)
 
@@ -352,7 +412,7 @@ self.l_triangle_activation = lambda x: x  # Identity (first 3 encode rotation)
 - Viewer control: `view_tcgs()` - pass `render_tab_state.timestamp` to camera
 - PLY I/O: `save_ply()`/`load_ply()` - handle time parameter with backward compatibility
 
-### Learnable Lambda Opacity
+### Learnable Lambda Opacity (NDGS only)
 
 **Purpose**: Per-Gaussian learnable opacity scaling for view-dependent control
 
@@ -373,6 +433,62 @@ else:
 ```
 
 **Argument:** `--learnable_lambda_opc` (boolean flag in `ModelParams`)
+
+**Location:** NDGS models only (not applicable to UBS which uses beta parameters instead)
+
+### Beta Parameters (UBS only)
+
+**Purpose**: Uncertainty modeling and per-dimension bandwidth control for view-dependent rendering
+
+**Structure:**
+```python
+# Beta shape: [N, input_dim-2]
+# For 6DGS: [N, 4] = [spatial_beta, view_x_beta, view_y_beta, view_z_beta]
+# For 7DGS: [N, 5] = [spatial_beta, view_x_beta, view_y_beta, view_z_beta, time_beta]
+
+# Beta activation (ubs.py line 58)
+def beta_activation(betas):
+    return 4.0 * torch.exp(betas)
+```
+
+**Initialization (ubs.py lines 246-252):**
+```python
+betas = torch.zeros((N, self.input_dim - 2), device="cuda")
+if self.input_dim == 7:
+    betas[:, 1:4] -= 3  # Initialize view betas lower for 7DGS
+```
+
+**Usage in Conditional Covariance (ubs.py lines 829-843):**
+```python
+# Get beta parameters (exclude first beta used elsewhere)
+beta = self.get_beta[:, 1:]  # [N, C] where C = input_dim-3
+beta_adj = torch.clamp_max(beta / 4.0, 1.0)  # Clamp to prevent over-smoothing
+
+# Apply beta adjustment to regression matrix
+v_regr = torch.bmm(v_12, v_22_inv)
+v_regr_beta = v_regr * beta_adj.unsqueeze(1)  # Per-dimension scaling
+
+# Compute beta-adjusted conditional covariance
+v_change = torch.bmm(v_regr_beta, v_21)
+v_cond = v_11 - v_change  # Reduced influence = wider bandwidth
+```
+
+**Beta Viewer Filtering (ubs.py lines 1201-1225):**
+```python
+# Quantile-based filtering on beta dimensions
+mask = quantile_mask(
+    self._beta,
+    b_xyz=(0, 100),   # Spatial beta percentile range
+    b_view=(0, 100),  # View beta percentile range
+    b_time=(0, 100)   # Time beta percentile range (7DGS only)
+)
+```
+
+**Key Differences from Lambda Opacity:**
+- **Beta**: Per-dimension bandwidth control (separate for spatial, view-x, view-y, view-z, time)
+- **Lambda**: Single scalar opacity scaling per Gaussian
+- **Beta**: Affects conditional covariance computation (bandwidth)
+- **Lambda**: Affects final opacity value (visibility)
 
 ### Optimized Viewer Masking
 
