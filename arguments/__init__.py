@@ -56,7 +56,7 @@ class ModelParams(ParamGroup):
         self.eval = False
         self.mode = "ndgs"  # Options: "ddgs", "3dgs", "ubs", "ndgs"
         self.input_dim = 6  # Gaussian dimension: 6 for 6DGS/UBS, 7 for 7DGS (with time)
-        self.use_rot_scale_l_triangle = False  # If True: use rotation-scale-l_triangle (UBS-style), If False: use diagonal-l_triangle (NDGS-style)
+        self.use_rot_scale_l_triangle = True  # If True: use rotation-scale-l_triangle (UBS-style), If False: use diagonal-l_triangle (NDGS-style)
         self.learnable_lambda_opc = False  # If True: make lambda_opc a learnable parameter per Gaussian
         super().__init__(parser, "Loading Parameters", sentinel)
 
@@ -89,11 +89,6 @@ class OptimizationParams(ParamGroup):
         self.opacity_lr = 0.05
         self.scaling_lr = 0.005
         self.rotation_lr = 0.001
-
-        # 6DGS-specific learning rates
-        self.diags_lr = 1e-2
-        self.l_triangs_lr = 1e-2
-        self.color_lr = 0.005
 
         # UBS-specific learning rates
         self.mean_lr = 0.0001

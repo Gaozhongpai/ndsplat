@@ -442,8 +442,8 @@ class GaussianModel:
         ]
 
         # Support both old and new naming for learning rates
-        scale_lr = training_args.scale_lr if hasattr(training_args, 'scale_lr') else training_args.diags_lr
-        l_triangle_lr = training_args.l_triangle_lr if hasattr(training_args, 'l_triangle_lr') else training_args.l_triangs_lr
+        scale_lr = training_args.scale_lr
+        l_triangle_lr = training_args.l_triangle_lr
 
         l.append({'params': [self._scale], 'lr': scale_lr, "name": "scale"})
         l.append({'params': [self._l_triangle], 'lr': l_triangle_lr, "name": "l_triangle"})
