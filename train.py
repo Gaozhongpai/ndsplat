@@ -307,6 +307,9 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
 
+    # Return viewer to keep it alive after training if needed
+    return viewer
+
 def prepare_output_and_logger(args):    
     if not args.model_path:
         if os.getenv('OAR_JOB_ID'):
@@ -380,6 +383,7 @@ if __name__ == "__main__":
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
+    parser.add_argument("--keep_viewer", action="store_true", help="Keep the viewer running after training completes")
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
 
@@ -390,7 +394,19 @@ if __name__ == "__main__":
 
     # Configure and run training
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
-    training(lp.extract(args), op.extract(args), pp.extract(args), vp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from)
+    viewer = training(lp.extract(args), op.extract(args), pp.extract(args), vp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from)
 
     # All done
     print("\nTraining complete.")
+
+    # Keep viewer running if requested
+    if viewer is not None and args.keep_viewer:
+        print("\nViewer is still running. Press Ctrl+C to exit.")
+        try:
+            # Keep the main thread alive so viewer server stays up
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("\nShutting down viewer...")
+    elif viewer is not None:
+        print("\nViewer will shut down. Use --keep_viewer to keep it running after training.")

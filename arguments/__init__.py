@@ -46,7 +46,7 @@ class ParamGroup:
 
 class ModelParams(ParamGroup):
     def __init__(self, parser, sentinel=False):
-        self.sh_degree = 3
+        self.sh_degree = 1
         self._source_path = ""
         self._model_path = ""
         self._images = "images"
@@ -54,7 +54,7 @@ class ModelParams(ParamGroup):
         self._white_background = False
         self.data_device = "cuda"
         self.eval = False
-        self.mode = "ndgs"  # Options: "ddgs", "3dgs", "ubs", "ndgs", "ndgs-2sh"
+        self.mode = "ndgs-2sh"  # Options: "ddgs", "3dgs", "ubs", "ndgs", "ndgs-2sh"
         self.input_dim = 6  # Gaussian dimension: 6 for 6DGS/UBS, 7 for 7DGS (with time)
         self.use_rot_scale_l_triangle = True  # If True: use rotation-scale-l_triangle (UBS-style), If False: use diagonal-l_triangle (NDGS-style)
         self.learnable_lambda_opc = False  # If True: make lambda_opc a learnable parameter per Gaussian
@@ -106,7 +106,7 @@ class OptimizationParams(ParamGroup):
         self.opacity_reset_interval = 3000
 
         # Densification strategy: "standard" or "mcmc"
-        self.densification_strategy = "mcmc"  # Options: "standard" (gradient-based), "mcmc" (MCMC sampling)
+        self.densification_strategy = "standard"  # Options: "standard" (gradient-based), "mcmc" (MCMC sampling)
 
         # MCMC-specific parameters (only used when densification_strategy="mcmc")
         self.mcmc_cap_max = 300_000  # Maximum number of Gaussians
