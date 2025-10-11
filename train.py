@@ -118,27 +118,17 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
         server.scene.set_up_direction("+y")
 
         # Use BetaViewer for UBS mode, GaussianViewer for others
-        if "ubs" in mode:
-            viewer = BetaViewer(
-                server=server,
-                render_fn=lambda camera_state, render_tab_state: gaussians.view_tcgs(
-                    camera_state, render_tab_state
-                ),
-                input_dim=getattr(gaussians, 'input_dim', 6),
-                mode="training",
-                share_url=False,
-            )
-        else:
-            viewer = GaussianViewer(
-                server=server,
-                render_fn=lambda camera_state, render_tab_state: gaussians.view_tcgs(
-                    camera_state, render_tab_state
-                ),
-                input_dim=getattr(gaussians, 'input_dim', 6),
-                mode="training",
-                share_url=False,
-                scene_bounds=x_bounds,  # Pass X bounds for cutting plane slider
-            )
+        ViewerClass = BetaViewer if "ubs" in mode else GaussianViewer
+        viewer = ViewerClass(
+            server=server,
+            render_fn=lambda camera_state, render_tab_state: gaussians.view_tcgs(
+                camera_state, render_tab_state
+            ),
+            input_dim=getattr(gaussians, 'input_dim', 6),
+            mode="training",
+            share_url=False,
+            scene_bounds=x_bounds,  # Pass X bounds for cutting plane slider
+        )
 
         # Set initial camera via client connection
         @server.on_client_connect

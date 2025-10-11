@@ -39,41 +39,13 @@ class BetaViewer(Viewer):
     ):
         self.input_dim = input_dim
         self.scene_bounds = scene_bounds
-        self._wrapped_render_fn = render_fn
-
-        # Wrap the render function to handle deprecated nerfview API
-        # that passes (width, height) tuple instead of BetaRenderTabState
-        def render_fn_wrapper(camera_state, render_tab_state):
-            # Handle deprecated API: img_wh = (width, height)
-            if isinstance(render_tab_state, tuple):
-                W, H = render_tab_state
-                # Convert to BetaRenderTabState with default values
-                render_tab_state = BetaRenderTabState(
-                    preview_render=False,
-                    render_width=W,
-                    render_height=H,
-                    viewer_width=W,
-                    viewer_height=H,
-                    timestamp=0.0,
-                    render_mode="RGB",
-                    b_xyz=(0, 100),
-                    b_view=(0, 100),
-                    b_time=(0, 100),
-                    backgrounds=(0.0, 0.0, 0.0),
-                    near_plane=0.01,
-                    far_plane=500.0,
-                    radius_clip=0.0,
-                    x_threshold=float('inf'),
-                    total_count_number=0,
-                    rendered_count_number=0,
-                    fps=0.0,
-                    _fps_smoothed=0.0,
-                    _fps_alpha=0.1
-                )
-            return self._wrapped_render_fn(camera_state, render_tab_state)
-
-        super().__init__(server, render_fn_wrapper, mode=mode)
-        server.gui.set_panel_label("Beta Splatting Viewer")
+        super().__init__(server, render_fn, mode=mode)
+        # Configure the panel
+        panel_label = f"{input_dim}D Beta Splatting Viewer"
+        if input_dim == 7:
+            panel_label += " (with Time)"
+        server.gui.set_panel_label(panel_label)
+        server.gui.configure_theme(control_width="large")
         if share_url:
             server.request_share_url()
 

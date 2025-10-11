@@ -1143,7 +1143,7 @@ class GaussianModel:
             sh_degree=0,
             campos=campos,
             prefiltered=False,
-            # x_threshold=float('inf'),
+            x_threshold=viewpoint_camera.x_threshold if viewpoint_camera.x_threshold is not None else float('inf'),
             use_tcgs=use_tcgs,
             tight_snugbox=tight_snugbox,
             debug=False,
