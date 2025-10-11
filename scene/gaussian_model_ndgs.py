@@ -331,8 +331,8 @@ class GaussianModel:
         
     @property
     def get_rotation_scale(self):
-        v = self.get_pc_v     
-        
+        v = self.get_pc_v
+
         # Slice the 6D covariance matrix
         v_11 = v[:, :3, :3]
         v_12 = v[:, :3, 3:]
@@ -350,6 +350,30 @@ class GaussianModel:
         det = torch.linalg.det(rotation)
         rotation[:, :, -1] *= det.sign().unsqueeze(-1)
         return rotation, scale
+
+    @property
+    def get_xyz_covariance(self):
+        """
+        Get 3x3 spatial covariance matrix for MCMC noise injection.
+
+        Returns the conditional covariance of spatial coordinates (xyz)
+        given the view-dependent parameters. This is used for MCMC
+        densification to add covariance-weighted spatial noise.
+
+        Returns:
+            Spatial covariance matrix [N, 3, 3]
+        """
+        v = self.get_pc_v
+
+        # Slice the ND covariance matrix
+        v_11 = v[:, :3, :3]
+        v_12 = v[:, :3, 3:]
+        v_21 = v[:, 3:, :3]
+        v_22 = v[:, 3:, 3:]
+
+        # Compute conditional covariance (3x3 spatial block)
+        v_cond = v_11 - torch.bmm(v_12, torch.linalg.inv(v_22).bmm(v_21))
+        return v_cond
 
     def oneupSHdegree(self):
         if self.active_sh_degree < self.max_sh_degree:
@@ -815,6 +839,220 @@ class GaussianModel:
     def add_densification_stats(self, viewspace_point_tensor, update_filter):
         self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True)
         self.denom[update_filter] += 1
+
+    # MCMC-based densification methods (adapted from UBS)
+    def _update_params(self, idxs, ratio):
+        """Update parameters for MCMC sampling with opacity adjustment.
+
+        Args:
+            idxs: Indices of Gaussians to sample from
+            ratio: Number of times each Gaussian is sampled (for opacity adjustment)
+
+        Returns:
+            Tuple of updated parameters
+        """
+        new_opacity = 1.0 - torch.pow(
+            1.0 - self.get_opacity[idxs, 0], 1.0 / (ratio + 1)
+        )
+        new_opacity = torch.clamp(
+            new_opacity.unsqueeze(-1),
+            max=1.0 - torch.finfo(torch.float32).eps,
+            min=0.005,
+        )
+        new_opacity = self.inverse_opacity_activation(new_opacity)
+        return (
+            self._xyz[idxs],
+            self._features_dc[idxs],
+            self._features_rest[idxs],
+            self._mean[idxs],
+            new_opacity,
+            self._lambda_opc[idxs],
+            self._scale[idxs],
+            self._l_triangle[idxs],
+        )
+
+    def _sample_alives(self, probs, num, alive_indices=None):
+        """Sample from alive Gaussians with probability weighting.
+
+        Args:
+            probs: Probability weights for sampling
+            num: Number of samples to draw
+            alive_indices: Indices of alive Gaussians (optional)
+
+        Returns:
+            sampled_idxs: Indices of sampled Gaussians
+            ratio: Count of how many times each index was sampled
+        """
+        probs = probs / (probs.sum() + torch.finfo(torch.float32).eps)
+        sampled_idxs = torch.multinomial(probs, num, replacement=True)
+        if alive_indices is not None:
+            sampled_idxs = alive_indices[sampled_idxs]
+        ratio = torch.bincount(sampled_idxs)[sampled_idxs]
+        return sampled_idxs, ratio
+
+    def relocate_gs(self, dead_mask=None):
+        """Relocate dead Gaussians by sampling from alive ones (MCMC).
+
+        This method implements MCMC-style densification by relocating dead Gaussians
+        (low opacity) to positions sampled from alive Gaussians, weighted by opacity.
+
+        Args:
+            dead_mask: Boolean mask indicating dead Gaussians to relocate
+        """
+        if dead_mask is None or dead_mask.sum() == 0:
+            return
+
+        alive_mask = ~dead_mask
+        dead_indices = dead_mask.nonzero(as_tuple=True)[0]
+        alive_indices = alive_mask.nonzero(as_tuple=True)[0]
+
+        if alive_indices.shape[0] <= 0:
+            return
+
+        # Sample from alive ones based on opacity
+        probs = self.get_opacity[alive_indices, 0]
+        reinit_idx, ratio = self._sample_alives(
+            alive_indices=alive_indices, probs=probs, num=dead_indices.shape[0]
+        )
+
+        (
+            relocated_xyz,
+            relocated_features_dc,
+            relocated_features_rest,
+            relocated_mean,
+            relocated_opacity,
+            relocated_lambda_opc,
+            relocated_scale,
+            relocated_l_triangle,
+        ) = self._update_params(reinit_idx, ratio=ratio)
+
+        # Copy relocated parameters to dead Gaussian positions
+        self._xyz.index_copy_(0, dead_indices, relocated_xyz)
+        self._features_dc.index_copy_(0, dead_indices, relocated_features_dc)
+        self._features_rest.index_copy_(0, dead_indices, relocated_features_rest)
+        self._mean.index_copy_(0, dead_indices, relocated_mean)
+        self._opacity.index_copy_(0, dead_indices, relocated_opacity)
+        self._lambda_opc.index_copy_(0, dead_indices, relocated_lambda_opc)
+        self._scale.index_copy_(0, dead_indices, relocated_scale)
+        self._l_triangle.index_copy_(0, dead_indices, relocated_l_triangle)
+
+        # Update opacity at source indices
+        self._opacity.index_copy_(0, reinit_idx, self._opacity.index_select(0, dead_indices))
+
+        # Reset optimizer state for updated indices
+        self.replace_tensors_to_optimizer(inds=reinit_idx)
+
+    def add_new_gs(self, cap_max):
+        """Add new Gaussians by sampling from existing ones (MCMC).
+
+        This method implements MCMC-style densification by adding new Gaussians
+        sampled from existing ones, weighted by opacity, up to a maximum cap.
+
+        Args:
+            cap_max: Maximum number of Gaussians allowed
+
+        Returns:
+            Number of Gaussians added
+        """
+        current_num_points = self._opacity.shape[0]
+        target_num = min(cap_max, int(1.02 * current_num_points))
+        num_gs = max(0, target_num - current_num_points)
+
+        if num_gs <= 0:
+            return 0
+
+        # Sample based on opacity
+        probs = self.get_opacity.squeeze(-1)
+        add_idx, ratio = self._sample_alives(probs=probs, num=num_gs)
+
+        (
+            new_xyz,
+            new_features_dc,
+            new_features_rest,
+            new_mean,
+            new_opacity,
+            new_lambda_opc,
+            new_scale,
+            new_l_triangle,
+        ) = self._update_params(add_idx, ratio=ratio)
+
+        # Update opacity at source indices
+        self._opacity[add_idx] = new_opacity
+
+        # Add new Gaussians
+        self.densification_postfix(
+            new_xyz,
+            new_features_dc,
+            new_features_rest,
+            new_mean,
+            new_opacity,
+            new_lambda_opc,
+            new_scale,
+            new_l_triangle,
+        )
+
+        # Reset optimizer state for source indices
+        self.replace_tensors_to_optimizer(inds=add_idx)
+
+        return num_gs
+
+    def replace_tensors_to_optimizer(self, inds=None):
+        """Replace tensors in optimizer, optionally resetting specific indices.
+
+        Args:
+            inds: Indices to reset in optimizer state (None = reset all)
+        """
+        tensors_dict = {
+            "xyz": self._xyz,
+            "f_dc": self._features_dc,
+            "f_rest": self._features_rest,
+            "mean": self._mean,
+            "opacity": self._opacity,
+            "lambda_opc": self._lambda_opc,
+            "scale": self._scale,
+            "l_triangle": self._l_triangle,
+        }
+
+        optimizable_tensors = {}
+        for group in self.optimizer.param_groups:
+            if group["name"] == "color_net":
+                continue
+            assert len(group["params"]) == 1
+            tensor = tensors_dict[group["name"]]
+
+            if tensor.numel() == 0:
+                optimizable_tensors[group["name"]] = group["params"][0]
+                continue
+
+            stored_state = self.optimizer.state.get(group["params"][0], None)
+
+            if inds is not None:
+                # Reset only specified indices
+                stored_state["exp_avg"][inds] = 0
+                stored_state["exp_avg_sq"][inds] = 0
+            else:
+                # Reset all
+                stored_state["exp_avg"] = torch.zeros_like(tensor)
+                stored_state["exp_avg_sq"] = torch.zeros_like(tensor)
+
+            del self.optimizer.state[group["params"][0]]
+            group["params"][0] = nn.Parameter(tensor.requires_grad_(True))
+            self.optimizer.state[group["params"][0]] = stored_state
+
+            optimizable_tensors[group["name"]] = group["params"][0]
+
+        self._xyz = optimizable_tensors["xyz"]
+        self._features_dc = optimizable_tensors["f_dc"]
+        self._features_rest = optimizable_tensors["f_rest"]
+        self._mean = optimizable_tensors["mean"]
+        self._opacity = optimizable_tensors["opacity"]
+        self._lambda_opc = optimizable_tensors["lambda_opc"]
+        self._scale = optimizable_tensors["scale"]
+        self._l_triangle = optimizable_tensors["l_triangle"]
+
+        torch.cuda.empty_cache()
+
+        return optimizable_tensors
 
     def render_tcgs(self, viewpoint_camera, render_mode="RGB", scaling_modifier=1.0, use_tcgs=False, tight_snugbox=False):
         """

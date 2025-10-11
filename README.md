@@ -126,6 +126,9 @@ python train.py -s <path to dataset> --mode ndgs-2sh --input_dim 6
 
 # UBS with beta-based bandwidth control
 python train.py -s <path to dataset> --mode ubs --input_dim 6
+
+# UBS with MCMC densification strategy
+python train.py -s <path to dataset> --mode ubs --densification_strategy mcmc --mcmc_cap_max 300000
 ```
 
 The training script will automatically launch a live viewer on port 8080 (unless disabled with `--disable_viewer`). Open your browser to `http://localhost:8080` to monitor training in real-time.
@@ -163,12 +166,19 @@ The training script will automatically launch a live viewer on port 8080 (unless
   - Note: Old names (`--diags_lr`, `--l_triangs_lr`) still work for backward compatibility
 
 #### Densification Parameters
+- `--densification_strategy`: Strategy for Gaussian densification (`standard` or `mcmc`) - default: `standard`
+  - `standard`: Gradient-based clone, split, and prune (all models)
+  - `mcmc`: MCMC sampling-based refinement (UBS only)
 - `--densify_from_iter`: Start densification iteration - default: `500`
 - `--densify_until_iter`: Stop densification iteration - default: `15000`
-- `--densify_grad_threshold`: Gradient threshold for densification - default: `0.0002`
-- `--densification_interval`: Densification frequency - default: `100`
-- `--opacity_reset_interval`: Opacity reset frequency - default: `3000`
+- `--densify_grad_threshold`: Gradient threshold for densification (standard only) - default: `0.0002`
+- `--densification_interval`: Densification frequency (standard only) - default: `100`
+- `--opacity_reset_interval`: Opacity reset frequency (standard only) - default: `3000`
 - `--percent_dense`: Scene extent percentage for densification - default: `0.01`
+- `--mcmc_cap_max`: Maximum number of Gaussians (MCMC only) - default: `300000`
+- `--mcmc_refine_interval`: MCMC refinement frequency (MCMC only) - default: `100`
+- `--mcmc_add_rate`: Rate of adding new Gaussians (MCMC only, currently unused) - default: `0.25`
+- `--mcmc_remove_rate`: Rate of removing Gaussians (MCMC only, currently unused) - default: `0.1`
 
 #### Viewer Parameters
 - `--port`: Viewer port - default: `8080`

@@ -357,11 +357,72 @@ See [ORGANIZATION.md](ORGANIZATION.md) for complete documentation.
 ### Key Training Loop Details
 
 The training loop ([train.py](train.py)) includes:
-- **Adaptive densification**: Points densified based on position gradient threshold
-- **Opacity reset**: Periodic opacity reset every 3000 iterations
+- **Adaptive densification**: Two strategies available (see below)
+- **Opacity reset**: Periodic opacity reset every 3000 iterations (standard strategy only)
 - **Spherical harmonics degree increase**: SH degree increases every 1000 iterations
 - **Live viewer**: Web-based real-time monitoring with Viser
 - **7DGS time support**: Timestamp handling throughout pipeline
+
+### Densification Strategies
+
+The codebase now supports two densification strategies controlled by `--densification_strategy`:
+
+**Standard Densification** (`--densification_strategy standard`, default):
+- **Method**: Gradient-based clone, split, and prune
+- **Clone**: Small Gaussians with high gradients are duplicated
+- **Split**: Large Gaussians with high gradients are split into N pieces (default N=2)
+- **Prune**: Low opacity and oversized Gaussians are removed
+- **Opacity Reset**: Periodic reset every 3000 iterations
+- **Parameters**:
+  - `--densify_grad_threshold 0.0002`: Gradient threshold for densification
+  - `--densification_interval 100`: Frequency of densification checks
+  - `--densify_from_iter 500`: Start densification iteration
+  - `--densify_until_iter 15000`: Stop densification iteration
+  - `--opacity_reset_interval 3000`: Frequency of opacity reset
+- **Best For**: Standard 3DGS, NDGS, DDGS models; proven stable convergence
+- **Location**: `densify_and_prune()` method in all Gaussian models
+
+**MCMC Densification** (`--densification_strategy mcmc`):
+- **Method**: Markov Chain Monte Carlo sampling-based refinement
+- **Relocate**: Dead Gaussians (opacity < 0.005) are relocated by sampling from alive ones
+- **Add**: New Gaussians are added incrementally up to a maximum cap
+- **No Pruning**: Gaussians are relocated rather than removed
+- **No Opacity Reset**: Opacity is maintained and used for sampling probabilities
+- **Parameters**:
+  - `--mcmc_cap_max 300000`: Maximum number of Gaussians
+  - `--mcmc_refine_interval 100`: Frequency of MCMC refinement
+  - `--mcmc_add_rate 0.25`: Rate of adding new Gaussians (currently unused, hardcoded to 1.02x)
+  - `--mcmc_remove_rate 0.1`: Rate of removing Gaussians (currently unused)
+- **Best For**: UBS model (currently only UBS has `relocate_gs()` and `add_new_gs()` methods)
+- **Location**: `relocate_gs()` and `add_new_gs()` in [gaussian_model_ubs.py](scene/gaussian_model_ubs.py:717-792)
+
+**Usage Examples:**
+
+```bash
+# Standard densification (default)
+python train.py -s <dataset> --mode ndgs --densification_strategy standard
+
+# MCMC densification with UBS
+python train.py -s <dataset> --mode ubs --densification_strategy mcmc --mcmc_cap_max 300000
+
+# MCMC densification with custom parameters
+python train.py -s <dataset> --mode ubs --densification_strategy mcmc \
+    --mcmc_cap_max 500000 \
+    --mcmc_refine_interval 50
+```
+
+**Implementation Notes:**
+
+1. **Fallback Behavior**: If MCMC is requested for a model that doesn't support it (e.g., NDGS), the training script falls back to standard densification with a warning.
+
+2. **MCMC Algorithm** (UBS):
+   - **Relocation**: `relocate_gs()` samples from alive Gaussians weighted by opacity, adjusts opacity using `1.0 - (1.0 - opacity)^(1/(ratio+1))`, and copies to dead locations
+   - **Addition**: `add_new_gs()` grows the Gaussian count to `min(cap_max, 1.02 * current_count)` by sampling from existing Gaussians
+
+3. **Standard Algorithm** (all models):
+   - **Clone**: Duplicates small Gaussians (scale < 1% of scene extent) with high gradients
+   - **Split**: Samples N new positions from large Gaussians (scale > 1% of scene extent) with high gradients, scales them down by 0.8x
+   - **Prune**: Removes Gaussians with opacity < threshold or screen-space radius > threshold
 
 ### N-DGS-Specific Architecture
 

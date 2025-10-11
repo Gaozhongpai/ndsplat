@@ -222,18 +222,72 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
                 scene.save(iteration)
 
             # Densification
-            if iteration < opt.densify_until_iter:
-                # Keep track of max radii in image-space for pruning
-                gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
-                gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
+            # Use MCMC-specific densify_until_iter if MCMC strategy is chosen (default 25k vs standard 15k)
+            densify_until = opt.mcmc_densify_until_iter if opt.densification_strategy == "mcmc" else opt.densify_until_iter
 
-                if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
-                    size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                    min_opacity = 0.01 if "ndgs" in mode else 0.005
-                    gaussians.densify_and_prune(opt.densify_grad_threshold, min_opacity, scene.cameras_extent, size_threshold, iteration)
-                
-                if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
-                    gaussians.reset_opacity()
+            if iteration < densify_until:
+                if opt.densification_strategy == "standard":
+                    # Standard gradient-based densification (clone, split, prune)
+                    # Keep track of max radii in image-space for pruning
+                    gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
+                    gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
+
+                    if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
+                        size_threshold = 20 if iteration > opt.opacity_reset_interval else None
+                        min_opacity = 0.01 if "ndgs" in mode else 0.005
+                        gaussians.densify_and_prune(opt.densify_grad_threshold, min_opacity, scene.cameras_extent, size_threshold, iteration)
+
+                    if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
+                        gaussians.reset_opacity()
+
+                elif opt.densification_strategy == "mcmc":
+                    # MCMC-based densification (relocate dead Gaussians, add new ones)
+                    # Only apply MCMC strategy if model supports it (NDGS/UBS have relocate_gs and add_new_gs methods)
+                    if hasattr(gaussians, 'relocate_gs') and hasattr(gaussians, 'add_new_gs'):
+                        if iteration % opt.mcmc_refine_interval == 0:
+                            # Relocate dead Gaussians based on opacity
+                            dead_mask = gaussians.get_opacity.squeeze() < 0.005
+                            gaussians.relocate_gs(dead_mask=dead_mask)
+
+                            # Add new Gaussians up to cap_max
+                            num_added = gaussians.add_new_gs(cap_max=opt.mcmc_cap_max)
+                            if num_added > 0 and iteration % (opt.mcmc_refine_interval * 10) == 0:
+                                print(f"\n[ITER {iteration}] MCMC: Added {num_added} Gaussians, Total: {gaussians.get_xyz.shape[0]}")
+
+                            # Add covariance-weighted noise to Gaussian positions (UBS-style MCMC enhancement)
+                            # This helps break symmetry and encourages exploration after MCMC operations
+                            if hasattr(gaussians, 'get_xyz_covariance'):
+                                xyz_covariance = gaussians.get_xyz_covariance  # [N, 3, 3] spatial covariance
+
+                                # Generate random noise weighted by opacity
+                                # High opacity (visible) → near 0 noise, Low opacity (invisible) → more noise
+                                noise = (
+                                    torch.randn_like(gaussians._xyz)  # [N, 3] random Gaussian noise
+                                    * torch.pow(1 - gaussians.get_opacity, 100)  # Weight by (1-opacity)^100
+                                    * opt.noise_lr  # Scale by noise_lr hyperparameter
+                                    * gaussians.update_learning_rate(iteration)  # Scale by current xyz learning rate
+                                )
+
+                                # Transform noise by spatial covariance to align with Gaussian shape
+                                noise = torch.bmm(xyz_covariance, noise.unsqueeze(-1)).squeeze(-1)
+
+                                # Add noise to positions
+                                gaussians._xyz.data.add_(noise)
+                    else:
+                        print(f"\nWarning: MCMC densification requested but model {mode} does not support it. Falling back to standard densification.")
+                        # Fallback to standard densification
+                        gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
+                        gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
+
+                        if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
+                            size_threshold = 20 if iteration > opt.opacity_reset_interval else None
+                            min_opacity = 0.01 if "ndgs" in mode else 0.005
+                            gaussians.densify_and_prune(opt.densify_grad_threshold, min_opacity, scene.cameras_extent, size_threshold, iteration)
+
+                        if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
+                            gaussians.reset_opacity()
+                else:
+                    raise ValueError(f"Unknown densification_strategy: {opt.densification_strategy}. Choose 'standard' or 'mcmc'.")
 
             # Optimizer step
             if iteration < opt.iterations:

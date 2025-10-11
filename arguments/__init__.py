@@ -105,6 +105,17 @@ class OptimizationParams(ParamGroup):
         self.densify_grad_threshold = 0.0002
         self.opacity_reset_interval = 3000
 
+        # Densification strategy: "standard" or "mcmc"
+        self.densification_strategy = "mcmc"  # Options: "standard" (gradient-based), "mcmc" (MCMC sampling)
+
+        # MCMC-specific parameters (only used when densification_strategy="mcmc")
+        self.mcmc_cap_max = 300_000  # Maximum number of Gaussians
+        self.mcmc_refine_interval = 100  # Interval for MCMC refinement
+        self.mcmc_densify_until_iter = 25_000  # MCMC densifies longer than standard (25k vs 15k)
+        self.mcmc_add_rate = 0.25  # Rate of adding new Gaussians (fraction per refinement)
+        self.mcmc_remove_rate = 0.1  # Rate of removing Gaussians (fraction per refinement)
+        self.noise_lr = 100.0  # Noise learning rate for MCMC spatial perturbation (higher = more noise)
+
         # Loss parameters
         self.lambda_dssim = 0.2
         self.random_background = False
