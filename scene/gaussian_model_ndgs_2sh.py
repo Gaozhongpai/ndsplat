@@ -918,6 +918,7 @@ class GaussianModel:
         else:
             lambda_opc = 0.35
 
+        is_test = use_tcgs  # Use_tcgs indicates test mode here
         if is_test:
             # Test mode: use precomputed values
             m_cond, pdf_cond = self.slice_gaussian_test(cond_params, lambda_opc=lambda_opc)
@@ -1170,7 +1171,6 @@ class GaussianModel:
                 viewpoint_camera,
                 render_mode=render_tab_state.render_mode,
                 use_tcgs=True,
-                is_test=False,
                 scaling_modifier=1.0,
                 tight_snugbox=render_tab_state.tight_snugbox
             )
