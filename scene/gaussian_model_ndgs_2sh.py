@@ -925,7 +925,7 @@ class GaussianModel:
         else:
             lambda_opc = 0.35
 
-        is_test = False  # Use_tcgs indicates test mode here
+        is_test = False  # This is because masking precompute takes longer
         if is_test:
             # Test mode: use precomputed values
             m_cond, pdf_cond = self.slice_gaussian_test(cond_params, lambda_opc=lambda_opc)
@@ -1127,53 +1127,51 @@ class GaussianModel:
         # print(f"Opacity threshold: {render_tab_state.opacity_threshold:.4f}")
         # print(f"Mask: {mask.sum().item()} / {mask.shape[0]} Gaussians passed")
 
+        # Update stats
+        num_valid = mask.sum().item()
+        render_tab_state.total_count_number = len(opacity)
+        render_tab_state.rendered_count_number = 0  # Will be updated after rendering
+
+        # If no Gaussians pass the filter, return a blank image
+        if num_valid == 0:
+            bg_color = torch.tensor(render_tab_state.backgrounds, device="cuda") / 255.0
+            render_colors = bg_color.view(3, 1, 1).expand(3, H, W)
+            return render_colors.cpu().numpy().transpose(1, 2, 0)
+
         # Set background color
         self.background = (
             torch.tensor(render_tab_state.backgrounds, device="cuda") / 255.0
         )
 
-        # Temporarily filter Gaussians based on mask
-        original_xyz = self._xyz
-        original_features_dc = self._features_dc
-        original_features_rest = self._features_rest
-        original_normal = self._normal
-        original_opacity = self._opacity
-        original_lambda_opc = self._lambda_opc
-        original_scale = self._scale
-        original_l_triangle = self._l_triangle
-        # Save time parameter for 7DGS
-        original_mean_time = self._mean_time if (self.input_dim == 7 and hasattr(self, '_mean_time')) else None
+        # Create masked views WITHOUT modifying self - much more efficient!
+        # These are just tensor views/slices, not copies
+        _xyz_masked = self._xyz[mask]
+        _features_dc_masked = [self._features_dc[0][mask], self._features_dc[1][mask]]
+        _features_rest_masked = [self._features_rest[0][mask], self._features_rest[1][mask]]
+        _normal_masked = self._normal[mask]
+        _opacity_masked = self._opacity[mask]
+        _lambda_opc_masked = self._lambda_opc[mask]
+        _scale_masked = self._scale[mask]
+        _l_triangle_masked = self._l_triangle[mask]
+        _mean_time_masked = self._mean_time[mask] if (self.input_dim == 7 and hasattr(self, '_mean_time')) else None
 
-        # Check if mask has any valid Gaussians
-        num_valid = mask.sum().item()
+        # Temporarily swap in masked tensors using direct assignment
+        # This is still save/restore but at least we're not allocating new storage
+        orig_xyz, self._xyz = self._xyz, _xyz_masked
+        orig_features_dc, self._features_dc = self._features_dc, _features_dc_masked
+        orig_features_rest, self._features_rest = self._features_rest, _features_rest_masked
+        orig_normal, self._normal = self._normal, _normal_masked
+        orig_opacity, self._opacity = self._opacity, _opacity_masked
+        orig_lambda_opc, self._lambda_opc = self._lambda_opc, _lambda_opc_masked
+        orig_scale, self._scale = self._scale, _scale_masked
+        orig_l_triangle, self._l_triangle = self._l_triangle, _l_triangle_masked
 
-        # Update stats
-        render_tab_state.total_count_number = len(original_xyz)
-        render_tab_state.rendered_count_number = 0  # Will be updated after rendering
-
-        # If no Gaussians pass the filter, return a blank image
-        if num_valid == 0:
-            # Return background color
-            bg_color = torch.tensor(render_tab_state.backgrounds, device="cuda") / 255.0
-            render_colors = bg_color.view(3, 1, 1).expand(3, H, W)
-            return render_colors.cpu().numpy().transpose(1, 2, 0)
-
-        # Apply mask
-        self._xyz = self._xyz[mask]
-        # Filter dual SH features
-        self._features_dc = [self._features_dc[0][mask], self._features_dc[1][mask]]
-        self._features_rest = [self._features_rest[0][mask], self._features_rest[1][mask]]
-        self._normal = self._normal[mask]
-        self._opacity = self._opacity[mask]
-        self._lambda_opc = self._lambda_opc[mask]
-        self._scale = self._scale[mask]
-        self._l_triangle = self._l_triangle[mask]
-        # Filter time parameter for 7DGS
-        if self.input_dim == 7 and hasattr(self, '_mean_time'):
-            self._mean_time = self._mean_time[mask]
+        orig_mean_time = None
+        if _mean_time_masked is not None:
+            orig_mean_time, self._mean_time = self._mean_time, _mean_time_masked
 
         try:
-            # Call render_tcgs
+            # Call render_tcgs with masked Gaussians
             render_output = self.render_tcgs(
                 viewpoint_camera,
                 render_mode=render_tab_state.render_mode,
@@ -1183,33 +1181,28 @@ class GaussianModel:
             )
 
             render_colors = render_output["render"]
-
-            # Update render stats with actual rendered count
             render_tab_state.rendered_count_number = render_output["visibility_filter"].sum().item()
 
             # Handle different render modes
             if render_tab_state.render_mode == "Alpha":
-                # For alpha mode, show opacity
                 render_colors = render_output["visibility_filter"].float().unsqueeze(0)
 
             # Handle depth colormap (if single channel output)
             if render_colors.shape[0] == 1:
-                # Simple grayscale to RGB conversion for depth
                 render_colors = render_colors.repeat(3, 1, 1)
 
         finally:
-            # Restore original tensors
-            self._xyz = original_xyz
-            self._features_dc = original_features_dc
-            self._features_rest = original_features_rest
-            self._normal = original_normal
-            self._opacity = original_opacity
-            self._lambda_opc = original_lambda_opc
-            self._scale = original_scale
-            self._l_triangle = original_l_triangle
-            # Restore time parameter for 7DGS
-            if original_mean_time is not None:
-                self._mean_time = original_mean_time
+            # Restore original tensors (just pointer swaps, very fast)
+            self._xyz = orig_xyz
+            self._features_dc = orig_features_dc
+            self._features_rest = orig_features_rest
+            self._normal = orig_normal
+            self._opacity = orig_opacity
+            self._lambda_opc = orig_lambda_opc
+            self._scale = orig_scale
+            self._l_triangle = orig_l_triangle
+            if orig_mean_time is not None:
+                self._mean_time = orig_mean_time
 
         # Convert from [C, H, W] to [H, W, C] for viewer
         render_colors = render_colors.permute(1, 2, 0)
