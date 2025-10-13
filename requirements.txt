@@ -1,8 +1,8 @@
 # Core dependencies
-torch==2.3.0
-torchvision==0.18.0
-torchaudio==2.3.0
-numpy<2.0.0
+torch #==2.3.0
+torchvision #==0.18.0
+torchaudio #==2.3.0
+numpy #<2.0.0
 pillow
 
 # Scientific computing and utilities
@@ -13,6 +13,8 @@ pandas
 tabulate
 tqdm
 plyfile==1.1
+splines
+jaxtyping
 
 # Computer vision and image processing
 opencv-python

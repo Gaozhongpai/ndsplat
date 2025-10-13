@@ -54,6 +54,14 @@ def knn(x, K=4):
 
 class GaussianModel:
     def setup_functions(self):
+        def beta_activation_v1(betas):
+            # Stable beta activation with learnable range
+            # Instead of pure exponential, use softplus with clamping
+            # This prevents gradient explosion while maintaining flexibility
+            # Range: softplus(-10) ≈ 0.00005 to softplus(5) ≈ 5.0
+            ## clamped = torch.clamp(betas, min=-10.0, max=10.0)
+            return 5.77 * F.softplus(betas)
+
         def beta_activation(betas):
             return 4.0 * torch.exp(betas)
 
