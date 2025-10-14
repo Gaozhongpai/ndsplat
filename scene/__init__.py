@@ -50,7 +50,7 @@ class Scene:
 
     gaussians : "GaussianModel"
 
-    def __init__(self, args : ModelParams, gaussians : "GaussianModel", load_iteration=None, shuffle=True, resolution_scales=[1.0], opt_params=None):
+    def __init__(self, args : ModelParams, gaussians : "GaussianModel", load_iteration=None, shuffle=True, resolution_scales=[1.0], opt_params=None, load_train_cameras=True, load_test_cameras=True):
         """b
         :param path: Path to colmap scene main folder.
         :param opt_params: Optional optimization parameters for MCMC initialization
@@ -99,10 +99,17 @@ class Scene:
         self.cameras_extent = scene_info.nerf_normalization["radius"]
 
         for resolution_scale in resolution_scales:
-            print("Loading Training Cameras")
-            self.train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args)
-            print("Loading Test Cameras")
-            self.test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args)
+            if load_train_cameras:
+                print("Loading Training Cameras")
+                self.train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args)
+            else:
+                self.train_cameras[resolution_scale] = []
+
+            if load_test_cameras:
+                print("Loading Test Cameras")
+                self.test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args)
+            else:
+                self.test_cameras[resolution_scale] = []
 
         if self.loaded_iter:
             self.gaussians.load_ply(os.path.join(self.model_path,
