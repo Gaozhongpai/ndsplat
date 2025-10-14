@@ -54,7 +54,7 @@ class ModelParams(ParamGroup):
         self._white_background = False
         self.data_device = "cuda"
         self.eval = False
-        self.mode = "ndgs-2sh"  # Options: "ddgs", "3dgs", "ubs", "ndgs", "ndgs-2sh"
+        self.mode = "ndgs"  # Options: "ddgs", "3dgs", "ubs", "ndgs", "ndgs-2sh"
         self.input_dim = 6  # Gaussian dimension: 6 for 6DGS/UBS, 7 for 7DGS (with time)
         self.use_rot_scale_l_triangle = True  # If True: use rotation-scale-l_triangle (UBS-style), If False: use diagonal-l_triangle (NDGS-style)
         self.learnable_lambda_opc = False  # If True: make lambda_opc a learnable parameter per Gaussian
