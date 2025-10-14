@@ -195,9 +195,9 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
         fovx = contents["camera_angle_x"]
 
         if "train" in transformsfile:
-            frames = contents["frames"][:2]
+            frames = contents["frames"] # [:2]
         else:
-            frames = contents["frames"]  # [:20]
+            frames = contents["frames"] # [:20]
 
         for idx, frame in enumerate(tqdm(frames, desc="Reading frame metadata")):
             cam_name = os.path.join(path, frame["file_path"] + extension)
