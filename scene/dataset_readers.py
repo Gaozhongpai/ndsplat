@@ -11,7 +11,6 @@
 
 import os
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from PIL import Image
 from typing import NamedTuple
 from scene.colmap_loader import read_extrinsics_text, read_intrinsics_text, qvec2rotmat, \
@@ -31,7 +30,6 @@ class CameraInfo(NamedTuple):
     T: np.array
     FovY: np.array
     FovX: np.array
-    image: np.array
     image_path: str
     image_name: str
     width: int
@@ -72,11 +70,7 @@ def getNerfppNorm(cam_info):
     return {"translate": translate, "radius": radius}
 
 def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
-    def _load_image(path):
-        with Image.open(path) as img:
-            return img.copy()
-
-    camera_meta = []
+    cam_infos = []
     for key in tqdm(cam_extrinsics, desc="Reading camera metadata"):
         extr = cam_extrinsics[key]
         intr = cam_intrinsics[extr.camera_id]
@@ -102,46 +96,23 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
         image_path = os.path.join(images_folder, os.path.basename(extr.name))
         image_name = os.path.basename(image_path).split(".")[0]
 
-        camera_meta.append({
-            "uid": uid,
-            "R": R,
-            "T": T,
-            "FovY": FovY,
-            "FovX": FovX,
-            "image_path": image_path,
-            "image_name": image_name,
-            "width": width,
-            "height": height,
-        })
-
-    cam_infos = [None] * len(camera_meta)
-    max_workers = min(32, (os.cpu_count() or 1) * 2)
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(_load_image, meta["image_path"]): idx
-            for idx, meta in enumerate(camera_meta)
-        }
-        for future in tqdm(as_completed(futures), total=len(futures), desc="Decoding images"):
-            idx = futures[future]
-            image = future.result()
-            meta = camera_meta[idx]
-            cam_infos[idx] = CameraInfo(
-                uid=meta["uid"],
-                R=meta["R"],
-                T=meta["T"],
-                FovY=meta["FovY"],
-                FovX=meta["FovX"],
-                image=image,
-                image_path=meta["image_path"],
-                image_name=meta["image_name"],
-                width=meta["width"],
-                height=meta["height"],
+        cam_infos.append(
+            CameraInfo(
+                uid=uid,
+                R=R,
+                T=T,
+                FovY=FovY,
+                FovX=FovX,
+                image_path=image_path,
+                image_name=image_name,
+                width=width,
+                height=height,
                 x_threshold=None,
                 label=None,
                 color_idx=None,
                 timestamp=0.0,
             )
-
+        )
     return cam_infos
 
 def fetchPly(path):
@@ -224,11 +195,10 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
         fovx = contents["camera_angle_x"]
 
         if "train" in transformsfile:
-            frames = contents["frames"]  # [:200]
+            frames = contents["frames"][:2]
         else:
             frames = contents["frames"]  # [:20]
 
-        frame_meta = []
         for idx, frame in enumerate(tqdm(frames, desc="Reading frame metadata")):
             cam_name = os.path.join(path, frame["file_path"] + extension)
 
@@ -255,56 +225,27 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
 
             image_path = os.path.join(path, cam_name)
             image_name = Path(cam_name).stem
+            with Image.open(image_path) as image:
+                width, height = image.size
 
-            frame_meta.append({
-                "uid": idx,
-                "R": R,
-                "T": T,
-                "image_path": image_path,
-                "image_name": image_name,
-                "x_threshold": x_threshold,
-                "color_idx": color_idx,
-                "label": label,
-                "timestamp": timestamp,
-            })
-
-    def _load_and_prepare_image(image_path):
-        with Image.open(image_path) as image:
-            im_data = np.array(image.convert("RGBA"))
-        bg = np.array([1, 1, 1]) if white_background else np.array([0, 0, 0])
-        norm_data = im_data / 255.0
-        arr = norm_data[:, :, :3] * norm_data[:, :, 3:4] + bg * (1 - norm_data[:, :, 3:4])
-        return Image.fromarray(np.array(arr * 255.0, dtype=np.byte), "RGB")
-
-    cam_infos = [None] * len(frame_meta)
-    if frame_meta:
-        max_workers = min(32, (os.cpu_count() or 1) * 2)
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {
-                executor.submit(_load_and_prepare_image, meta["image_path"]): idx
-                for idx, meta in enumerate(frame_meta)
-            }
-            for future in tqdm(as_completed(futures), total=len(futures), desc="Decoding images"):
-                idx = futures[future]
-                image = future.result()
-                meta = frame_meta[idx]
-                fovy = focal2fov(fov2focal(fovx, image.size[0]), image.size[1])
-                cam_infos[idx] = CameraInfo(
-                    uid=meta["uid"],
-                    R=meta["R"],
-                    T=meta["T"],
+            fovy = focal2fov(fov2focal(fovx, width), height)
+            cam_infos.append(
+                CameraInfo(
+                    uid=idx,
+                    R=R,
+                    T=T,
                     FovY=fovy,
                     FovX=fovx,
-                    image=image,
-                    image_path=meta["image_path"],
-                    image_name=meta["image_name"],
-                    width=image.size[0],
-                    height=image.size[1],
-                    x_threshold=meta["x_threshold"],
-                    color_idx=meta["color_idx"],
-                    label=meta["label"],
-                    timestamp=meta["timestamp"],
+                    image_path=image_path,
+                    image_name=image_name,
+                    width=width,
+                    height=height,
+                    x_threshold=x_threshold,
+                    color_idx=color_idx,
+                    label=label,
+                    timestamp=timestamp,
                 )
+            )
 
     return cam_infos
 
