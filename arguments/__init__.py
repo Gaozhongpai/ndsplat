@@ -58,6 +58,7 @@ class ModelParams(ParamGroup):
         self.input_dim = 6  # Gaussian dimension: 6 for 6DGS/UBS, 7 for 7DGS (with time)
         self.use_rot_scale_l_triangle = True  # If True: use rotation-scale-l_triangle (UBS-style), If False: use diagonal-l_triangle (NDGS-style)
         self.learnable_lambda_opc = False  # If True: make lambda_opc a learnable parameter per Gaussian
+        self.use_jpeg_compression = False  # If True: use JPEG compression for images to save GPU memory (slower but memory-efficient)
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
@@ -70,7 +71,7 @@ class PipelineParams(ParamGroup):
         self.convert_SHs_python = False
         self.compute_cov3D_python = False
         self.debug = False
-        self.mv = 1
+        self.mv = 4
         super().__init__(parser, "Pipeline Parameters")
 
 class OptimizationParams(ParamGroup):

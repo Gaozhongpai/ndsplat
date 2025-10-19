@@ -196,7 +196,7 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
             render_pkg = render_wrapper(viewpoint_cam, gaussians, pipe, bg, mode)
             image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
             # Loss
-            gt_image = viewpoint_cam.original_image.cuda()
+            gt_image = viewpoint_cam.original_image  # Already on CUDA, no need for .cuda()
             Ll1 = l1_loss(image, gt_image)
             loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
             total_loss = total_loss + loss
@@ -236,8 +236,10 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
 
                     if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                         size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                        min_opacity = 0.01 if "ndgs" in mode else 0.005
+                        min_opacity = 0.005 if "ndgs" in mode else 0.005 ## RSNA 0.005, paper 0.01
                         gaussians.densify_and_prune(opt.densify_grad_threshold, min_opacity, scene.cameras_extent, size_threshold, iteration)
+                        # Clear CUDA cache after densification to free memory from pruned Gaussians
+                        torch.cuda.empty_cache()
 
                     if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                         gaussians.reset_opacity()
@@ -255,6 +257,9 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
                             num_added = gaussians.add_new_gs(cap_max=opt.mcmc_cap_max)
                             if num_added > 0 and iteration % (opt.mcmc_refine_interval * 10) == 0:
                                 print(f"\n[ITER {iteration}] MCMC: Added {num_added} Gaussians, Total: {gaussians.get_xyz.shape[0]}")
+
+                            # Clear CUDA cache after MCMC operations
+                            torch.cuda.empty_cache()
 
                             # Add covariance-weighted noise to Gaussian positions (UBS-style MCMC enhancement)
                             # This helps break symmetry and encourages exploration after MCMC operations

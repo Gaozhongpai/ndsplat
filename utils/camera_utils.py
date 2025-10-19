@@ -11,29 +11,30 @@
 
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from io import BytesIO
 
 from scene.cameras import Camera
 import numpy as np
 import torch
 import torch.nn.functional as F
-from torchvision.io import read_image
+from torchvision.io import read_image, encode_jpeg, decode_jpeg
 from tqdm import tqdm
 from utils.graphics_utils import fov2focal
 
 WARNED = False
 
-def loadCam(args, id, cam_info, resolution_scale, *, resolution=None, image_tensor=None, alpha_mask=None):
+def loadCam(args, id, cam_info, resolution_scale, *, resolution=None, image_tensor=None, alpha_mask=None, compressed_data=None):
     if resolution is None:
         resolution = _compute_target_resolution(args, cam_info, resolution_scale)
 
-    if image_tensor is None:
+    if image_tensor is None and compressed_data is None:
         image_tensor, alpha_mask = _load_image_tensor(
             cam_info.image_path,
             resolution,
             args.white_background
         )
 
-    gt_image = image_tensor[:3, ...]
+    gt_image = image_tensor[:3, ...] if image_tensor is not None else None
     loaded_mask = alpha_mask
 
     return Camera(colmap_id=cam_info.uid, R=cam_info.R, T=cam_info.T,
@@ -41,32 +42,58 @@ def loadCam(args, id, cam_info, resolution_scale, *, resolution=None, image_tens
                   image=gt_image, gt_alpha_mask=loaded_mask,
                   image_name=cam_info.image_name, uid=id,
                   x_threshold=cam_info.x_threshold, color_idx=cam_info.color_idx, label=cam_info.label,
-                  data_device=args.data_device, timestamp=cam_info.timestamp)
+                  data_device=args.data_device, timestamp=cam_info.timestamp,
+                  compressed_data=compressed_data, resolution=resolution,
+                  white_background=args.white_background if compressed_data else None)
 
 def cameraList_from_camInfos(cam_infos, resolution_scale, args):
     camera_list = [None] * len(cam_infos)
     if not cam_infos:
         return camera_list
 
-    max_workers = min(32, (os.cpu_count() or 1) * 2)
+    # Determine whether to use JPEG compression based on user flag or auto-enable for large datasets
+    if hasattr(args, 'use_jpeg_compression'):
+        use_jpeg_compression = args.use_jpeg_compression
+    else:
+        # Auto-enable for large datasets (>1000 images) if flag not specified
+        use_jpeg_compression = len(cam_infos) > 1000
+
+    if use_jpeg_compression:
+        print(f"[INFO] Using JPEG compression for {len(cam_infos)} images to reduce GPU memory usage (~8-10x savings)")
+    else:
+        print(f"[INFO] Loading {len(cam_infos)} images directly to GPU (use --use_jpeg_compression to save memory)")
+
+    max_workers = 4 # min(32, (os.cpu_count() or 1) * 2)
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
-            executor.submit(_prepare_camera_payload, args, idx, cam_info, resolution_scale): idx
+            executor.submit(_prepare_camera_payload, args, idx, cam_info, resolution_scale, use_jpeg_compression): idx
             for idx, cam_info in enumerate(cam_infos)
         }
         with tqdm(total=len(futures), desc="Preparing cameras") as progress:
             for future in as_completed(futures):
                 idx = futures[future]
-                resolution, image_tensor, alpha_mask = future.result()
-                camera_list[idx] = loadCam(
-                    args,
-                    idx,
-                    cam_infos[idx],
-                    resolution_scale,
-                    resolution=resolution,
-                    image_tensor=image_tensor,
-                    alpha_mask=alpha_mask,
-                )
+                if use_jpeg_compression:
+                    resolution, compressed_data, alpha_mask = future.result()
+                    camera_list[idx] = loadCam(
+                        args,
+                        idx,
+                        cam_infos[idx],
+                        resolution_scale,
+                        resolution=resolution,
+                        compressed_data=compressed_data,
+                        alpha_mask=alpha_mask,
+                    )
+                else:
+                    resolution, image_tensor, alpha_mask = future.result()
+                    camera_list[idx] = loadCam(
+                        args,
+                        idx,
+                        cam_infos[idx],
+                        resolution_scale,
+                        resolution=resolution,
+                        image_tensor=image_tensor,
+                        alpha_mask=alpha_mask,
+                    )
                 progress.update(1)
 
     return camera_list
@@ -127,10 +154,69 @@ def _compute_target_resolution(args, cam_info, resolution_scale):
     return (int(orig_w / scale), int(orig_h / scale))
 
 
-def _prepare_camera_payload(args, idx, cam_info, resolution_scale):
+def _prepare_camera_payload(args, idx, cam_info, resolution_scale, use_jpeg_compression=False):
     resolution = _compute_target_resolution(args, cam_info, resolution_scale)
     image_tensor, alpha_mask = _load_image_tensor(cam_info.image_path, resolution, args.white_background)
-    return resolution, image_tensor, alpha_mask
+
+    if use_jpeg_compression:
+        # Compress RGB image to JPEG bytes
+        compressed_data = _compress_image_to_jpeg(image_tensor, alpha_mask)
+        return resolution, compressed_data, alpha_mask
+    else:
+        return resolution, image_tensor, alpha_mask
+
+
+def _compress_image_to_jpeg(image_tensor, alpha_mask, quality=95):
+    """
+    Compress RGB image tensor to JPEG bytes for memory-efficient storage.
+
+    Args:
+        image_tensor: [3, H, W] float tensor in [0, 1]
+        alpha_mask: [1, H, W] float tensor or None
+        quality: JPEG quality (1-100), default 95 for minimal quality loss
+
+    Returns:
+        dict with 'jpeg_bytes' and 'has_alpha' flag
+    """
+    # Convert to uint8 [0, 255] for JPEG encoding
+    rgb_uint8 = (image_tensor * 255.0).clamp(0, 255).byte()
+
+    # Encode to JPEG
+    jpeg_bytes = encode_jpeg(rgb_uint8, quality=quality)
+
+    # Store alpha mask separately if present (usually small)
+    compressed = {
+        'jpeg_bytes': jpeg_bytes.cpu().numpy().tobytes(),  # Store as raw bytes
+        'has_alpha': alpha_mask is not None,
+        'shape': image_tensor.shape  # Store shape for reconstruction
+    }
+
+    return compressed
+
+
+def _decompress_jpeg_to_tensor(compressed_data, resolution, white_background):
+    """
+    Decompress JPEG bytes back to float tensor.
+
+    Args:
+        compressed_data: dict with 'jpeg_bytes' and metadata
+        resolution: target (W, H)
+        white_background: whether white background was used
+
+    Returns:
+        image_tensor: [3, H, W] float tensor in [0, 1]
+    """
+    # Decode JPEG bytes
+    jpeg_bytes = torch.frombuffer(
+        compressed_data['jpeg_bytes'],
+        dtype=torch.uint8
+    )
+    rgb_uint8 = decode_jpeg(jpeg_bytes)
+
+    # Convert back to float [0, 1]
+    image_tensor = rgb_uint8.float() / 255.0
+
+    return image_tensor
 
 def camera_to_JSON(id, camera : Camera):
     Rt = np.zeros((4, 4))

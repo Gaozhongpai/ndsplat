@@ -18,7 +18,7 @@ class Camera(nn.Module):
     def __init__(self, colmap_id, R, T, FoVx, FoVy, image, gt_alpha_mask,
                  image_name, uid, x_threshold=None, color_idx=None, label=None,
                  trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda",
-                 timestamp=0.0
+                 timestamp=0.0, compressed_data=None, resolution=None, white_background=None
                  ):
         super(Camera, self).__init__()
 
@@ -41,14 +41,27 @@ class Camera(nn.Module):
             print(f"[Warning] Custom device {data_device} failed, fallback to default cuda device" )
             self.data_device = torch.device("cuda")
 
-        self.original_image = image.clamp(0.0, 1.0).to(self.data_device)
-        self.image_width = self.original_image.shape[2]
-        self.image_height = self.original_image.shape[1]
+        # Support for JPEG compression
+        self._compressed_data = compressed_data
+        self._resolution = resolution
+        self._white_background = white_background
+        self._gt_alpha_mask = gt_alpha_mask
 
-        if gt_alpha_mask is not None:
-            self.original_image *= gt_alpha_mask.to(self.data_device)
+        if compressed_data is not None:
+            # Lazy loading mode - decompress on first access
+            shape = compressed_data['shape']
+            self.image_width = shape[2]
+            self.image_height = shape[1]
         else:
-            self.original_image *= torch.ones((1, self.image_height, self.image_width), device=self.data_device)
+            # Eager loading mode - store image directly
+            self.original_image = image.clamp(0.0, 1.0).to(self.data_device)
+            self.image_width = self.original_image.shape[2]
+            self.image_height = self.original_image.shape[1]
+
+            if gt_alpha_mask is not None:
+                self.original_image *= gt_alpha_mask.to(self.data_device)
+            else:
+                self.original_image *= torch.ones((1, self.image_height, self.image_width), device=self.data_device)
 
         self.zfar = 500.0
         self.znear = 0.01
@@ -62,6 +75,35 @@ class Camera(nn.Module):
         inverse_transform = self.world_view_transform.inverse()
         self.camera_center = inverse_transform[3, :3]
         self.rotation = inverse_transform[:3, :3].T
+
+    @property
+    def original_image(self):
+        """Lazy decompression of JPEG-compressed images."""
+        if self._compressed_data is not None:
+            # Decompress on-demand (no caching to save GPU memory)
+            from utils.camera_utils import _decompress_jpeg_to_tensor
+            image_tensor = _decompress_jpeg_to_tensor(
+                self._compressed_data,
+                self._resolution,
+                self._white_background
+            )
+            image = image_tensor.clamp(0.0, 1.0).to(self.data_device)
+
+            # Apply alpha mask if present
+            if self._gt_alpha_mask is not None:
+                image *= self._gt_alpha_mask.to(self.data_device)
+            else:
+                image *= torch.ones((1, self.image_height, self.image_width), device=self.data_device)
+
+            return image
+        else:
+            # Already loaded in __init__
+            return self._original_image
+
+    @original_image.setter
+    def original_image(self, value):
+        """Setter for eager loading mode."""
+        self._original_image = value
 
 class MiniCam:
     def __init__(self, width, height, fovy, fovx, znear, zfar, world_view_transform, full_proj_transform):
