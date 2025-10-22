@@ -171,7 +171,7 @@ def _prepare_camera_payload(args, idx, cam_info, resolution_scale, use_jpeg_comp
         orig_size = (cam_info.width, cam_info.height)
 
         if file_ext in ['.jpg', '.jpeg'] and orig_size == resolution:
-            # FAST PATH: Use original JPEG bytes directly - NO DECODING!
+            # FAST PATH (JPEG): Use original JPEG bytes directly - NO DECODING!
             # This avoids wasting time/memory decoding a JPEG just to throw away the tensor
             with open(cam_info.image_path, 'rb') as f:
                 jpeg_bytes = f.read()
@@ -187,6 +187,36 @@ def _prepare_camera_payload(args, idx, cam_info, resolution_scale, use_jpeg_comp
             }
             alpha_mask = None
             return resolution, compressed_data, alpha_mask
+
+        elif file_ext == '.png' and orig_size == resolution and not args.white_background:
+            # FAST PATH (PNG): Use original PNG bytes directly - NO DECODING!
+            # Only works if no alpha compositing needed (white_background=False)
+            with open(cam_info.image_path, 'rb') as f:
+                png_bytes = f.read()
+
+            # Check if PNG has alpha channel
+            from PIL import Image
+            with Image.open(cam_info.image_path) as img:
+                has_alpha = img.mode in ('RGBA', 'LA', 'PA')
+                # Determine actual channels
+                if img.mode in ('RGBA', 'LA'):
+                    channels = 4
+                elif img.mode in ('RGB', 'L'):
+                    channels = 3
+                else:
+                    channels = 3  # Default to RGB
+
+            shape = (channels, resolution[1], resolution[0])
+
+            compressed_data = {
+                'format': 'png_original',
+                'bytes': png_bytes,
+                'has_alpha': has_alpha,
+                'shape': shape
+            }
+            alpha_mask = None
+            return resolution, compressed_data, alpha_mask
+
         else:
             # SLOW PATH: Need to decode, resize, or re-encode
             image_tensor, alpha_mask = _load_image_tensor(cam_info.image_path, resolution, args.white_background)
@@ -252,13 +282,14 @@ def _decompress_jpeg_to_tensor(compressed_data):
 
     Supported formats:
     - 'jpeg_original': Original JPEG at full resolution (fast path, zero artifacts)
+    - 'png_original': Original PNG at full resolution (fast path, lossless)
     - 'png_processed': Processed images (resized/composited) stored as PNG (lossless)
 
     Args:
         compressed_data: dict with 'bytes' and 'format' keys
 
     Returns:
-        image_tensor: [3, H, W] float tensor in [0, 1]
+        image_tensor: [3, H, W] or [4, H, W] float tensor in [0, 1]
     """
     format_type = compressed_data.get('format')
     if format_type is None:
@@ -276,14 +307,16 @@ def _decompress_jpeg_to_tensor(compressed_data):
         rgb_uint8 = decode_jpeg(jpeg_bytes)
         image_tensor = rgb_uint8.float() / 255.0
 
-    elif format_type == 'png_processed':
-        # Decode PNG bytes using PIL (processed images stored losslessly)
+    elif format_type in ['png_original', 'png_processed']:
+        # Decode PNG bytes using PIL
+        # 'png_original' = original PNG at full resolution (fast path, zero decode/re-encode)
+        # 'png_processed' = processed images (resized/composited) stored losslessly as PNG
         from PIL import Image
         import io
 
         buffer = io.BytesIO(image_bytes)
         img = Image.open(buffer)
-        img_array = np.array(img)  # [H, W, C]
+        img_array = np.array(img)  # [H, W, C] or [H, W, C] with alpha
 
         # Convert to tensor [C, H, W]
         image_tensor = torch.from_numpy(img_array).float() / 255.0
