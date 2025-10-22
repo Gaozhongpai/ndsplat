@@ -53,6 +53,12 @@ def cameraList_from_camInfos(cam_infos, resolution_scale, args):
     # Determine whether to use compression (default: auto-enable for datasets > 1000 images)
     use_jpeg_compression = getattr(args, 'use_jpeg_compression', len(cam_infos) > 1000)
 
+    # Safety override: force enable for very large datasets to prevent OOM
+    if not use_jpeg_compression and len(cam_infos) > 1000:
+        print(f"[WARNING] Compression disabled but dataset has {len(cam_infos)} images (>1000).")
+        print(f"[WARNING] Force-enabling compression to prevent GPU OOM.")
+        use_jpeg_compression = True
+
     if use_jpeg_compression:
         print(f"[INFO] Using JPEG compression for {len(cam_infos)} images to reduce GPU memory usage (~8-10x savings)")
     else:
