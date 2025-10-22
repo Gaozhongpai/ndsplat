@@ -50,21 +50,8 @@ def cameraList_from_camInfos(cam_infos, resolution_scale, args):
     if not cam_infos:
         return camera_list
 
-    # Determine whether to use JPEG compression based on user flag or auto-enable for large datasets
-    if hasattr(args, 'use_jpeg_compression') and args.use_jpeg_compression:
-        # User explicitly enabled compression
-        use_jpeg_compression = True
-    elif hasattr(args, 'use_jpeg_compression') and not args.use_jpeg_compression and len(cam_infos) > 500:
-        # User explicitly disabled, but dataset is large - warn and auto-enable
-        print(f"[WARNING] JPEG compression disabled but dataset has {len(cam_infos)} images (>500).")
-        print(f"[WARNING] Auto-enabling compression to prevent GPU memory issues. Use a smaller dataset to disable.")
-        use_jpeg_compression = True
-    elif hasattr(args, 'use_jpeg_compression'):
-        # User explicitly disabled and dataset is small
-        use_jpeg_compression = False
-    else:
-        # Auto-enable for large datasets (>500 images) if flag not specified
-        use_jpeg_compression = len(cam_infos) > 500
+    # Determine whether to use compression (default: auto-enable for datasets > 1000 images)
+    use_jpeg_compression = getattr(args, 'use_jpeg_compression', len(cam_infos) > 1000)
 
     if use_jpeg_compression:
         print(f"[INFO] Using JPEG compression for {len(cam_infos)} images to reduce GPU memory usage (~8-10x savings)")
