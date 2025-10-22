@@ -52,11 +52,20 @@ def cameraList_from_camInfos(cam_infos, resolution_scale, args):
         return camera_list
 
     # Determine whether to use JPEG compression based on user flag or auto-enable for large datasets
-    if hasattr(args, 'use_jpeg_compression'):
-        use_jpeg_compression = args.use_jpeg_compression
+    if hasattr(args, 'use_jpeg_compression') and args.use_jpeg_compression:
+        # User explicitly enabled compression
+        use_jpeg_compression = True
+    elif hasattr(args, 'use_jpeg_compression') and not args.use_jpeg_compression and len(cam_infos) > 500:
+        # User explicitly disabled, but dataset is large - warn and auto-enable
+        print(f"[WARNING] JPEG compression disabled but dataset has {len(cam_infos)} images (>500).")
+        print(f"[WARNING] Auto-enabling compression to prevent GPU memory issues. Use a smaller dataset to disable.")
+        use_jpeg_compression = True
+    elif hasattr(args, 'use_jpeg_compression'):
+        # User explicitly disabled and dataset is small
+        use_jpeg_compression = False
     else:
-        # Auto-enable for large datasets (>1000 images) if flag not specified
-        use_jpeg_compression = len(cam_infos) > 1000
+        # Auto-enable for large datasets (>500 images) if flag not specified
+        use_jpeg_compression = len(cam_infos) > 500
 
     if use_jpeg_compression:
         print(f"[INFO] Using JPEG compression for {len(cam_infos)} images to reduce GPU memory usage (~8-10x savings)")
@@ -159,62 +168,153 @@ def _prepare_camera_payload(args, idx, cam_info, resolution_scale, use_jpeg_comp
     image_tensor, alpha_mask = _load_image_tensor(cam_info.image_path, resolution, args.white_background)
 
     if use_jpeg_compression:
-        # Compress RGB image to JPEG bytes
-        compressed_data = _compress_image_to_jpeg(image_tensor, alpha_mask)
+        # Use smart compression to preserve original format and avoid re-compression artifacts
+        compressed_data = _compress_image_smart(
+            cam_info.image_path,
+            image_tensor,
+            alpha_mask,
+            resolution,
+            quality=95
+        )
         return resolution, compressed_data, alpha_mask
     else:
         return resolution, image_tensor, alpha_mask
 
 
-def _compress_image_to_jpeg(image_tensor, alpha_mask, quality=95):
+def _compress_image_smart(image_path, image_tensor, alpha_mask, resolution, quality=95):
     """
-    Compress RGB image tensor to JPEG bytes for memory-efficient storage.
+    Smart compression: preserve original JPEG format to avoid re-compression artifacts,
+    use lossless PNG compression for PNG sources.
 
     Args:
-        image_tensor: [3, H, W] float tensor in [0, 1]
+        image_path: Path to original image file
+        image_tensor: [3, H, W] float tensor in [0, 1] (already resized)
         alpha_mask: [1, H, W] float tensor or None
-        quality: JPEG quality (1-100), default 95 for minimal quality loss
+        resolution: Target (W, H) resolution
+        quality: JPEG quality (1-100) for PNG->JPEG conversion if needed
 
     Returns:
-        dict with 'jpeg_bytes' and 'has_alpha' flag
+        dict with format info and compressed data
     """
-    # Convert to uint8 [0, 255] for JPEG encoding
-    rgb_uint8 = (image_tensor * 255.0).clamp(0, 255).byte()
+    file_ext = os.path.splitext(image_path)[1].lower()
 
-    # Encode to JPEG
-    jpeg_bytes = encode_jpeg(rgb_uint8, quality=quality)
+    # For JPEG files: check if we need to resize, otherwise use original bytes
+    if file_ext in ['.jpg', '.jpeg']:
+        # Check if original size matches target resolution
+        from PIL import Image
+        with Image.open(image_path) as img:
+            orig_size = img.size  # (W, H)
 
-    # Store alpha mask separately if present (usually small)
-    compressed = {
-        'jpeg_bytes': jpeg_bytes.cpu().numpy().tobytes(),  # Store as raw bytes
-        'has_alpha': alpha_mask is not None,
-        'shape': image_tensor.shape  # Store shape for reconstruction
-    }
+        if orig_size == resolution:
+            # Perfect match - use original JPEG bytes (zero artifacts!)
+            with open(image_path, 'rb') as f:
+                jpeg_bytes = f.read()
 
-    return compressed
+            return {
+                'format': 'jpeg_original',
+                'bytes': jpeg_bytes,
+                'has_alpha': False,
+                'shape': image_tensor.shape
+            }
+        else:
+            # Size mismatch - need to re-encode (but from already decoded tensor)
+            rgb_uint8 = (image_tensor * 255.0).clamp(0, 255).byte()
+            jpeg_bytes = encode_jpeg(rgb_uint8, quality=quality)
+
+            return {
+                'format': 'jpeg_resized',
+                'bytes': jpeg_bytes.cpu().numpy().tobytes(),
+                'has_alpha': False,
+                'shape': image_tensor.shape
+            }
+
+    elif file_ext == '.png':
+        # For PNG: store as PNG bytes (lossless compression, ~2-3x savings)
+        from PIL import Image
+        import io
+
+        # Convert tensor back to PIL Image and save as PNG
+        rgb_uint8 = (image_tensor * 255.0).clamp(0, 255).byte().cpu().numpy()
+        rgb_uint8 = np.transpose(rgb_uint8, (1, 2, 0))  # [H, W, C]
+
+        img = Image.fromarray(rgb_uint8, mode='RGB')
+        buffer = io.BytesIO()
+        img.save(buffer, format='PNG', compress_level=6)  # Good compression/speed tradeoff
+        png_bytes = buffer.getvalue()
+
+        return {
+            'format': 'png',
+            'bytes': png_bytes,
+            'has_alpha': alpha_mask is not None,
+            'shape': image_tensor.shape
+        }
+
+    else:
+        # Fallback for other formats: convert to JPEG
+        rgb_uint8 = (image_tensor * 255.0).clamp(0, 255).byte()
+        jpeg_bytes = encode_jpeg(rgb_uint8, quality=quality)
+
+        return {
+            'format': 'jpeg_converted',
+            'bytes': jpeg_bytes.cpu().numpy().tobytes(),
+            'has_alpha': False,
+            'shape': image_tensor.shape
+        }
 
 
 def _decompress_jpeg_to_tensor(compressed_data, resolution, white_background):
     """
-    Decompress JPEG bytes back to float tensor.
+    Decompress image bytes back to float tensor.
+    Handles multiple formats: JPEG (original/resized/legacy), PNG, etc.
 
     Args:
-        compressed_data: dict with 'jpeg_bytes' and metadata
+        compressed_data: dict with 'bytes'/'jpeg_bytes' and metadata including 'format'
         resolution: target (W, H)
         white_background: whether white background was used
 
     Returns:
         image_tensor: [3, H, W] float tensor in [0, 1]
     """
-    # Decode JPEG bytes
-    jpeg_bytes = torch.frombuffer(
-        compressed_data['jpeg_bytes'],
-        dtype=torch.uint8
-    )
-    rgb_uint8 = decode_jpeg(jpeg_bytes)
+    format_type = compressed_data.get('format', 'jpeg_legacy')
 
-    # Convert back to float [0, 1]
-    image_tensor = rgb_uint8.float() / 255.0
+    # Get the bytes data (support both 'bytes' and legacy 'jpeg_bytes' keys)
+    if 'bytes' in compressed_data:
+        image_bytes = compressed_data['bytes']
+    elif 'jpeg_bytes' in compressed_data:
+        image_bytes = compressed_data['jpeg_bytes']
+    else:
+        raise ValueError("Compressed data must contain 'bytes' or 'jpeg_bytes' key")
+
+    # Handle different formats
+    if format_type in ['jpeg_original', 'jpeg_resized', 'jpeg_converted', 'jpeg_legacy']:
+        # Decode JPEG bytes using PyTorch
+        if isinstance(image_bytes, bytes):
+            jpeg_bytes = torch.frombuffer(image_bytes, dtype=torch.uint8)
+        else:
+            jpeg_bytes = torch.frombuffer(image_bytes, dtype=torch.uint8)
+
+        rgb_uint8 = decode_jpeg(jpeg_bytes)
+        image_tensor = rgb_uint8.float() / 255.0
+
+    elif format_type == 'png':
+        # Decode PNG bytes using PIL
+        from PIL import Image
+        import io
+
+        buffer = io.BytesIO(image_bytes)
+        img = Image.open(buffer)
+        img_array = np.array(img)  # [H, W, C]
+
+        # Convert to tensor [C, H, W]
+        image_tensor = torch.from_numpy(img_array).float() / 255.0
+        if len(image_tensor.shape) == 3:
+            image_tensor = image_tensor.permute(2, 0, 1)  # [H, W, C] -> [C, H, W]
+        else:
+            # Grayscale case
+            image_tensor = image_tensor.unsqueeze(0)
+
+    else:
+        raise ValueError(f"Unknown format type: {format_type}")
 
     return image_tensor
 
