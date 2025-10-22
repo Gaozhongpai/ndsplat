@@ -43,8 +43,7 @@ def loadCam(args, id, cam_info, resolution_scale, *, resolution=None, image_tens
                   image_name=cam_info.image_name, uid=id,
                   x_threshold=cam_info.x_threshold, color_idx=cam_info.color_idx, label=cam_info.label,
                   data_device=args.data_device, timestamp=cam_info.timestamp,
-                  compressed_data=compressed_data, resolution=resolution,
-                  white_background=args.white_background if compressed_data else None)
+                  compressed_data=compressed_data)
 
 def cameraList_from_camInfos(cam_infos, resolution_scale, args):
     camera_list = [None] * len(cam_infos)
@@ -165,139 +164,120 @@ def _compute_target_resolution(args, cam_info, resolution_scale):
 
 def _prepare_camera_payload(args, idx, cam_info, resolution_scale, use_jpeg_compression=False):
     resolution = _compute_target_resolution(args, cam_info, resolution_scale)
-    image_tensor, alpha_mask = _load_image_tensor(cam_info.image_path, resolution, args.white_background)
 
     if use_jpeg_compression:
-        # Use smart compression to preserve original format and avoid re-compression artifacts
-        compressed_data = _compress_image_smart(
-            cam_info.image_path,
-            image_tensor,
-            alpha_mask,
-            resolution,
-            quality=95
-        )
-        return resolution, compressed_data, alpha_mask
+        # Optimization: Check if we can use original bytes without decoding
+        file_ext = os.path.splitext(cam_info.image_path)[1].lower()
+        orig_size = (cam_info.width, cam_info.height)
+
+        if file_ext in ['.jpg', '.jpeg'] and orig_size == resolution:
+            # FAST PATH: Use original JPEG bytes directly - NO DECODING!
+            # This avoids wasting time/memory decoding a JPEG just to throw away the tensor
+            with open(cam_info.image_path, 'rb') as f:
+                jpeg_bytes = f.read()
+
+            # Determine shape (assume RGB, alpha handling happens at decompression)
+            shape = (3, resolution[1], resolution[0])
+
+            compressed_data = {
+                'format': 'jpeg_original',
+                'bytes': jpeg_bytes,
+                'has_alpha': False,
+                'shape': shape
+            }
+            alpha_mask = None
+            return resolution, compressed_data, alpha_mask
+        else:
+            # SLOW PATH: Need to decode, resize, or re-encode
+            image_tensor, alpha_mask = _load_image_tensor(cam_info.image_path, resolution, args.white_background)
+            compressed_data = _compress_image_smart(image_tensor, alpha_mask)
+            return resolution, compressed_data, alpha_mask
     else:
+        # No compression - load full tensor
+        image_tensor, alpha_mask = _load_image_tensor(cam_info.image_path, resolution, args.white_background)
         return resolution, image_tensor, alpha_mask
 
 
-def _compress_image_smart(image_path, image_tensor, alpha_mask, resolution, quality=95):
+def _compress_image_smart(image_tensor, alpha_mask):
     """
-    Smart compression: preserve original JPEG format to avoid re-compression artifacts,
-    use lossless PNG compression for PNG sources.
+    Compress processed images (resized, alpha-composited, etc.) using PNG.
+
+    Strategy: Use PNG compression for processed images since:
+    - PNG is lossless (no additional artifacts after processing)
+    - Preserves processed result perfectly
+    - Avoids compounding quality loss from multiple JPEG re-encodings
+
+    Trade-off: PNG may be 2-5x larger than JPEG, but guarantees zero additional
+    quality degradation. For training 3D models where image quality matters, this
+    is an acceptable trade-off.
+
+    NOTE: This function is only called for processed images (resized/composited).
+    For JPEG files at original resolution, the fast path in _prepare_camera_payload
+    should be used instead to avoid redundant decoding.
 
     Args:
-        image_path: Path to original image file
-        image_tensor: [3, H, W] float tensor in [0, 1] (already resized)
+        image_tensor: [3, H, W] float tensor in [0, 1] (already processed)
         alpha_mask: [1, H, W] float tensor or None
-        resolution: Target (W, H) resolution
-        quality: JPEG quality (1-100) for PNG->JPEG conversion if needed
 
     Returns:
         dict with format info and compressed data
     """
-    file_ext = os.path.splitext(image_path)[1].lower()
+    # For all processed images: use PNG (lossless)
+    # Once an image has been decoded and processed (resized/composited),
+    # using PNG avoids adding NEW compression artifacts on top of processing artifacts
+    from PIL import Image
+    import io
 
-    # For JPEG files: check if we need to resize, otherwise use original bytes
-    if file_ext in ['.jpg', '.jpeg']:
-        # Check if original size matches target resolution
-        from PIL import Image
-        with Image.open(image_path) as img:
-            orig_size = img.size  # (W, H)
+    # Convert tensor to uint8
+    rgb_uint8 = (image_tensor * 255.0).clamp(0, 255).byte().cpu().numpy()
+    rgb_uint8 = np.transpose(rgb_uint8, (1, 2, 0))  # [H, W, C]
 
-        if orig_size == resolution:
-            # Perfect match - use original JPEG bytes (zero artifacts!)
-            with open(image_path, 'rb') as f:
-                jpeg_bytes = f.read()
+    # Encode as PNG (lossless)
+    img = Image.fromarray(rgb_uint8, mode='RGB')
+    buffer = io.BytesIO()
+    img.save(buffer, format='PNG', compress_level=6)  # Good compression/speed tradeoff
+    png_bytes = buffer.getvalue()
 
-            return {
-                'format': 'jpeg_original',
-                'bytes': jpeg_bytes,
-                'has_alpha': False,
-                'shape': image_tensor.shape
-            }
-        else:
-            # Size mismatch - need to re-encode (but from already decoded tensor)
-            rgb_uint8 = (image_tensor * 255.0).clamp(0, 255).byte()
-            jpeg_bytes = encode_jpeg(rgb_uint8, quality=quality)
-
-            return {
-                'format': 'jpeg_resized',
-                'bytes': jpeg_bytes.cpu().numpy().tobytes(),
-                'has_alpha': False,
-                'shape': image_tensor.shape
-            }
-
-    elif file_ext == '.png':
-        # For PNG: store as PNG bytes (lossless compression, ~2-3x savings)
-        from PIL import Image
-        import io
-
-        # Convert tensor back to PIL Image and save as PNG
-        rgb_uint8 = (image_tensor * 255.0).clamp(0, 255).byte().cpu().numpy()
-        rgb_uint8 = np.transpose(rgb_uint8, (1, 2, 0))  # [H, W, C]
-
-        img = Image.fromarray(rgb_uint8, mode='RGB')
-        buffer = io.BytesIO()
-        img.save(buffer, format='PNG', compress_level=6)  # Good compression/speed tradeoff
-        png_bytes = buffer.getvalue()
-
-        return {
-            'format': 'png',
-            'bytes': png_bytes,
-            'has_alpha': alpha_mask is not None,
-            'shape': image_tensor.shape
-        }
-
-    else:
-        # Fallback for other formats: convert to JPEG
-        rgb_uint8 = (image_tensor * 255.0).clamp(0, 255).byte()
-        jpeg_bytes = encode_jpeg(rgb_uint8, quality=quality)
-
-        return {
-            'format': 'jpeg_converted',
-            'bytes': jpeg_bytes.cpu().numpy().tobytes(),
-            'has_alpha': False,
-            'shape': image_tensor.shape
-        }
+    return {
+        'format': 'png_processed',
+        'bytes': png_bytes,
+        'has_alpha': alpha_mask is not None,
+        'shape': image_tensor.shape
+    }
 
 
-def _decompress_jpeg_to_tensor(compressed_data, resolution, white_background):
+def _decompress_jpeg_to_tensor(compressed_data):
     """
     Decompress image bytes back to float tensor.
-    Handles multiple formats: JPEG (original/resized/legacy), PNG, etc.
+
+    Supported formats:
+    - 'jpeg_original': Original JPEG at full resolution (fast path, zero artifacts)
+    - 'png_processed': Processed images (resized/composited) stored as PNG (lossless)
 
     Args:
-        compressed_data: dict with 'bytes'/'jpeg_bytes' and metadata including 'format'
-        resolution: target (W, H)
-        white_background: whether white background was used
+        compressed_data: dict with 'bytes' and 'format' keys
 
     Returns:
         image_tensor: [3, H, W] float tensor in [0, 1]
     """
-    format_type = compressed_data.get('format', 'jpeg_legacy')
+    format_type = compressed_data.get('format')
+    if format_type is None:
+        raise ValueError("Compressed data must contain 'format' key")
 
-    # Get the bytes data (support both 'bytes' and legacy 'jpeg_bytes' keys)
-    if 'bytes' in compressed_data:
-        image_bytes = compressed_data['bytes']
-    elif 'jpeg_bytes' in compressed_data:
-        image_bytes = compressed_data['jpeg_bytes']
-    else:
-        raise ValueError("Compressed data must contain 'bytes' or 'jpeg_bytes' key")
+    # Get the bytes data
+    image_bytes = compressed_data.get('bytes')
+    if image_bytes is None:
+        raise ValueError("Compressed data must contain 'bytes' key")
 
     # Handle different formats
-    if format_type in ['jpeg_original', 'jpeg_resized', 'jpeg_converted', 'jpeg_legacy']:
-        # Decode JPEG bytes using PyTorch
-        if isinstance(image_bytes, bytes):
-            jpeg_bytes = torch.frombuffer(image_bytes, dtype=torch.uint8)
-        else:
-            jpeg_bytes = torch.frombuffer(image_bytes, dtype=torch.uint8)
-
+    if format_type == 'jpeg_original':
+        # Decode JPEG bytes using PyTorch (fast path - original JPEG bytes)
+        jpeg_bytes = torch.frombuffer(image_bytes, dtype=torch.uint8)
         rgb_uint8 = decode_jpeg(jpeg_bytes)
         image_tensor = rgb_uint8.float() / 255.0
 
-    elif format_type == 'png':
-        # Decode PNG bytes using PIL
+    elif format_type == 'png_processed':
+        # Decode PNG bytes using PIL (processed images stored losslessly)
         from PIL import Image
         import io
 

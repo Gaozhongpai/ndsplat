@@ -18,7 +18,7 @@ class Camera(nn.Module):
     def __init__(self, colmap_id, R, T, FoVx, FoVy, image, gt_alpha_mask,
                  image_name, uid, x_threshold=None, color_idx=None, label=None,
                  trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda",
-                 timestamp=0.0, compressed_data=None, resolution=None, white_background=None
+                 timestamp=0.0, compressed_data=None
                  ):
         super(Camera, self).__init__()
 
@@ -41,10 +41,8 @@ class Camera(nn.Module):
             print(f"[Warning] Custom device {data_device} failed, fallback to default cuda device" )
             self.data_device = torch.device("cuda")
 
-        # Support for JPEG compression
+        # Support for image compression
         self._compressed_data = compressed_data
-        self._resolution = resolution
-        self._white_background = white_background
         self._gt_alpha_mask = gt_alpha_mask
 
         if compressed_data is not None:
@@ -78,15 +76,11 @@ class Camera(nn.Module):
 
     @property
     def original_image(self):
-        """Lazy decompression of JPEG-compressed images."""
+        """Lazy decompression of compressed images."""
         if self._compressed_data is not None:
             # Decompress on-demand (no caching to save GPU memory)
             from utils.camera_utils import _decompress_jpeg_to_tensor
-            image_tensor = _decompress_jpeg_to_tensor(
-                self._compressed_data,
-                self._resolution,
-                self._white_background
-            )
+            image_tensor = _decompress_jpeg_to_tensor(self._compressed_data)
             image = image_tensor.clamp(0.0, 1.0).to(self.data_device)
 
             # Apply alpha mask if present
