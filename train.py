@@ -103,6 +103,7 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
             # Reinitialize tracking arrays to match the loaded model size
             num_points = gaussians.get_xyz.shape[0]
             gaussians.xyz_gradient_accum = torch.zeros((num_points, 1), device="cuda")
+            gaussians.xyz_gradient_accum_abs = torch.zeros((num_points, 1), device="cuda")  # FastGS: Z gradients
             gaussians.denom = torch.zeros((num_points, 1), device="cuda")
             gaussians.max_radii2D = torch.zeros((num_points,), device="cuda")
             print(f"Note: Loading from PLY resets optimizer state and starts from iteration 0")

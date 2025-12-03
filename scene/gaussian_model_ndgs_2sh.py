@@ -331,16 +331,54 @@ class GaussianModel:
         
     @property
     def get_rotation_scale(self):
+        """
+        Get rotation and scale from conditional covariance.
+
+        For 7DGS (input_dim=7), also returns sigma_pt (position-time correlation).
+
+        Returns:
+            rotation: Rotation matrix [N, 3, 3]
+            scale: Scale factors [N, 3]
+            sigma_pt: Position-time correlation [N, 3, 1] (only for input_dim=7, else None)
+        """
         v = self.get_pc_v
 
-        # Slice the 6D covariance matrix
-        v_11 = v[:, :3, :3]
-        v_12 = v[:, :3, 3:]
-        v_21 = v[:, 3:, :3]
-        v_22 = v[:, 3:, 3:]
+        if self.input_dim == 7:
+            # N-DGS 7D: covariance structure is [xyz(3), direction(3), time(1)]
+            # This matches the _mean structure: [direction(3), time(1)] appended to xyz
+            # Slice the 7D covariance matrix
+            v_p = v[:, :3, :3]  # position block (3x3)
+            v_pd = v[:, :3, 3:6]  # position-direction block (3x3)
+            v_pt = v[:, :3, 6:7]  # position-time block (3x1)
+            v_d = v[:, 3:6, 3:6]  # direction block (3x3)
+            v_dt = v[:, 3:6, 6:7]  # direction-time block (3x1)
+            v_t = v[:, 6:7, 6:7]  # time block (1x1)
 
-        # Compute conditional covariance
-        v_cond = v_11 - torch.bmm(v_12, torch.linalg.inv(v_22).bmm(v_21))
+            # Build the direction-time block for conditioning [4x4]
+            v_dt_block = torch.cat([
+                torch.cat([v_d, v_dt], dim=-1),
+                torch.cat([v_dt.transpose(-2, -1), v_t], dim=-1)
+            ], dim=-2)  # [N, 4, 4]
+
+            v_pdt = torch.cat([v_pd, v_pt], dim=-1)  # [N, 3, 4]
+
+            # Compute conditional covariance (condition on direction and time)
+            v_dt_inv = torch.inverse(v_dt_block)
+            v_regr = torch.matmul(v_pdt, v_dt_inv)
+            v_cond = v_p - torch.matmul(v_regr, v_pdt.transpose(-2, -1))
+
+            # Return position-time correlation for time-based splitting
+            sigma_pt = v_pt
+        else:
+            # 6DGS: covariance structure is [xyz(3), direction(3)]
+            v_11 = v[:, :3, :3]
+            v_12 = v[:, :3, 3:]
+            v_21 = v[:, 3:, :3]
+            v_22 = v[:, 3:, 3:]
+
+            # Compute conditional covariance
+            v_cond = v_11 - torch.bmm(v_12, torch.linalg.inv(v_22).bmm(v_21))
+            sigma_pt = None
 
         U, S, _ = torch.linalg.svd(v_cond)
         scale = torch.sqrt(S)
@@ -349,7 +387,7 @@ class GaussianModel:
         # Ensure right-handed coordinate system
         det = torch.linalg.det(rotation)
         rotation[:, :, -1] *= det.sign().unsqueeze(-1)
-        return rotation, scale
+        return rotation, scale, sigma_pt
 
     @property
     def get_xyz_covariance(self):
@@ -808,21 +846,69 @@ class GaussianModel:
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
-    def densify_and_split(self, grads, grad_threshold, scene_extent, rotation, scale, N=2):
+    def densify_and_split(self, grads, grad_threshold, scene_extent, rotation, scale, sigma_pt=None, N=2):
+        """
+        Split large Gaussians with high gradients.
+
+        For 7DGS (input_dim=7), also supports time-based splitting using sigma_pt
+        (position-time correlation) to split Gaussians that exhibit significant motion.
+
+        Args:
+            grads: Accumulated gradients
+            grad_threshold: Gradient threshold for splitting
+            scene_extent: Scene extent for size-based decisions
+            rotation: Rotation matrices [N, 3, 3]
+            scale: Scale factors [N, 3]
+            sigma_pt: Position-time correlation [N, 3, 1] (only for 7DGS, else None)
+            N: Number of new Gaussians per split
+        """
         n_init_points = self.get_xyz.shape[0]
         # Extract points that satisfy the gradient condition
         padded_grad = torch.zeros((n_init_points), device="cuda")
         padded_grad[:grads.shape[0]] = grads.squeeze()
         selected_pts_mask = torch.where(padded_grad >= grad_threshold, True, False)
 
-        selected_pts_mask = torch.logical_and(selected_pts_mask,
+        # Spatial split criterion: large Gaussians
+        selected_pts_mask_x = torch.logical_and(selected_pts_mask,
                                               torch.max(scale, dim=1).values > self.percent_dense*scene_extent)
+
+        # Time-based split criterion for 7DGS
+        if self.input_dim == 7 and sigma_pt is not None:
+            # Compute magnitude of position-time correlation
+            # N-DGS 7D structure: [xyz(3), direction(3), time(1)] -> time scale at index 6
+            scale_t = self.scale_activation(self._scale[:, 6])
+            sigma_pt_magnitude = torch.norm(sigma_pt.squeeze(-1), dim=-1)  # [N, 3, 1] -> [N]
+
+            # Split if high position-time correlation and large time scale
+            # Thresholds adapted from 7DGS: sigma_pt_magnitude > 0.15*extent/2, scale_t > 0.25
+            selected_pts_mask_t = torch.logical_and(
+                sigma_pt_magnitude > 0.15 * scene_extent / 2,
+                scale_t > 0.25
+            )
+            selected_pts_mask_t = torch.logical_and(selected_pts_mask, selected_pts_mask_t)
+
+            # Combine spatial and time-based criteria
+            selected_pts_mask = torch.logical_or(selected_pts_mask_x, selected_pts_mask_t)
+        else:
+            selected_pts_mask = selected_pts_mask_x
+            selected_pts_mask_t = None
 
         stds = scale[selected_pts_mask].repeat(N,1)
         means = torch.zeros((stds.size(0), 3),device="cuda")
         samples = torch.normal(mean=means, std=stds)
         rots = rotation[selected_pts_mask].repeat(N,1,1) # build_rotation(self._rotation[selected_pts_mask]).repeat(N,1,1)
         new_xyz = torch.bmm(rots, samples.unsqueeze(-1)).squeeze(-1) + self.get_xyz[selected_pts_mask].repeat(N, 1)
+
+        # For 7DGS: offset split positions along position-time correlation direction
+        if self.input_dim == 7 and selected_pts_mask_t is not None and selected_pts_mask_t.sum() > 0:
+            scale_t = self.scale_activation(self._scale[:, 6])  # time scale at index 6
+            mask_t_in_selected = selected_pts_mask_t[selected_pts_mask]
+            # Compute offset: sigma_pt / scale_t * 0.1 (from 7DGS)
+            t_offset = sigma_pt[selected_pts_mask_t].squeeze(-1) / scale_t[selected_pts_mask_t].unsqueeze(-1) * 0.1
+            # Apply opposite offsets to the two split children
+            new_xyz[:selected_pts_mask.sum()][mask_t_in_selected] = new_xyz[:selected_pts_mask.sum()][mask_t_in_selected] + t_offset
+            new_xyz[selected_pts_mask.sum():][mask_t_in_selected] = new_xyz[selected_pts_mask.sum():][mask_t_in_selected] - t_offset
+
         new_mean = self._mean[selected_pts_mask].repeat(N,1)
 
         new_features_dc = [self._features_dc[0][selected_pts_mask].repeat(N,1,1),
@@ -875,8 +961,8 @@ class GaussianModel:
 
         # Clone and split (compute scale/rotation internally for current state)
         self.densify_and_clone(grads, max_grad, extent)
-        rotation, scale = self.get_rotation_scale
-        self.densify_and_split(grads, max_grad, extent, rotation, scale)
+        rotation, scale, sigma_pt = self.get_rotation_scale
+        self.densify_and_split(grads, max_grad, extent, rotation, scale, sigma_pt=sigma_pt)
 
         # Prune low opacity and large Gaussians
         prune_mask = (self.get_opacity < min_opacity).squeeze()
