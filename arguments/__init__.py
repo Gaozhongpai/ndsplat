@@ -58,7 +58,7 @@ class ModelParams(ParamGroup):
         self.input_dim = 6  # Gaussian dimension: 6 for 6DGS/UBS, 7 for 7DGS (with time)
         self.use_rot_scale_l_triangle = True  # If True: use rotation-scale-l_triangle (UBS-style), If False: use diagonal-l_triangle (NDGS-style)
         self.learnable_lambda_opc = False  # If True: make lambda_opc a learnable parameter per Gaussian
-        self.use_jpeg_compression = False  # If True: use JPEG compression for images to save GPU memory (slower but memory-efficient)
+        self.use_jpeg_compression = True  # If True: use JPEG compression for images to save GPU memory (slower but memory-efficient)
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
@@ -71,7 +71,7 @@ class PipelineParams(ParamGroup):
         self.convert_SHs_python = False
         self.compute_cov3D_python = False
         self.debug = False
-        self.mv = 4
+        self.mv = 1
         super().__init__(parser, "Pipeline Parameters")
 
 class OptimizationParams(ParamGroup):
@@ -106,8 +106,8 @@ class OptimizationParams(ParamGroup):
         self.densify_grad_threshold = 0.0002
         self.opacity_reset_interval = 3000
 
-        # Densification strategy: "standard" or "mcmc"
-        self.densification_strategy = "standard"  # Options: "standard" (gradient-based), "mcmc" (MCMC sampling)
+        # Densification strategy: "standard", "mcmc", or "fastgs"
+        self.densification_strategy = "standard"  # Options: "standard" (gradient-based), "mcmc" (MCMC sampling), "fastgs" (multi-view consistent)
 
         # MCMC-specific parameters (only used when densification_strategy="mcmc")
         self.mcmc_cap_max = 300_000  # Maximum number of Gaussians
@@ -116,6 +116,17 @@ class OptimizationParams(ParamGroup):
         self.mcmc_add_rate = 0.25  # Rate of adding new Gaussians (fraction per refinement)
         self.mcmc_remove_rate = 0.1  # Rate of removing Gaussians (fraction per refinement)
         self.noise_lr = 100.0  # Noise learning rate for MCMC spatial perturbation (higher = more noise)
+
+        # FastGS-specific parameters (only used when densification_strategy="fastgs")
+        # Adapted from FastGS (arXiv:2511.04283) for multi-view consistent densification
+        self.fastgs_loss_thresh = 0.3  # Threshold for high-error pixel detection
+        self.fastgs_grad_thresh = 0.0002  # Gradient threshold for densification candidates
+        self.fastgs_densify_score_thresh = 5  # Minimum importance score for densification
+        self.fastgs_prune_budget_ratio = 0.5  # Fraction of prunable Gaussians to actually prune
+        self.fastgs_final_prune_interval = 3000  # Interval for final pruning after 15k iterations
+        self.fastgs_final_prune_start = 15_000  # Start iteration for final pruning
+        self.fastgs_final_prune_end = 30_000  # End iteration for final pruning
+        self.fastgs_num_sample_cams = 10  # Number of cameras to sample for multi-view scoring
 
         # Loss parameters
         self.lambda_dssim = 0.2

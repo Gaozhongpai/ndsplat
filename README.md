@@ -129,6 +129,9 @@ python train.py -s <path to dataset> --mode ubs --input_dim 6
 
 # UBS with MCMC densification strategy
 python train.py -s <path to dataset> --mode ubs --densification_strategy mcmc --mcmc_cap_max 300000
+
+# NDGS with FastGS multi-view consistent densification
+python train.py -s <path to dataset> --mode ndgs --densification_strategy fastgs
 ```
 
 The training script will automatically launch a live viewer on port 8080 (unless disabled with `--disable_viewer`). Open your browser to `http://localhost:8080` to monitor training in real-time.
@@ -166,9 +169,10 @@ The training script will automatically launch a live viewer on port 8080 (unless
   - Note: Old names (`--diags_lr`, `--l_triangs_lr`) still work for backward compatibility
 
 #### Densification Parameters
-- `--densification_strategy`: Strategy for Gaussian densification (`standard` or `mcmc`) - default: `standard`
+- `--densification_strategy`: Strategy for Gaussian densification (`standard`, `mcmc`, or `fastgs`) - default: `standard`
   - `standard`: Gradient-based clone, split, and prune (all models)
   - `mcmc`: MCMC sampling-based refinement (UBS only)
+  - `fastgs`: Multi-view consistent densification adapted from FastGS (NDGS only)
 - `--densify_from_iter`: Start densification iteration - default: `500`
 - `--densify_until_iter`: Stop densification iteration - default: `15000`
 - `--densify_grad_threshold`: Gradient threshold for densification (standard only) - default: `0.0002`
@@ -179,6 +183,11 @@ The training script will automatically launch a live viewer on port 8080 (unless
 - `--mcmc_refine_interval`: MCMC refinement frequency (MCMC only) - default: `100`
 - `--mcmc_add_rate`: Rate of adding new Gaussians (MCMC only, currently unused) - default: `0.25`
 - `--mcmc_remove_rate`: Rate of removing Gaussians (MCMC only, currently unused) - default: `0.1`
+- `--fastgs_loss_thresh`: Threshold for high-error pixel detection (FastGS only) - default: `0.3`
+- `--fastgs_grad_thresh`: Gradient threshold for densification candidates (FastGS only) - default: `0.0002`
+- `--fastgs_densify_score_thresh`: Minimum importance score for densification (FastGS only) - default: `5`
+- `--fastgs_prune_budget_ratio`: Fraction of prunable Gaussians to prune (FastGS only) - default: `0.5`
+- `--fastgs_num_sample_cams`: Number of cameras for multi-view scoring (FastGS only) - default: `10`
 
 #### Viewer Parameters
 - `--port`: Viewer port - default: `8080`
@@ -355,6 +364,28 @@ Each Gaussian is represented with:
 - `_l_triangle`: First 3 elements encode 6D rotation matrix
 - Rotation-scale-l_triangle covariance construction with KNN initialization
 
+### Densification Strategies
+
+#### Standard (default)
+Gradient-based densification from original 3DGS:
+- Clone small Gaussians with high position gradients
+- Split large Gaussians with high position gradients
+- Prune low-opacity and oversized Gaussians
+
+#### MCMC (UBS only)
+MCMC sampling-based refinement:
+- Relocate dead (low-opacity) Gaussians to high-error regions
+- Add new Gaussians up to a maximum cap
+- Apply covariance-weighted noise for exploration
+
+#### FastGS (NDGS only)
+Multi-view consistent densification adapted from [FastGS](https://arxiv.org/abs/2511.04283):
+- **VCD (View-Consistent Densification)**: Only densify Gaussians that contribute to high-error pixels across multiple views
+- **VCP (View-Consistent Pruning)**: Prune based on multi-view consistency scores weighted by photometric loss
+- **Final Pruning Phase**: Aggressive pruning every 3k iterations after 15k to reduce Gaussian count
+
+The FastGS strategy uses CUDA-accelerated per-Gaussian metric counting during rasterization to identify which Gaussians contribute to reconstruction errors across sampled viewpoints.
+
 ### Conditional Slicing
 
 The N-D Gaussians are conditionally sliced based on viewing direction:
@@ -443,6 +474,7 @@ See [CLAUDE.md](CLAUDE.md) for detailed technical comparison and implementation 
 │   ├── loss_utils.py                # Loss functions
 │   ├── camera_utils.py              # Camera utilities
 │   ├── ndgs_utils.py                # N-DGS specific utilities
+│   ├── fast_utils.py                # FastGS multi-view densification utilities
 │   └── ...
 ├── arguments/
 │   └── __init__.py                  # Command-line arguments

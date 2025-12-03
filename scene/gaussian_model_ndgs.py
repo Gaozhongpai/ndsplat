@@ -861,6 +861,209 @@ class GaussianModel:
         self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True)
         self.denom[update_filter] += 1
 
+    # ==================== FastGS-style Densification Methods ====================
+    # Adapted from FastGS (arXiv:2511.04283) for N-DGS
+
+    def densify_and_clone_fastgs(self, metric_mask, grad_filter):
+        """
+        Clone Gaussians that satisfy both metric mask and gradient filter.
+
+        This implements FastGS's multi-view consistent cloning strategy:
+        Only clone Gaussians that have high error across multiple views.
+
+        Args:
+            metric_mask: Boolean mask from multi-view importance score
+            grad_filter: Boolean mask from gradient-based selection
+        """
+        selected_pts_mask = torch.logical_and(metric_mask, grad_filter)
+
+        new_xyz = self._xyz[selected_pts_mask]
+        new_features_dc = self._features_dc[selected_pts_mask]
+        new_features_rest = self._features_rest[selected_pts_mask]
+        new_mean = self._mean[selected_pts_mask]
+        new_opacities = self._opacity[selected_pts_mask]
+        new_lambda_opc = self._lambda_opc[selected_pts_mask]
+        new_scale = self._scale[selected_pts_mask]
+        new_l_triangle = self._l_triangle[selected_pts_mask]
+
+        self.densification_postfix(
+            new_xyz, new_features_dc, new_features_rest, new_mean,
+            new_opacities, new_lambda_opc, new_scale, new_l_triangle
+        )
+
+    def densify_and_split_fastgs(self, metric_mask, grad_filter, N=2):
+        """
+        Split Gaussians that satisfy both metric mask and gradient filter.
+
+        This implements FastGS's multi-view consistent splitting strategy:
+        Only split large Gaussians that have high error across multiple views.
+
+        Args:
+            metric_mask: Boolean mask from multi-view importance score
+            grad_filter: Boolean mask from gradient-based selection
+            N: Number of new Gaussians per split (default: 2)
+        """
+        n_init_points = self.get_xyz.shape[0]
+
+        selected_pts_mask = torch.zeros((n_init_points), dtype=bool, device="cuda")
+        mask = torch.logical_and(metric_mask, grad_filter)
+        selected_pts_mask[:mask.shape[0]] = mask
+
+        if not selected_pts_mask.any():
+            return
+
+        # Get rotation and scale for splitting
+        rotation, scale = self.get_rotation_scale
+
+        stds = scale[selected_pts_mask].repeat(N, 1)
+        means = torch.zeros((stds.size(0), 3), device="cuda")
+        samples = torch.normal(mean=means, std=stds)
+        rots = rotation[selected_pts_mask].repeat(N, 1, 1)
+        new_xyz = torch.bmm(rots, samples.unsqueeze(-1)).squeeze(-1) + self.get_xyz[selected_pts_mask].repeat(N, 1)
+        new_mean = self._mean[selected_pts_mask].repeat(N, 1)
+
+        new_features_dc = self._features_dc[selected_pts_mask].repeat(N, 1, 1)
+        new_features_rest = self._features_rest[selected_pts_mask].repeat(N, 1, 1)
+        new_opacity = self._opacity[selected_pts_mask].repeat(N, 1)
+        new_lambda_opc = self._lambda_opc[selected_pts_mask].repeat(N, 1)
+
+        # Scale down for split (applies to all dimensions)
+        new_scale = self._scale[selected_pts_mask]
+        new_scale = self.scale_inverse_activation(self.scale_activation(new_scale) * 0.8).repeat(N, 1)
+        new_l_triangle = self._l_triangle[selected_pts_mask].repeat(N, 1)
+
+        self.densification_postfix(
+            new_xyz, new_features_dc, new_features_rest, new_mean,
+            new_opacity, new_lambda_opc, new_scale, new_l_triangle
+        )
+
+        prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
+        self.prune_points(prune_filter)
+
+    def densify_and_prune_fastgs(
+        self,
+        max_screen_size,
+        min_opacity: float,
+        extent: float,
+        radii: torch.Tensor,
+        grad_thresh: float = 0.0002,
+        percent_dense: float = 0.01,
+        importance_score: torch.Tensor = None,
+        pruning_score: torch.Tensor = None,
+        densify_score_thresh: float = 5.0,
+        prune_budget_ratio: float = 0.5,
+    ):
+        """
+        FastGS-style densification and pruning for N-DGS.
+
+        This implements the multi-view consistent densification and pruning strategy:
+        1. Select candidates based on gradient magnitude
+        2. Filter by multi-view importance score (only densify high-error Gaussians)
+        3. Clone small Gaussians, split large ones
+        4. Prune based on opacity and multi-view pruning score
+
+        Args:
+            max_screen_size: Maximum screen size threshold for pruning
+            min_opacity: Minimum opacity threshold for pruning
+            extent: Scene extent for size-based decisions
+            radii: Per-Gaussian radii from rendering
+            grad_thresh: Gradient threshold for densification candidates
+            percent_dense: Percentage of extent for clone/split decision
+            importance_score: Per-Gaussian importance score from multi-view
+            pruning_score: Per-Gaussian pruning score from multi-view
+            densify_score_thresh: Threshold on importance_score for densification
+            prune_budget_ratio: Fraction of prunable Gaussians to actually prune
+        """
+        # Compute gradient-based selection
+        grads = self.xyz_gradient_accum / self.denom
+        grads[grads.isnan()] = 0.0
+
+        # Update max radii
+        self.max_radii2D = torch.max(self.max_radii2D, radii)
+
+        # Gradient-based candidate selection
+        grad_qualifiers = torch.where(torch.norm(grads, dim=-1) >= grad_thresh, True, False)
+
+        # Size-based split/clone decision
+        scale = self.get_scaling
+        clone_qualifiers = torch.max(scale[:, :3], dim=1).values <= percent_dense * extent
+        split_qualifiers = torch.max(scale[:, :3], dim=1).values > percent_dense * extent
+
+        all_clones = torch.logical_and(clone_qualifiers, grad_qualifiers)
+        all_splits = torch.logical_and(split_qualifiers, grad_qualifiers)
+
+        # FastGS key contribution: filter by multi-view importance score
+        if importance_score is not None:
+            metric_mask = importance_score > densify_score_thresh
+        else:
+            # If no importance score provided, use gradient-only selection
+            metric_mask = torch.ones(self.get_xyz.shape[0], dtype=bool, device="cuda")
+
+        # Clone and split with metric filtering
+        self.densify_and_clone_fastgs(metric_mask, all_clones)
+        self.densify_and_split_fastgs(metric_mask, all_splits)
+
+        # Pruning
+        prune_mask = (self.get_opacity < min_opacity).squeeze()
+        if max_screen_size:
+            big_points_vs = self.max_radii2D > max_screen_size
+            big_points_ws = self.get_scaling[:, :3].max(dim=1).values > 0.1 * extent
+            prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
+
+        # FastGS pruning strategy: use pruning_score to guide removal
+        if pruning_score is not None and prune_budget_ratio > 0:
+            scores = 1 - pruning_score
+            to_remove = torch.sum(prune_mask)
+            remove_budget = int(prune_budget_ratio * to_remove)
+
+            if remove_budget > 0:
+                n_points = self.get_xyz.shape[0]
+                padded_importance = torch.zeros(n_points, dtype=torch.float32, device="cuda")
+                padded_importance[:scores.shape[0]] = 1 / (1e-6 + scores.squeeze())
+
+                selected_pts_mask = torch.zeros_like(padded_importance, dtype=bool)
+                sampled_indices = torch.multinomial(padded_importance, min(remove_budget, n_points), replacement=False)
+                selected_pts_mask[sampled_indices] = True
+                final_prune = torch.logical_and(prune_mask, selected_pts_mask)
+                self.prune_points(final_prune)
+        else:
+            self.prune_points(prune_mask)
+
+        # Reset opacity (clamped at 0.8)
+        opacities_new = inverse_sigmoid(torch.min(self.get_opacity, torch.ones_like(self.get_opacity) * 0.8))
+        optimizable_tensors = self.replace_tensor_to_optimizer(opacities_new, "opacity")
+        self._opacity = optimizable_tensors["opacity"]
+
+        torch.cuda.empty_cache()
+
+    def final_prune_fastgs(
+        self,
+        min_opacity: float = 0.1,
+        pruning_score: torch.Tensor = None,
+        prune_score_thresh: float = 0.9,
+    ):
+        """
+        Final-stage pruning using FastGS strategy.
+
+        After model convergence, aggressively prune Gaussians based on
+        opacity and multi-view consistency score.
+
+        Args:
+            min_opacity: Minimum opacity threshold
+            pruning_score: Per-Gaussian pruning score from multi-view
+            prune_score_thresh: Threshold on pruning_score (higher = more aggressive)
+        """
+        prune_mask = (self.get_opacity < min_opacity).squeeze()
+
+        if pruning_score is not None:
+            scores_mask = pruning_score > prune_score_thresh
+            final_prune = torch.logical_or(prune_mask, scores_mask)
+        else:
+            final_prune = prune_mask
+
+        self.prune_points(final_prune)
+        torch.cuda.empty_cache()
+
     # MCMC-based densification methods (adapted from UBS)
     def _update_params(self, idxs, ratio):
         """Update parameters for MCMC sampling with opacity adjustment.
@@ -1151,6 +1354,13 @@ class GaussianModel:
         # Get x_threshold from viewpoint_camera if it exists, otherwise use infinity
         x_threshold = viewpoint_camera.x_threshold if hasattr(viewpoint_camera, 'x_threshold') and viewpoint_camera.x_threshold is not None else float('inf')
 
+        # Create empty metric_map for non-FastGS rendering
+        metric_map = torch.zeros(
+            int(viewpoint_camera.image_height) * int(viewpoint_camera.image_width),
+            dtype=torch.int,
+            device='cuda'
+        )
+
         raster_settings = TCGSRasterizationSettings(
             image_height=int(viewpoint_camera.image_height),
             image_width=int(viewpoint_camera.image_width),
@@ -1166,13 +1376,15 @@ class GaussianModel:
             prefiltered=False,
             use_tcgs=use_tcgs,
             tight_snugbox=tight_snugbox,
-            debug=False
+            debug=False,
+            get_flag=False,
+            metric_map=metric_map,
         )
 
         rasterizer = TCGSRasterizer(raster_settings=raster_settings)
-        
+
         # Rasterize
-        rendered_image, radii, render_time = rasterizer(
+        rendered_image, radii, render_time, _ = rasterizer(
             means3D=m_cond,
             means2D=screenspace_points,
             shs=shs,
@@ -1189,6 +1401,134 @@ class GaussianModel:
             "viewspace_points": screenspace_points,
             "visibility_filter": radii > 0,
             "radii": radii,
+        }
+
+    def render_tcgs_with_metric(self, viewpoint_camera, background=None, scaling_modifier=1.0,
+                                 use_tcgs=False, tight_snugbox=False, get_flag=False, metric_map=None):
+        """
+        Render using NDGS conditional slicing with FastGS-style metric counting support.
+
+        This method extends render_tcgs to support multi-view consistent densification
+        by optionally counting per-Gaussian contributions to high-error pixels.
+
+        Args:
+            viewpoint_camera: Camera viewpoint
+            background: Background color tensor [3] (uses self.background if None)
+            scaling_modifier: Scaling factor for Gaussians
+            use_tcgs: Whether to use TCGS rasterizer
+            tight_snugbox: Use tight snugbox for TCGS rasterization
+            get_flag: If True, enable metric counting for FastGS densification
+            metric_map: Binary mask [H*W] indicating high-error pixels (required if get_flag=True)
+
+        Returns:
+            Dictionary with rendered image, viewspace_points, visibility_filter, radii,
+            and accum_metric_counts (if get_flag=True)
+        """
+        import math
+
+        # Create screenspace points for gradient tracking
+        screenspace_points = torch.zeros_like(self.get_xyz, dtype=self.get_xyz.dtype, requires_grad=True, device="cuda") + 0
+        try:
+            screenspace_points.retain_grad()
+        except:
+            pass
+
+        # Compute view direction for conditional slicing
+        dir_pp = (self.get_xyz - viewpoint_camera.camera_center.repeat(self._mean.shape[0], 1))
+        view_dir = dir_pp / dir_pp.norm(dim=1, keepdim=True)
+
+        # For 7DGS, append timestamp to query
+        if self.input_dim == 7:
+            timestamp = torch.full(
+                (view_dir.shape[0], 1),
+                viewpoint_camera.timestamp if hasattr(viewpoint_camera, 'timestamp') else 0.0,
+                device=view_dir.device,
+                dtype=view_dir.dtype,
+            )
+            cond_params = torch.cat([view_dir, timestamp], dim=-1)
+        else:
+            cond_params = view_dir
+
+        # Use fixed or learnable lambda_opc
+        if self.learnable_lambda_opc:
+            lambda_opc = self.get_lambda_opc.squeeze(-1)
+        else:
+            lambda_opc = 0.35
+
+        # Training mode: compute conditional slicing
+        shs = self.get_features
+        m_cond, cov3D_precomp, pdf_cond = self.slice_gaussian(cond_params, c_dim=3, lambda_opc=lambda_opc)
+
+        # Compute opacity with conditional probability
+        if self.learnable_lambda_opc:
+            opacity = self.get_opacity * pdf_cond * self.get_lambda_opc
+        else:
+            opacity = self.get_opacity * pdf_cond
+
+        # Set up rasterization
+        tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)
+        tanfovy = math.tan(viewpoint_camera.FoVy * 0.5)
+
+        # Use provided background or model's background or default to black
+        if background is not None:
+            bg_color = background
+        elif self.background.numel() > 0:
+            bg_color = self.background
+        else:
+            bg_color = torch.tensor([0, 0, 0], dtype=torch.float32, device="cuda")
+
+        # Get x_threshold from viewpoint_camera if it exists
+        x_threshold = viewpoint_camera.x_threshold if hasattr(viewpoint_camera, 'x_threshold') and viewpoint_camera.x_threshold is not None else float('inf')
+
+        # Create metric_map if None (rasterizer always expects a tensor)
+        if metric_map is None:
+            metric_map = torch.zeros(
+                int(viewpoint_camera.image_height) * int(viewpoint_camera.image_width),
+                dtype=torch.int,
+                device='cuda'
+            )
+
+        raster_settings = TCGSRasterizationSettings(
+            image_height=int(viewpoint_camera.image_height),
+            image_width=int(viewpoint_camera.image_width),
+            tanfovx=tanfovx,
+            tanfovy=tanfovy,
+            bg=bg_color,
+            scale_modifier=scaling_modifier,
+            viewmatrix=viewpoint_camera.world_view_transform,
+            projmatrix=viewpoint_camera.full_proj_transform,
+            sh_degree=self.active_sh_degree,
+            campos=viewpoint_camera.camera_center,
+            x_threshold=x_threshold,
+            prefiltered=False,
+            use_tcgs=use_tcgs,
+            tight_snugbox=tight_snugbox,
+            debug=False,
+            get_flag=get_flag,
+            metric_map=metric_map,
+        )
+
+        rasterizer = TCGSRasterizer(raster_settings=raster_settings)
+
+        # Rasterize
+        rendered_image, radii, render_time, accum_metric_counts = rasterizer(
+            means3D=m_cond,
+            means2D=screenspace_points,
+            shs=shs,
+            colors_precomp=None,
+            opacities=opacity,
+            scores=None,
+            scales=None,
+            rotations=None,
+            cov3D_precomp=cov3D_precomp,
+        )
+
+        return {
+            "render": rendered_image,
+            "viewspace_points": screenspace_points,
+            "visibility_filter": radii > 0,
+            "radii": radii,
+            "accum_metric_counts": accum_metric_counts,
         }
 
     @torch.no_grad()

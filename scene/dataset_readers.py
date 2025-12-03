@@ -228,6 +228,13 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
             with Image.open(image_path) as image:
                 width, height = image.size
 
+                # # Check if the image is totally black
+                # # Convert to numpy array and check if all pixels are black
+                # img_array = np.array(image)
+                # if img_array.max() == 0:
+                #     print(f"Skipping totally black frame: {image_name} (timestamp: {timestamp})")
+                #     continue
+
             fovy = focal2fov(fov2focal(fovx, width), height)
             cam_infos.append(
                 CameraInfo(

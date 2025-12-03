@@ -37,6 +37,9 @@ try:
 except ImportError:
     VISER_FOUND = False
     print("Viser not found. Live viewer will be disabled.")
+
+# FastGS multi-view consistent densification utilities
+from utils.fast_utils import compute_gaussian_score_fastgs, sampling_cameras
     
 def create_radial_weight_mask(height, width, center_weight=0.8, edge_weight=5):
     y, x = torch.meshgrid(torch.arange(height), torch.arange(width))
@@ -92,8 +95,24 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
     scene = Scene(dataset, gaussians, opt_params=opt)
     gaussians.training_setup(opt)
     if checkpoint:
-        (model_params, first_iter) = torch.load(checkpoint)
-        gaussians.restore(model_params, opt)
+        if checkpoint.endswith('.ply'):
+            # Load from PLY file - starts from iteration 0 with fresh optimizer
+            print(f"Loading pretrained model from PLY file: {checkpoint}")
+            gaussians.load_ply(checkpoint)
+            first_iter = 0
+            # Reinitialize tracking arrays to match the loaded model size
+            num_points = gaussians.get_xyz.shape[0]
+            gaussians.xyz_gradient_accum = torch.zeros((num_points, 1), device="cuda")
+            gaussians.denom = torch.zeros((num_points, 1), device="cuda")
+            gaussians.max_radii2D = torch.zeros((num_points,), device="cuda")
+            print(f"Note: Loading from PLY resets optimizer state and starts from iteration 0")
+            print(f"Loaded {num_points} Gaussians from PLY file")
+        else:
+            # Load from checkpoint file - resumes training with optimizer state
+            print(f"Loading checkpoint from: {checkpoint}")
+            (model_params, first_iter) = torch.load(checkpoint)
+            gaussians.restore(model_params, opt)
+            print(f"Resuming training from iteration {first_iter}")
 
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
     if "nerf_synthetic" in dataset.source_path:
@@ -293,8 +312,91 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
 
                         if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                             gaussians.reset_opacity()
+
+                elif opt.densification_strategy == "fastgs":
+                    # FastGS multi-view consistent densification
+                    # Adapted from FastGS (arXiv:2511.04283)
+                    if hasattr(gaussians, 'densify_and_prune_fastgs') and hasattr(gaussians, 'render_tcgs_with_metric'):
+                        # Track gradients for densification (same as standard)
+                        gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
+                        gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
+
+                        if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
+                            # Sample cameras for multi-view scoring
+                            my_viewpoint_stack = scene.getTrainCameras().copy()
+                            camlist = sampling_cameras(my_viewpoint_stack, num_cams=opt.fastgs_num_sample_cams)
+
+                            # Compute multi-view consistent importance and pruning scores
+                            importance_score, pruning_score = compute_gaussian_score_fastgs(
+                                camlist, gaussians, background,
+                                loss_thresh=opt.fastgs_loss_thresh,
+                                DENSIFY=True
+                            )
+
+                            # Apply FastGS densification and pruning
+                            size_threshold = 20 if iteration > opt.opacity_reset_interval else None
+                            gaussians.densify_and_prune_fastgs(
+                                max_screen_size=size_threshold,
+                                min_opacity=0.005,
+                                extent=scene.cameras_extent,
+                                radii=radii,
+                                grad_thresh=opt.fastgs_grad_thresh,
+                                percent_dense=opt.percent_dense,
+                                importance_score=importance_score,
+                                pruning_score=pruning_score,
+                                densify_score_thresh=opt.fastgs_densify_score_thresh,
+                                prune_budget_ratio=opt.fastgs_prune_budget_ratio,
+                            )
+
+                            # Clear CUDA cache after densification
+                            torch.cuda.empty_cache()
+
+                        if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
+                            gaussians.reset_opacity()
+                    else:
+                        print(f"\nWarning: FastGS densification requested but model {mode} does not support it. Falling back to standard densification.")
+                        # Fallback to standard densification
+                        gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
+                        gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
+
+                        if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
+                            size_threshold = 20 if iteration > opt.opacity_reset_interval else None
+                            min_opacity = 0.005 if "ndgs" in mode else 0.005
+                            gaussians.densify_and_prune(opt.densify_grad_threshold, min_opacity, scene.cameras_extent, size_threshold, iteration)
+
+                        if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
+                            gaussians.reset_opacity()
+
                 else:
-                    raise ValueError(f"Unknown densification_strategy: {opt.densification_strategy}. Choose 'standard' or 'mcmc'.")
+                    raise ValueError(f"Unknown densification_strategy: {opt.densification_strategy}. Choose 'standard', 'mcmc', or 'fastgs'.")
+
+            # FastGS final pruning phase (after densification ends)
+            # This is the multi-view consistent pruning that happens every 3k iterations after 15k
+            if (opt.densification_strategy == "fastgs" and
+                iteration % opt.fastgs_final_prune_interval == 0 and
+                iteration >= opt.fastgs_final_prune_start and
+                iteration < opt.fastgs_final_prune_end):
+                if hasattr(gaussians, 'final_prune_fastgs') and hasattr(gaussians, 'render_tcgs_with_metric'):
+                    # Sample cameras for multi-view scoring
+                    my_viewpoint_stack = scene.getTrainCameras().copy()
+                    camlist = sampling_cameras(my_viewpoint_stack, num_cams=opt.fastgs_num_sample_cams)
+
+                    # Compute pruning scores (no DENSIFY since we're only pruning)
+                    _, pruning_score = compute_gaussian_score_fastgs(
+                        camlist, gaussians, background,
+                        loss_thresh=opt.fastgs_loss_thresh,
+                        DENSIFY=False
+                    )
+
+                    # Apply aggressive final pruning
+                    gaussians.final_prune_fastgs(
+                        min_opacity=0.1,
+                        pruning_score=pruning_score,
+                        prune_score_thresh=0.9,
+                    )
+
+                    print(f"\n[ITER {iteration}] FastGS final prune: {gaussians.get_xyz.shape[0]} Gaussians remaining")
+                    torch.cuda.empty_cache()
 
             # Optimizer step
             if iteration < opt.iterations:
@@ -389,7 +491,7 @@ if __name__ == "__main__":
     parser.add_argument("--save_iterations", nargs="+", type=int, default=[500, 2_000, 7_000, 15_000, 30_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
-    parser.add_argument("--start_checkpoint", type=str, default = None)
+    parser.add_argument("--start_checkpoint", type=str, default = None, help="Path to checkpoint (.pth) or pretrained model (.ply) to load. .pth resumes training with optimizer state, .ply starts fresh from iteration 0")
     parser.add_argument("--keep_viewer", action="store_true", help="Keep the viewer running after training completes")
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
