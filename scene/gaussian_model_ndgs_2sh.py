@@ -1055,22 +1055,25 @@ class GaussianModel:
             prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
 
         # FastGS pruning strategy: use pruning_score to guide removal
-        if pruning_score is not None and prune_budget_ratio > 0:
+        if pruning_score is not None:
             scores = 1 - pruning_score
             to_remove = torch.sum(prune_mask)
             remove_budget = int(prune_budget_ratio * to_remove)
 
+            # Only prune if there's a budget (matches original FastGS behavior)
             if remove_budget > 0:
                 n_points = self.get_xyz.shape[0]
                 padded_importance = torch.zeros(n_points, dtype=torch.float32, device="cuda")
                 padded_importance[:scores.shape[0]] = 1 / (1e-6 + scores.squeeze())
 
-                selected_pts_mask = torch.zeros_like(padded_importance, dtype=bool)
+                selected_pts_mask = torch.zeros_like(padded_importance, dtype=bool, device="cuda")
                 sampled_indices = torch.multinomial(padded_importance, min(remove_budget, n_points), replacement=False)
                 selected_pts_mask[sampled_indices] = True
                 final_prune = torch.logical_and(prune_mask, selected_pts_mask)
                 self.prune_points(final_prune)
+            # If remove_budget is 0, don't prune (FastGS behavior)
         else:
+            # Fallback: if no pruning_score provided, use standard pruning
             self.prune_points(prune_mask)
 
         # Reset opacity (clamped at 0.8)
