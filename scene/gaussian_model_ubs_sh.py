@@ -1126,6 +1126,7 @@ class GaussianModel:
         mask=None,
         use_tcgs=False,
         tight_snugbox=False,
+        compact_box_mult=1.0,
         scaling_modifier=1.0,
     ):
         if render_mode != "RGB":

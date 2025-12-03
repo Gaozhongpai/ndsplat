@@ -115,8 +115,6 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
             print(f"Resuming training from iteration {first_iter}")
 
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
-    if "nerf_synthetic" in dataset.source_path:
-        bg_color = [1, 1, 1]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
     # Initialize viser viewer if available and not disabled

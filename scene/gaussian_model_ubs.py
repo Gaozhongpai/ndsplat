@@ -1234,6 +1234,7 @@ class GaussianModel:
         scaling_modifier=1.0,
         use_tcgs=False,
         tight_snugbox=False,
+        compact_box_mult=1.0,
         get_flag=False,
         metric_map=None,
     ):
@@ -1249,6 +1250,7 @@ class GaussianModel:
             scaling_modifier: Scaling factor for Gaussians
             use_tcgs: Whether to use TCGS rasterizer
             tight_snugbox: Use tight snugbox for TCGS rasterization
+            compact_box_mult: FastGS-style compact box multiplier (1.0 = SnugBox, <1.0 = tighter)
             get_flag: If True, enable metric counting for FastGS densification
             metric_map: Binary mask [H*W] indicating high-error pixels (required if get_flag=True)
 
@@ -1339,6 +1341,7 @@ class GaussianModel:
             x_threshold=viewpoint_camera.x_threshold if viewpoint_camera.x_threshold is not None else float('inf'),
             use_tcgs=use_tcgs,
             tight_snugbox=tight_snugbox,
+            compact_box_mult=compact_box_mult,
             debug=False,
             get_flag=get_flag,
             metric_map=metric_map,
@@ -1458,6 +1461,7 @@ class GaussianModel:
         mask=None,
         use_tcgs=False,
         tight_snugbox=False,
+        compact_box_mult=1.0,
         scaling_modifier=1.0,
     ):
         if render_mode != "RGB":
@@ -1544,6 +1548,7 @@ class GaussianModel:
             x_threshold=viewpoint_camera.x_threshold if viewpoint_camera.x_threshold is not None else float('inf'),
             use_tcgs=use_tcgs,
             tight_snugbox=tight_snugbox,
+            compact_box_mult=compact_box_mult,
             debug=False,
         )
 

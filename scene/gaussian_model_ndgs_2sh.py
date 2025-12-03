@@ -1095,7 +1095,7 @@ class GaussianModel:
         torch.cuda.empty_cache()
 
     def render_tcgs_with_metric(self, viewpoint_camera, background=None, scaling_modifier=1.0,
-                                 use_tcgs=False, tight_snugbox=False, get_flag=False, metric_map=None):
+                                 use_tcgs=False, tight_snugbox=False, compact_box_mult=1.0, get_flag=False, metric_map=None):
         """
         Render using NDGS conditional slicing with FastGS-style metric counting support.
 
@@ -1108,6 +1108,7 @@ class GaussianModel:
             scaling_modifier: Scaling factor for Gaussians
             use_tcgs: Whether to use TCGS rasterizer
             tight_snugbox: Use tight snugbox for TCGS rasterization
+            compact_box_mult: FastGS-style compact box multiplier (1.0 = SnugBox, <1.0 = tighter)
             get_flag: If True, enable metric counting for FastGS densification
             metric_map: Binary mask [H*W] indicating high-error pixels (required if get_flag=True)
 
@@ -1208,6 +1209,7 @@ class GaussianModel:
             prefiltered=False,
             use_tcgs=use_tcgs,
             tight_snugbox=tight_snugbox,
+            compact_box_mult=compact_box_mult,
             debug=False,
             get_flag=get_flag,
             metric_map=metric_map,
@@ -1455,7 +1457,7 @@ class GaussianModel:
 
         return optimizable_tensors
 
-    def render_tcgs(self, viewpoint_camera, render_mode="RGB", scaling_modifier=1.0, use_tcgs=False, tight_snugbox=False):
+    def render_tcgs(self, viewpoint_camera, render_mode="RGB", scaling_modifier=1.0, use_tcgs=False, tight_snugbox=False, compact_box_mult=1.0):
         """
         Render using NDGS conditional slicing with diff-gaussian-rasterization.
         This encapsulates the NDGS-specific rendering logic with dual SH support.
@@ -1467,6 +1469,7 @@ class GaussianModel:
             is_test: Whether in test mode
             scaling_modifier: Scaling factor for Gaussians
             tight_snugbox: Use tight snugbox for TCGS rasterization (default: True)
+            compact_box_mult: FastGS-style compact box multiplier (1.0 = SnugBox, <1.0 = tighter)
         """
         import math
 
@@ -1565,6 +1568,7 @@ class GaussianModel:
             prefiltered=False,
             use_tcgs=use_tcgs,
             tight_snugbox=tight_snugbox,
+            compact_box_mult=compact_box_mult,
             debug=False,
         )
 
