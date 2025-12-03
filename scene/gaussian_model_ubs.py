@@ -96,6 +96,7 @@ class GaussianModel:
         # Training attributes for densification (compatibility with 6dgs-iclr train.py)
         self.max_radii2D = torch.empty(0)
         self.xyz_gradient_accum = torch.empty(0)
+        self.xyz_gradient_accum_abs = torch.empty(0)  # FastGS: Z gradients for splitting
         self.denom = torch.empty(0)
         self.percent_dense = 0
 
@@ -302,6 +303,7 @@ class GaussianModel:
         # Initialize densification tracking
         self.percent_dense = training_args.percent_dense
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+        self.xyz_gradient_accum_abs = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")  # FastGS: Z gradients
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
@@ -601,6 +603,7 @@ class GaussianModel:
         self._l_triangle = optimizable_tensors["l_triangle"]
 
         self.xyz_gradient_accum = self.xyz_gradient_accum[valid_points_mask]
+        self.xyz_gradient_accum_abs = self.xyz_gradient_accum_abs[valid_points_mask]
         self.denom = self.denom[valid_points_mask]
         self.max_radii2D = self.max_radii2D[valid_points_mask]
 
@@ -670,6 +673,7 @@ class GaussianModel:
         # Reset densification tracking tensors for all points (following original 3DGS approach)
         # This resets gradient accumulation after densification, which is the standard behavior
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+        self.xyz_gradient_accum_abs = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
@@ -1025,7 +1029,9 @@ class GaussianModel:
 
     def add_densification_stats(self, viewspace_point_tensor, update_filter):
         """Accumulate gradients for densification."""
+        # FastGS: accumulate XY gradients for cloning, Z gradients for splitting
         self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True)
+        self.xyz_gradient_accum_abs[update_filter] += torch.norm(viewspace_point_tensor.grad[update_filter, 2:], dim=-1, keepdim=True)
         self.denom[update_filter] += 1
 
     # ==================== FastGS-style Densification Methods ====================
@@ -1110,6 +1116,7 @@ class GaussianModel:
         extent: float,
         radii: torch.Tensor,
         grad_thresh: float = 0.0002,
+        grad_abs_thresh: float = 0.0006,
         percent_dense: float = 0.01,
         importance_score: torch.Tensor = None,
         pruning_score: torch.Tensor = None,
@@ -1130,30 +1137,37 @@ class GaussianModel:
             min_opacity: Minimum opacity threshold for pruning
             extent: Scene extent for size-based decisions
             radii: Per-Gaussian radii from rendering
-            grad_thresh: Gradient threshold for densification candidates
+            grad_thresh: Gradient threshold for cloning (XY screen-space gradients)
+            grad_abs_thresh: Gradient threshold for splitting (Z depth gradients)
             percent_dense: Percentage of extent for clone/split decision
             importance_score: Per-Gaussian importance score from multi-view
             pruning_score: Per-Gaussian pruning score from multi-view
             densify_score_thresh: Threshold on importance_score for densification
             prune_budget_ratio: Fraction of prunable Gaussians to actually prune
         """
-        # Compute gradient-based selection
+        # Compute gradient-based selection (XY for cloning)
         grads = self.xyz_gradient_accum / self.denom
         grads[grads.isnan()] = 0.0
+
+        # Compute Z gradient-based selection (for splitting)
+        grads_abs = self.xyz_gradient_accum_abs / self.denom
+        grads_abs[grads_abs.isnan()] = 0.0
 
         # Update max radii
         self.max_radii2D = torch.max(self.max_radii2D, radii)
 
         # Gradient-based candidate selection
         grad_qualifiers = torch.where(torch.norm(grads, dim=-1) >= grad_thresh, True, False)
+        grad_qualifiers_abs = torch.where(torch.norm(grads_abs, dim=-1) >= grad_abs_thresh, True, False)
 
         # Size-based split/clone decision (use conditional covariance-based scaling for UBS)
         scale = self.get_scaling_cond
         clone_qualifiers = torch.max(scale[:, :3], dim=1).values <= percent_dense * extent
         split_qualifiers = torch.max(scale[:, :3], dim=1).values > percent_dense * extent
 
+        # FastGS: clones use XY gradients, splits use Z (abs) gradients
         all_clones = torch.logical_and(clone_qualifiers, grad_qualifiers)
-        all_splits = torch.logical_and(split_qualifiers, grad_qualifiers)
+        all_splits = torch.logical_and(split_qualifiers, grad_qualifiers_abs)
 
         # FastGS key contribution: filter by multi-view importance score
         if importance_score is not None:
