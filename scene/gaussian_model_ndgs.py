@@ -1354,13 +1354,7 @@ class GaussianModel:
         # Get x_threshold from viewpoint_camera if it exists, otherwise use infinity
         x_threshold = viewpoint_camera.x_threshold if hasattr(viewpoint_camera, 'x_threshold') and viewpoint_camera.x_threshold is not None else float('inf')
 
-        # Create empty metric_map for non-FastGS rendering
-        metric_map = torch.zeros(
-            int(viewpoint_camera.image_height) * int(viewpoint_camera.image_width),
-            dtype=torch.int,
-            device='cuda'
-        )
-
+        # No metric_map needed for non-FastGS rendering (backwards compatible)
         raster_settings = TCGSRasterizationSettings(
             image_height=int(viewpoint_camera.image_height),
             image_width=int(viewpoint_camera.image_width),
@@ -1377,8 +1371,6 @@ class GaussianModel:
             use_tcgs=use_tcgs,
             tight_snugbox=tight_snugbox,
             debug=False,
-            get_flag=False,
-            metric_map=metric_map,
         )
 
         rasterizer = TCGSRasterizer(raster_settings=raster_settings)

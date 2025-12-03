@@ -1528,13 +1528,7 @@ class GaussianModel:
         projmatrix = viewpoint_camera.full_proj_transform.to(means3d.device)
         campos = viewpoint_camera.camera_center.to(means3d.device)
 
-        # Create empty metric_map for non-FastGS rendering
-        metric_map = torch.zeros(
-            int(viewpoint_camera.image_height) * int(viewpoint_camera.image_width),
-            dtype=torch.int,
-            device='cuda'
-        )
-
+        # No metric_map needed for non-FastGS rendering (backwards compatible)
         raster_settings = TCGSRasterizationSettings(
             image_height=int(viewpoint_camera.image_height),
             image_width=int(viewpoint_camera.image_width),
@@ -1551,8 +1545,6 @@ class GaussianModel:
             use_tcgs=use_tcgs,
             tight_snugbox=tight_snugbox,
             debug=False,
-            get_flag=False,
-            metric_map=metric_map,
         )
 
         rasterizer = TCGSRasterizer(raster_settings=raster_settings)
