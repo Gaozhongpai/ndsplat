@@ -121,8 +121,8 @@ class OptimizationParams(ParamGroup):
         # Adapted from FastGS (arXiv:2511.04283) for multi-view consistent densification
         self.fastgs_loss_thresh = 0.3  # Threshold for high-error pixel detection
         self.fastgs_grad_thresh = 0.0002  # Gradient threshold for cloning (XY screen-space gradients)
-        self.fastgs_grad_abs_thresh = 0.0006  # Gradient threshold for splitting (Z depth gradients) - FastGS big default
-        self.fastgs_densify_score_thresh = 3  # Minimum importance score for densification
+        self.fastgs_grad_abs_thresh = 0.0004  # Gradient threshold for splitting (Z depth gradients) - FastGS big default
+        self.fastgs_densify_score_thresh = 2  # Minimum importance score for densification
         self.fastgs_prune_budget_ratio = 0.2  # Fraction of prunable Gaussians to actually prune
         self.fastgs_final_prune_interval = 3000  # Interval for final pruning after 15k iterations
         self.fastgs_final_prune_start = 15_000  # Start iteration for final pruning

@@ -253,7 +253,7 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
 
                     if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                         size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                        min_opacity = 0.005 if "ndgs" in mode else 0.005 ## RSNA 0.005, paper 0.01
+                        min_opacity = 0.01 if "ndgs" in mode else 0.005 ## RSNA 0.005, paper 0.01
                         gaussians.densify_and_prune(opt.densify_grad_threshold, min_opacity, scene.cameras_extent, size_threshold, iteration)
                         # Clear CUDA cache after densification to free memory from pruned Gaussians
                         torch.cuda.empty_cache()
@@ -339,6 +339,7 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
                                 extent=scene.cameras_extent,
                                 radii=radii,
                                 grad_thresh=opt.fastgs_grad_thresh,
+                                grad_abs_thresh=opt.fastgs_grad_abs_thresh,
                                 percent_dense=opt.percent_dense,
                                 importance_score=importance_score,
                                 pruning_score=pruning_score,
