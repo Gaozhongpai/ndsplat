@@ -22,7 +22,6 @@ import os
 from utils.system_utils import mkdir_p
 from plyfile import PlyData, PlyElement
 from utils.sh_utils import RGB2SH
-from simple_knn._C import distCUDA2
 from utils.graphics_utils import BasicPointCloud
 from utils.general_utils import strip_symmetric, build_scaling_rotation
 
@@ -237,7 +236,15 @@ class GaussianModel:
 
         print("Number of points at initialisation:", fused_point_cloud.shape[0])
 
-        dist2 = torch.clamp_min(distCUDA2(torch.from_numpy(np.asarray(pcd.points)).float().cuda()), 0.0000001)
+        from sklearn.neighbors import NearestNeighbors
+        def knn(x, K=4):
+            x_np = x.cpu().numpy()
+            model = NearestNeighbors(n_neighbors=K, metric="euclidean").fit(x_np)
+            distances, _ = model.kneighbors(x_np)
+            return torch.from_numpy(distances).to(x)
+
+        # Spatial scales (first 3): from KNN distances
+        dist2 = (knn(fused_point_cloud)[:, 1:] ** 2).mean(dim=-1)
         scales = torch.log(torch.sqrt(dist2))[..., None].repeat(1, 3)
         rots = torch.zeros((fused_point_cloud.shape[0], 4), device=device)
         rots[:, 0] = 1
@@ -656,10 +663,7 @@ class GaussianModel:
 
         # Get opacity scaled by view-dependent factor
         opacity = self.get_opacity * opacity_scale
-
-        # Compute 3D covariance from scaling and rotation (standard 3DGS)
-        cov3D_precomp = self.get_covariance(scaling_modifier)
-
+        
         # Set up rasterization
         tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)
         tanfovy = math.tan(viewpoint_camera.FoVy * 0.5)
@@ -699,9 +703,9 @@ class GaussianModel:
             colors_precomp=None,
             opacities=opacity,
             scores=None,
-            scales=None,
-            rotations=None,
-            cov3D_precomp=cov3D_precomp,
+            scales=self.get_scaling,
+            rotations=self.get_rotation,
+            cov3D_precomp=None,
         )
 
         return {
