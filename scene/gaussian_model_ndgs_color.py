@@ -25,7 +25,7 @@ from utils.graphics_utils import BasicPointCloud
 from utils.general_utils import strip_symmetric, build_scaling_rotation
 
 # Import CUDA-accelerated functions from gsplat
-from gsplat import slice_gaussian_color, l_triangle_to_covar
+from gsplat import slice_gaussian_color, l_triangle_to_covar, slice_gaussian_color_simple, _slice_gaussian_color_simple
 
 # Import TCGS rasterizer for rendering
 from tcgs_speedy_rasterizer import (
@@ -83,7 +83,7 @@ class GaussianModelColor:
         self.rotation_activation = torch.nn.functional.normalize
 
     def __init__(self, sh_degree: int = 0, input_dim: int = 6, use_rot_scale_l_triangle: bool = False,
-                 learnable_lambda_opc: bool = False):
+                 learnable_lambda_opc: bool = False, use_simplified_color: bool = False):
         """
         Initialize Color-based N-DGS model.
 
@@ -95,6 +95,9 @@ class GaussianModelColor:
             use_rot_scale_l_triangle: Ignored for Color N-DGS (uses standard 3DGS quaternion+scale).
                                       Kept for API compatibility with other N-DGS models.
             learnable_lambda_opc: If True, make lambda_opc a learnable parameter per Gaussian
+            use_simplified_color: If True, use simplified parameterization that directly learns
+                                  v_regr [N, 3, C] and L_22 [N, C*(C+1)/2] instead of full covariance.
+                                  This reduces parameters from D*(D+1)/2 to 3*C + C*(C+1)/2.
         """
         # Note: use_rot_scale_l_triangle is ignored - Color N-DGS uses standard 3DGS geometry
         _ = use_rot_scale_l_triangle  # Explicitly ignore for API compatibility
@@ -103,6 +106,7 @@ class GaussianModelColor:
         self.max_sh_degree = 0  # Force to 0, conditional color replaces SH
         self.input_dim = input_dim  # 6 for color+view, 7 for color+view+time
         self.learnable_lambda_opc = learnable_lambda_opc
+        self.use_simplified_color = use_simplified_color
         self.training = True  # Training mode flag (similar to nn.Module)
 
         # Standard 3DGS geometry parameters (FIXED, not view-dependent)
@@ -117,9 +121,27 @@ class GaussianModelColor:
         self._color_mean = torch.empty(0)  # [N, 3] RGB base color (replaces SH DC)
         # View direction mean (learned "canonical" view direction per Gaussian)
         self._view_mean = torch.empty(0)  # [N, 3] or [N, 4] with time
-        # Color covariance parameters (diagonal + lower triangular)
-        self._color_scale = torch.empty(0)  # [N, input_dim] diagonal of L
-        self._color_l_triangle = torch.empty(0)  # [N, input_dim*(input_dim-1)//2]
+
+        # Conditional dimension size (view direction + optional time)
+        self.cond_dim = input_dim - 3  # C = 3 for view-only, 4 for view+time
+
+        if use_simplified_color:
+            # Simplified parameterization: directly learn v_regr and L_22
+            # v_regr: [N, 3, C] regression matrix (flattened to [N, 3*C])
+            self._v_regr = torch.empty(0)  # [N, 3*C] -> reshaped to [N, 3, C]
+            # L_22: [N, C*(C+1)/2] lower triangular Cholesky factor of precision_22
+            self._L_22 = torch.empty(0)  # [N, C*(C+1)/2]
+            # Placeholders for compatibility
+            self._color_scale = torch.empty(0)
+            self._color_l_triangle = torch.empty(0)
+        else:
+            # Full covariance parameterization (original)
+            # Color covariance parameters (diagonal + lower triangular)
+            self._color_scale = torch.empty(0)  # [N, input_dim] diagonal of L
+            self._color_l_triangle = torch.empty(0)  # [N, input_dim*(input_dim-1)//2]
+            # Placeholders for compatibility
+            self._v_regr = torch.empty(0)
+            self._L_22 = torch.empty(0)
 
         # Lambda for opacity scaling
         self._lambda_opc = torch.empty(0)
@@ -191,6 +213,10 @@ class GaussianModelColor:
         else:
             view_mean = view_dir_normalized
 
+        if self.use_simplified_color:
+            # Use simplified parameterization
+            return self.slice_color_gaussian_simple(query, view_mean, lambda_opc)
+
         # Full covariance [N, D, D] where D = 3 + C (6 or 7)
         covars = self.get_color_covariance()
 
@@ -200,6 +226,43 @@ class GaussianModelColor:
             view_mean=view_mean,
             query=query,
             covars=covars,
+            lambda_opc=lambda_opc,
+        )
+
+        return color_cond, opacity_scale
+
+    def slice_color_gaussian_simple(self, query, view_mean, lambda_opc=0.35):
+        """
+        Perform conditional Gaussian slicing using simplified parameterization.
+
+        This version directly uses learned v_regr and L_22 instead of computing
+        them from full covariance, resulting in fewer parameters and faster computation.
+
+        Args:
+            query: Query direction (view direction + optional time) [N, C] where C=3 or 4
+            view_mean: Normalized view mean [N, C]
+            lambda_opc: Opacity scaling factor (default 0.35)
+
+        Returns:
+            color_cond: Conditional RGB color [N, 3]
+            opacity_scale: View-dependent opacity scaling [N, 1]
+        """
+        color_mean = self._color_mean  # [N, 3]
+        C = self.cond_dim
+
+        # Reshape v_regr from [N, 3*C] to [N, 3, C]
+        v_regr = self._v_regr.view(-1, 3, C)  # [N, 3, C]
+
+        # L_22 is already in packed format [N, C*(C+1)/2]
+        L_22 = self._L_22  # [N, C*(C+1)/2]
+
+        # Use CUDA-accelerated version
+        color_cond, opacity_scale = slice_gaussian_color_simple(
+            color_mean=color_mean,
+            view_mean=view_mean,
+            query=query,
+            v_regr=v_regr,
+            L_22=L_22,
             lambda_opc=lambda_opc,
         )
 
@@ -249,24 +312,53 @@ class GaussianModelColor:
             self.denom,
             self.optimizer.state_dict(),
             self.spatial_lr_scale,
+            self.use_simplified_color,
+            self._v_regr,
+            self._L_22,
         )
 
     def restore(self, model_args, training_args):
-        (self.active_sh_degree,
-         self._xyz,
-         self._scaling,
-         self._rotation,
-         self._opacity,
-         self._color_mean,
-         self._view_mean,
-         self._color_scale,
-         self._color_l_triangle,
-         self._lambda_opc,
-         self.max_radii2D,
-         xyz_gradient_accum,
-         denom,
-         opt_dict,
-         self.spatial_lr_scale) = model_args
+        # Handle both old format (15 elements) and new format (18 elements)
+        if len(model_args) == 15:
+            # Old format without simplified parameters
+            (self.active_sh_degree,
+             self._xyz,
+             self._scaling,
+             self._rotation,
+             self._opacity,
+             self._color_mean,
+             self._view_mean,
+             self._color_scale,
+             self._color_l_triangle,
+             self._lambda_opc,
+             self.max_radii2D,
+             xyz_gradient_accum,
+             denom,
+             opt_dict,
+             self.spatial_lr_scale) = model_args
+            self.use_simplified_color = False
+            self._v_regr = torch.empty(0, device="cuda")
+            self._L_22 = torch.empty(0, device="cuda")
+        else:
+            # New format with simplified parameters
+            (self.active_sh_degree,
+             self._xyz,
+             self._scaling,
+             self._rotation,
+             self._opacity,
+             self._color_mean,
+             self._view_mean,
+             self._color_scale,
+             self._color_l_triangle,
+             self._lambda_opc,
+             self.max_radii2D,
+             xyz_gradient_accum,
+             denom,
+             opt_dict,
+             self.spatial_lr_scale,
+             self.use_simplified_color,
+             self._v_regr,
+             self._L_22) = model_args
         self.training_setup(training_args)
         self.xyz_gradient_accum = xyz_gradient_accum
         self.denom = denom
@@ -387,32 +479,61 @@ class GaussianModelColor:
             mean_time = torch.empty(init_n_gs, 1, device=device).uniform_(0.0, 1.0)
             view_mean = torch.cat([view_mean, mean_time], dim=-1)
 
-        # Color covariance initialization
-        # Diagonal: small values for color (tight distribution), larger for view direction
-        color_scales_color = self.color_scale_inverse_activation(
-            torch.ones(init_n_gs, 3, device=device) * 0.1  # Tight color distribution
-        )
-        color_scales_view = self.color_scale_inverse_activation(
-            torch.ones(init_n_gs, self.input_dim - 3, device=device) * 0.5  # Wider view distribution
-        )
-        color_scales = torch.cat([color_scales_color, color_scales_view], dim=1)
-
-        # Lower triangular: small random values
-        n_l_triangle = self.input_dim * (self.input_dim - 1) // 2
-        color_l_triangles = self.color_l_triangle_inverse_activation(
-            torch.normal(0, 1e-2, size=(init_n_gs, n_l_triangle), device=device)
-        )
-
-        # Set parameters
+        # Set common parameters
         self._xyz = nn.Parameter(fused_point_cloud.requires_grad_(True))
         self._scaling = nn.Parameter(scales.requires_grad_(True))
         self._rotation = nn.Parameter(rots.requires_grad_(True))
         self._opacity = nn.Parameter(opacities.requires_grad_(True))
         self._color_mean = nn.Parameter(color_mean.requires_grad_(True))
         self._view_mean = nn.Parameter(view_mean.requires_grad_(True))
-        self._color_scale = nn.Parameter(color_scales.requires_grad_(True))
-        self._color_l_triangle = nn.Parameter(color_l_triangles.requires_grad_(True))
         self._lambda_opc = nn.Parameter(lambda_opcs.requires_grad_(self.learnable_lambda_opc))
+
+        if self.use_simplified_color:
+            # Simplified parameterization initialization
+            C = self.cond_dim  # 3 for view-only, 4 for view+time
+
+            # v_regr: [N, 3*C] - initialized near zero for small initial color adjustment
+            v_regr = torch.normal(0, 0.01, size=(init_n_gs, 3 * C), device=device)
+            self._v_regr = nn.Parameter(v_regr.requires_grad_(True))
+
+            # L_22: [N, C*(C+1)/2] - Cholesky factor of precision_22
+            # Initialize as identity (diagonal=1, off-diagonal=0) for isotropic precision
+            n_L_22 = C * (C + 1) // 2
+            L_22 = torch.zeros(init_n_gs, n_L_22, device=device)
+            # Set diagonal elements to 1 (positions 0, 2, 5, 9 for C=3,4)
+            idx = 0
+            for i in range(C):
+                L_22[:, idx + i] = 1.0  # Diagonal element at position sum(0..i) + i = i*(i+1)/2 + i
+                idx += i
+            self._L_22 = nn.Parameter(L_22.requires_grad_(True))
+
+            # Placeholder for compatibility
+            self._color_scale = nn.Parameter(torch.empty(0, device=device).requires_grad_(False))
+            self._color_l_triangle = nn.Parameter(torch.empty(0, device=device).requires_grad_(False))
+        else:
+            # Full covariance parameterization (original)
+            # Color covariance initialization
+            # Diagonal: small values for color (tight distribution), larger for view direction
+            color_scales_color = self.color_scale_inverse_activation(
+                torch.ones(init_n_gs, 3, device=device) * 0.1  # Tight color distribution
+            )
+            color_scales_view = self.color_scale_inverse_activation(
+                torch.ones(init_n_gs, self.input_dim - 3, device=device) * 0.5  # Wider view distribution
+            )
+            color_scales = torch.cat([color_scales_color, color_scales_view], dim=1)
+
+            # Lower triangular: small random values
+            n_l_triangle = self.input_dim * (self.input_dim - 1) // 2
+            color_l_triangles = self.color_l_triangle_inverse_activation(
+                torch.normal(0, 1e-2, size=(init_n_gs, n_l_triangle), device=device)
+            )
+
+            self._color_scale = nn.Parameter(color_scales.requires_grad_(True))
+            self._color_l_triangle = nn.Parameter(color_l_triangles.requires_grad_(True))
+
+            # Placeholder for compatibility
+            self._v_regr = nn.Parameter(torch.empty(0, device=device).requires_grad_(False))
+            self._L_22 = nn.Parameter(torch.empty(0, device=device).requires_grad_(False))
 
         self.max_radii2D = torch.zeros((init_n_gs), device=device)
 
@@ -430,9 +551,22 @@ class GaussianModelColor:
             {'params': [self._opacity], 'lr': training_args.opacity_lr, "name": "opacity"},
             {'params': [self._color_mean], 'lr': training_args.feature_lr, "name": "color_mean"},
             {'params': [self._view_mean], 'lr': training_args.feature_lr, "name": "view_mean"},
-            {'params': [self._color_scale], 'lr': training_args.scale_lr, "name": "color_scale"},
-            {'params': [self._color_l_triangle], 'lr': training_args.l_triangle_lr, "name": "color_l_triangle"},
         ]
+
+        if self.use_simplified_color:
+            # Simplified parameterization
+            l.append({'params': [self._v_regr], 'lr': training_args.feature_lr, "name": "v_regr"})
+            l.append({'params': [self._L_22], 'lr': training_args.scale_lr, "name": "L_22"})
+            # Placeholders with zero lr
+            l.append({'params': [self._color_scale], 'lr': 0.0, "name": "color_scale"})
+            l.append({'params': [self._color_l_triangle], 'lr': 0.0, "name": "color_l_triangle"})
+        else:
+            # Full covariance parameterization
+            l.append({'params': [self._color_scale], 'lr': training_args.scale_lr, "name": "color_scale"})
+            l.append({'params': [self._color_l_triangle], 'lr': training_args.l_triangle_lr, "name": "color_l_triangle"})
+            # Placeholders with zero lr
+            l.append({'params': [self._v_regr], 'lr': 0.0, "name": "v_regr"})
+            l.append({'params': [self._L_22], 'lr': 0.0, "name": "L_22"})
 
         if self.learnable_lambda_opc:
             l.append({'params': [self._lambda_opc], 'lr': training_args.opacity_lr, "name": "lambda_opc"})
@@ -462,8 +596,13 @@ class GaussianModelColor:
         l.append('lambda_opc')
         l.extend(['color_mean_{}'.format(i) for i in range(3)])
         l.extend(['view_mean_{}'.format(i) for i in range(self._view_mean.shape[1])])
-        l.extend(['color_scale_{}'.format(i) for i in range(self._color_scale.shape[1])])
-        l.extend(['color_l_triangle_{}'.format(i) for i in range(self._color_l_triangle.shape[1])])
+
+        if self.use_simplified_color:
+            l.extend(['v_regr_{}'.format(i) for i in range(self._v_regr.shape[1])])
+            l.extend(['L_22_{}'.format(i) for i in range(self._L_22.shape[1])])
+        else:
+            l.extend(['color_scale_{}'.format(i) for i in range(self._color_scale.shape[1])])
+            l.extend(['color_l_triangle_{}'.format(i) for i in range(self._color_l_triangle.shape[1])])
         return l
 
     def save_ply(self, path):
@@ -476,16 +615,25 @@ class GaussianModelColor:
         lambda_opcs = self._lambda_opc.detach().cpu().numpy()
         color_mean = self._color_mean.detach().cpu().numpy()
         view_mean = self._view_mean.detach().cpu().numpy()
-        color_scale = self._color_scale.detach().cpu().numpy()
-        color_l_triangle = self._color_l_triangle.detach().cpu().numpy()
 
         dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
         elements = np.empty(xyz.shape[0], dtype=dtype_full)
 
-        attributes = np.concatenate([
-            xyz, scales, rots, opacities, lambda_opcs,
-            color_mean, view_mean, color_scale, color_l_triangle
-        ], axis=1)
+        if self.use_simplified_color:
+            v_regr = self._v_regr.detach().cpu().numpy()
+            L_22 = self._L_22.detach().cpu().numpy()
+            attributes = np.concatenate([
+                xyz, scales, rots, opacities, lambda_opcs,
+                color_mean, view_mean, v_regr, L_22
+            ], axis=1)
+        else:
+            color_scale = self._color_scale.detach().cpu().numpy()
+            color_l_triangle = self._color_l_triangle.detach().cpu().numpy()
+            attributes = np.concatenate([
+                xyz, scales, rots, opacities, lambda_opcs,
+                color_mean, view_mean, color_scale, color_l_triangle
+            ], axis=1)
+
         elements[:] = list(map(tuple, attributes))
         el = PlyElement.describe(elements, 'vertex')
         PlyData([el]).write(path)
@@ -529,18 +677,6 @@ class GaussianModelColor:
             for i in range(view_mean_dim)
         ], axis=1)
 
-        color_scale_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("color_scale_")]
-        color_scale = np.stack([
-            np.asarray(plydata.elements[0]["color_scale_{}".format(i)])
-            for i in range(len(color_scale_names))
-        ], axis=1)
-
-        color_l_triangle_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("color_l_triangle_")]
-        color_l_triangle = np.stack([
-            np.asarray(plydata.elements[0]["color_l_triangle_{}".format(i)])
-            for i in range(len(color_l_triangle_names))
-        ], axis=1)
-
         self._xyz = nn.Parameter(torch.tensor(xyz, dtype=torch.float, device="cuda").requires_grad_(True))
         self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True))
         self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
@@ -548,11 +684,47 @@ class GaussianModelColor:
         self._lambda_opc = nn.Parameter(torch.tensor(lambda_opcs, dtype=torch.float, device="cuda").requires_grad_(self.learnable_lambda_opc))
         self._color_mean = nn.Parameter(torch.tensor(color_mean, dtype=torch.float, device="cuda").requires_grad_(True))
         self._view_mean = nn.Parameter(torch.tensor(view_mean, dtype=torch.float, device="cuda").requires_grad_(True))
-        self._color_scale = nn.Parameter(torch.tensor(color_scale, dtype=torch.float, device="cuda").requires_grad_(True))
-        self._color_l_triangle = nn.Parameter(torch.tensor(color_l_triangle, dtype=torch.float, device="cuda").requires_grad_(True))
 
-        # Precompute test-time values
-        self._precompute_test_values()
+        # Check if file contains simplified or full parameterization
+        v_regr_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("v_regr_")]
+        L_22_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("L_22_")]
+
+        if len(v_regr_names) > 0 and len(L_22_names) > 0:
+            # Load simplified parameterization
+            self.use_simplified_color = True
+            v_regr = np.stack([
+                np.asarray(plydata.elements[0]["v_regr_{}".format(i)])
+                for i in range(len(v_regr_names))
+            ], axis=1)
+            L_22 = np.stack([
+                np.asarray(plydata.elements[0]["L_22_{}".format(i)])
+                for i in range(len(L_22_names))
+            ], axis=1)
+            self._v_regr = nn.Parameter(torch.tensor(v_regr, dtype=torch.float, device="cuda").requires_grad_(True))
+            self._L_22 = nn.Parameter(torch.tensor(L_22, dtype=torch.float, device="cuda").requires_grad_(True))
+            self._color_scale = nn.Parameter(torch.empty(0, device="cuda").requires_grad_(False))
+            self._color_l_triangle = nn.Parameter(torch.empty(0, device="cuda").requires_grad_(False))
+        else:
+            # Load full covariance parameterization
+            self.use_simplified_color = False
+            color_scale_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("color_scale_")]
+            color_scale = np.stack([
+                np.asarray(plydata.elements[0]["color_scale_{}".format(i)])
+                for i in range(len(color_scale_names))
+            ], axis=1)
+            color_l_triangle_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("color_l_triangle_")]
+            color_l_triangle = np.stack([
+                np.asarray(plydata.elements[0]["color_l_triangle_{}".format(i)])
+                for i in range(len(color_l_triangle_names))
+            ], axis=1)
+            self._color_scale = nn.Parameter(torch.tensor(color_scale, dtype=torch.float, device="cuda").requires_grad_(True))
+            self._color_l_triangle = nn.Parameter(torch.tensor(color_l_triangle, dtype=torch.float, device="cuda").requires_grad_(True))
+            self._v_regr = nn.Parameter(torch.empty(0, device="cuda").requires_grad_(False))
+            self._L_22 = nn.Parameter(torch.empty(0, device="cuda").requires_grad_(False))
+
+        # Precompute test-time values (only for full parameterization)
+        if not self.use_simplified_color:
+            self._precompute_test_values()
 
         self.active_sh_degree = self.max_sh_degree
 
@@ -594,6 +766,11 @@ class GaussianModelColor:
     def _prune_optimizer(self, mask):
         optimizable_tensors = {}
         for group in self.optimizer.param_groups:
+            # Skip empty placeholder tensors
+            if group["params"][0].numel() == 0:
+                optimizable_tensors[group["name"]] = group["params"][0]
+                continue
+
             stored_state = self.optimizer.state.get(group['params'][0], None)
             if stored_state is not None:
                 stored_state["exp_avg"] = stored_state["exp_avg"][mask]
@@ -620,8 +797,13 @@ class GaussianModelColor:
         self._lambda_opc = optimizable_tensors["lambda_opc"]
         self._color_mean = optimizable_tensors["color_mean"]
         self._view_mean = optimizable_tensors["view_mean"]
-        self._color_scale = optimizable_tensors["color_scale"]
-        self._color_l_triangle = optimizable_tensors["color_l_triangle"]
+
+        if self.use_simplified_color:
+            self._v_regr = optimizable_tensors["v_regr"]
+            self._L_22 = optimizable_tensors["L_22"]
+        else:
+            self._color_scale = optimizable_tensors["color_scale"]
+            self._color_l_triangle = optimizable_tensors["color_l_triangle"]
 
         self.xyz_gradient_accum = self.xyz_gradient_accum[valid_points_mask]
         self.xyz_gradient_accum_abs = self.xyz_gradient_accum_abs[valid_points_mask]
@@ -651,7 +833,8 @@ class GaussianModelColor:
 
     def densification_postfix(self, new_xyz, new_scaling, new_rotation, new_opacity,
                               new_lambda_opc, new_color_mean, new_view_mean,
-                              new_color_scale, new_color_l_triangle):
+                              new_color_scale=None, new_color_l_triangle=None,
+                              new_v_regr=None, new_L_22=None):
         d = {
             "xyz": new_xyz,
             "scaling": new_scaling,
@@ -660,9 +843,18 @@ class GaussianModelColor:
             "lambda_opc": new_lambda_opc,
             "color_mean": new_color_mean,
             "view_mean": new_view_mean,
-            "color_scale": new_color_scale,
-            "color_l_triangle": new_color_l_triangle,
         }
+
+        if self.use_simplified_color:
+            d["v_regr"] = new_v_regr
+            d["L_22"] = new_L_22
+            d["color_scale"] = torch.empty(0, device="cuda")
+            d["color_l_triangle"] = torch.empty(0, device="cuda")
+        else:
+            d["color_scale"] = new_color_scale
+            d["color_l_triangle"] = new_color_l_triangle
+            d["v_regr"] = torch.empty(0, device="cuda")
+            d["L_22"] = torch.empty(0, device="cuda")
 
         optimizable_tensors = self.cat_tensors_to_optimizer(d)
         self._xyz = optimizable_tensors["xyz"]
@@ -672,8 +864,13 @@ class GaussianModelColor:
         self._lambda_opc = optimizable_tensors["lambda_opc"]
         self._color_mean = optimizable_tensors["color_mean"]
         self._view_mean = optimizable_tensors["view_mean"]
-        self._color_scale = optimizable_tensors["color_scale"]
-        self._color_l_triangle = optimizable_tensors["color_l_triangle"]
+
+        if self.use_simplified_color:
+            self._v_regr = optimizable_tensors["v_regr"]
+            self._L_22 = optimizable_tensors["L_22"]
+        else:
+            self._color_scale = optimizable_tensors["color_scale"]
+            self._color_l_triangle = optimizable_tensors["color_l_triangle"]
 
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.xyz_gradient_accum_abs = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
@@ -705,13 +902,21 @@ class GaussianModelColor:
         new_lambda_opc = self._lambda_opc[selected_pts_mask].repeat(N, 1)
         new_color_mean = self._color_mean[selected_pts_mask].repeat(N, 1)
         new_view_mean = self._view_mean[selected_pts_mask].repeat(N, 1)
-        new_color_scale = self._color_scale[selected_pts_mask].repeat(N, 1)
-        new_color_l_triangle = self._color_l_triangle[selected_pts_mask].repeat(N, 1)
 
-        self.densification_postfix(
-            new_xyz, new_scaling, new_rotation, new_opacity, new_lambda_opc,
-            new_color_mean, new_view_mean, new_color_scale, new_color_l_triangle
-        )
+        if self.use_simplified_color:
+            new_v_regr = self._v_regr[selected_pts_mask].repeat(N, 1)
+            new_L_22 = self._L_22[selected_pts_mask].repeat(N, 1)
+            self.densification_postfix(
+                new_xyz, new_scaling, new_rotation, new_opacity, new_lambda_opc,
+                new_color_mean, new_view_mean, new_v_regr=new_v_regr, new_L_22=new_L_22
+            )
+        else:
+            new_color_scale = self._color_scale[selected_pts_mask].repeat(N, 1)
+            new_color_l_triangle = self._color_l_triangle[selected_pts_mask].repeat(N, 1)
+            self.densification_postfix(
+                new_xyz, new_scaling, new_rotation, new_opacity, new_lambda_opc,
+                new_color_mean, new_view_mean, new_color_scale=new_color_scale, new_color_l_triangle=new_color_l_triangle
+            )
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
@@ -733,13 +938,21 @@ class GaussianModelColor:
         new_lambda_opc = self._lambda_opc[selected_pts_mask]
         new_color_mean = self._color_mean[selected_pts_mask]
         new_view_mean = self._view_mean[selected_pts_mask]
-        new_color_scale = self._color_scale[selected_pts_mask]
-        new_color_l_triangle = self._color_l_triangle[selected_pts_mask]
 
-        self.densification_postfix(
-            new_xyz, new_scaling, new_rotation, new_opacity, new_lambda_opc,
-            new_color_mean, new_view_mean, new_color_scale, new_color_l_triangle
-        )
+        if self.use_simplified_color:
+            new_v_regr = self._v_regr[selected_pts_mask]
+            new_L_22 = self._L_22[selected_pts_mask]
+            self.densification_postfix(
+                new_xyz, new_scaling, new_rotation, new_opacity, new_lambda_opc,
+                new_color_mean, new_view_mean, new_v_regr=new_v_regr, new_L_22=new_L_22
+            )
+        else:
+            new_color_scale = self._color_scale[selected_pts_mask]
+            new_color_l_triangle = self._color_l_triangle[selected_pts_mask]
+            self.densification_postfix(
+                new_xyz, new_scaling, new_rotation, new_opacity, new_lambda_opc,
+                new_color_mean, new_view_mean, new_color_scale=new_color_scale, new_color_l_triangle=new_color_l_triangle
+            )
 
     def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size, iteration):
         """Main densification and pruning routine."""
@@ -958,8 +1171,13 @@ class GaussianModelColor:
         orig_lambda_opc, self._lambda_opc = self._lambda_opc, self._lambda_opc[mask]
         orig_color_mean, self._color_mean = self._color_mean, self._color_mean[mask]
         orig_view_mean, self._view_mean = self._view_mean, self._view_mean[mask]
-        orig_color_scale, self._color_scale = self._color_scale, self._color_scale[mask]
-        orig_color_l_triangle, self._color_l_triangle = self._color_l_triangle, self._color_l_triangle[mask]
+
+        if self.use_simplified_color:
+            orig_v_regr, self._v_regr = self._v_regr, self._v_regr[mask]
+            orig_L_22, self._L_22 = self._L_22, self._L_22[mask]
+        else:
+            orig_color_scale, self._color_scale = self._color_scale, self._color_scale[mask]
+            orig_color_l_triangle, self._color_l_triangle = self._color_l_triangle, self._color_l_triangle[mask]
 
         try:
             render_output = self.render_tcgs(
@@ -988,8 +1206,12 @@ class GaussianModelColor:
             self._lambda_opc = orig_lambda_opc
             self._color_mean = orig_color_mean
             self._view_mean = orig_view_mean
-            self._color_scale = orig_color_scale
-            self._color_l_triangle = orig_color_l_triangle
+            if self.use_simplified_color:
+                self._v_regr = orig_v_regr
+                self._L_22 = orig_L_22
+            else:
+                self._color_scale = orig_color_scale
+                self._color_l_triangle = orig_color_l_triangle
 
         render_colors = render_colors.permute(1, 2, 0)
 
