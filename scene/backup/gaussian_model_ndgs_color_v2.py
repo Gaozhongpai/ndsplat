@@ -126,12 +126,12 @@ class GaussianModelColor:
         self.cond_dim = input_dim - 3  # C = 3 for view-only, 4 for view+time
 
         if use_simplified_color:
-            # Simplified parameterization: learn v_12 and L_22_inv, compute v_regr from them
+            # Simplified parameterization: learn v_12 and L_22, compute v_regr from them
             # v_12: [N, 3, C] color-view covariance block (flattened to [N, 3*C])
             self._v_12 = torch.empty(0)  # [N, 3*C] -> reshaped to [N, 3, C]
-            # L_22_inv: [N, C*(C+1)/2] lower triangular Cholesky factor of V_22^{-1} (precision)
-            # V_22^{-1} = L_22_inv^T @ L_22_inv (no matrix inversion needed at runtime!)
-            self._L_22_inv = torch.empty(0)  # [N, C*(C+1)/2]
+            # L_22: [N, C*(C+1)/2] lower triangular Cholesky factor of V_22 (covariance)
+            # V_22 = L @ L^T, then V_22^{-1} = torch.inverse(V_22)
+            self._L_22 = torch.empty(0)  # [N, C*(C+1)/2]
             # Placeholders for compatibility
             self._color_scale = torch.empty(0)
             self._color_l_triangle = torch.empty(0)
@@ -142,7 +142,7 @@ class GaussianModelColor:
             self._color_l_triangle = torch.empty(0)  # [N, input_dim*(input_dim-1)//2]
             # Placeholders for compatibility
             self._v_12 = torch.empty(0)
-            self._L_22_inv = torch.empty(0)
+            self._L_22 = torch.empty(0)
 
         # Lambda for opacity scaling
         self._lambda_opc = torch.empty(0)
@@ -236,14 +236,13 @@ class GaussianModelColor:
         """
         Perform conditional Gaussian slicing using simplified parameterization.
 
-        This version learns v_12 and L_22_inv (Cholesky of V_22^{-1}), then computes:
-        - V_22^{-1} = L_22_inv^T @ L_22_inv (precision matrix, no inversion needed!)
+        This version learns v_12 and L_22 (Cholesky of V_22), then computes:
+        - V_22 = L @ L^T (covariance matrix)
+        - V_22^{-1} = torch.inverse(V_22)
         - v_regr = v_12 @ V_22^{-1} (regression matrix)
 
         This is mathematically equivalent to the full covariance parameterization
-        but uses fewer parameters (no V_11 block needed) and avoids matrix inversion.
-
-        Uses CUDA-accelerated kernel for forward and backward passes.
+        but uses fewer parameters (no V_11 block needed).
 
         Args:
             query: Query direction (view direction + optional time) [N, C] where C=3 or 4
@@ -254,16 +253,54 @@ class GaussianModelColor:
             color_cond: Conditional RGB color [N, 3]
             opacity_scale: View-dependent opacity scaling [N, 1]
         """
-        # Use CUDA-accelerated slice_gaussian_color_simple
-        # v_12 is stored as [N, 3*C], will be reshaped inside the kernel
-        color_cond, opacity_scale = slice_gaussian_color_simple(
-            color_mean=self._color_mean,
-            view_mean=view_mean,
-            query=query,
-            v_12=self._v_12,  # [N, 3*C]
-            L_22_inv=self._L_22_inv,  # [N, C*(C+1)/2]
-            lambda_opc=lambda_opc,
-        )
+        color_mean = self._color_mean  # [N, 3]
+        N = color_mean.shape[0]
+        C = self.cond_dim
+
+        # v_12 (cross-covariance block) - no activation, unbounded
+        # In full version, V_12 = L_11 @ L_21^T which is unbounded (depends on exp diagonals)
+        # Keep v_12 unbounded to match the representational range
+        v_12 = self._v_12.view(-1, 3, C)  # [N, 3, C]
+
+        # Build lower triangular matrix L from L_22 parameters
+        # L_22 stores: [l_00, l_10, l_11, l_20, l_21, l_22, ...] (row-major lower triangular)
+        # Simplified structure:
+        # - Diagonal: exp() to ensure positive (for numerical stability)
+        # - Off-diagonal: raw unbounded values (no activation)
+        L = torch.zeros(N, C, C, device=self._L_22.device, dtype=self._L_22.dtype)
+
+        idx = 0
+        for i in range(C):
+            for j in range(i + 1):
+                if i == j:
+                    # Diagonal: apply exp to ensure positive
+                    L[:, i, j] = torch.exp(self._L_22[:, idx])
+                else:
+                    # Off-diagonal: raw value (no activation)
+                    L[:, i, j] = self._L_22[:, idx]
+                idx += 1
+
+        # V_22 = L @ L^T (covariance matrix)
+        V_22 = torch.bmm(L, L.transpose(-1, -2))  # [N, C, C]
+
+        # V_22^{-1} via explicit inverse
+        V_22_inv = torch.inverse(V_22)  # [N, C, C]
+
+        # Compute v_regr = v_12 @ V_22^{-1}
+        v_regr = torch.bmm(v_12, V_22_inv)  # [N, 3, C]
+
+        # Compute residual: x = query - view_mean
+        x = query - view_mean  # [N, C]
+
+        # Conditional color mean: color_cond = color_mean + v_regr @ x
+        color_cond = color_mean + torch.bmm(v_regr, x.unsqueeze(-1)).squeeze(-1)  # [N, 3]
+
+        # Direction influence for opacity: x^T @ V_22^{-1} @ x
+        V_22_inv_x = torch.bmm(V_22_inv, x.unsqueeze(-1)).squeeze(-1)  # [N, C]
+        direction_influence = (x * V_22_inv_x).sum(dim=-1, keepdim=True)  # [N, 1]
+
+        # Opacity scale: exp(-lambda_opc * direction_influence)
+        opacity_scale = torch.exp(-lambda_opc * direction_influence)  # [N, 1]
 
         return color_cond, opacity_scale
 
@@ -313,7 +350,7 @@ class GaussianModelColor:
             self.spatial_lr_scale,
             self.use_simplified_color,
             self._v_12,
-            self._L_22_inv,
+            self._L_22,
         )
 
     def restore(self, model_args, training_args):
@@ -337,7 +374,7 @@ class GaussianModelColor:
              self.spatial_lr_scale) = model_args
             self.use_simplified_color = False
             self._v_12 = torch.empty(0, device="cuda")
-            self._L_22_inv = torch.empty(0, device="cuda")
+            self._L_22 = torch.empty(0, device="cuda")
         else:
             # New format with simplified parameters
             (self.active_sh_degree,
@@ -357,7 +394,7 @@ class GaussianModelColor:
              self.spatial_lr_scale,
              self.use_simplified_color,
              self._v_12,
-             self._L_22_inv) = model_args
+             self._L_22) = model_args
         self.training_setup(training_args)
         self.xyz_gradient_accum = xyz_gradient_accum
         self.denom = denom
@@ -495,19 +532,17 @@ class GaussianModelColor:
             v_12 = torch.normal(0, 0.01, size=(init_n_gs, 3 * C), device=device)
             self._v_12 = nn.Parameter(v_12.requires_grad_(True))
 
-            # L_22_inv: [N, C*(C+1)/2] - Cholesky factor of V_22^{-1} (precision)
-            # V_22^{-1} = L_22_inv^T @ L_22_inv (no matrix inversion needed at runtime!)
-            # Diagonal uses exp() activation, so initialize with log(2.0) ≈ 0.693
-            # This gives diagonal=2.0 after exp, so V_22^{-1} has diagonal ~4.0, V_22 has diagonal ~0.25
+            # L_22: [N, C*(C+1)/2] - Cholesky factor of V_22 (covariance)
+            # V_22 = L @ L^T, then V_22^{-1} = torch.inverse(V_22)
             # Storage format: [l_00, l_10, l_11, l_20, l_21, l_22, ...] (row-major lower triangular)
-            n_L_22_inv = C * (C + 1) // 2
-            L_22_inv = torch.zeros(init_n_gs, n_L_22_inv, device=device)
+            n_L_22 = C * (C + 1) // 2
+            L_22 = torch.zeros(init_n_gs, n_L_22, device=device)
             # Diagonal positions: 0 (for i=0), 2 (for i=1), 5 (for i=2), 9 (for i=3)
             # Formula: diagonal position for row i is i*(i+1)/2 + i
             for i in range(C):
                 diag_idx = i * (i + 1) // 2 + i  # Position of L[i,i] in packed format
-                L_22_inv[:, diag_idx] = math.log(2.0)  # exp(log(2)) = 2.0
-            self._L_22_inv = nn.Parameter(L_22_inv.requires_grad_(True))
+                L_22[:, diag_idx] = 0.5  # Initialize with moderate spread
+            self._L_22 = nn.Parameter(L_22.requires_grad_(True))
 
             # Placeholder for compatibility
             self._color_scale = nn.Parameter(torch.empty(0, device=device).requires_grad_(False))
@@ -535,7 +570,7 @@ class GaussianModelColor:
 
             # Placeholder for compatibility
             self._v_12 = nn.Parameter(torch.empty(0, device=device).requires_grad_(False))
-            self._L_22_inv = nn.Parameter(torch.empty(0, device=device).requires_grad_(False))
+            self._L_22 = nn.Parameter(torch.empty(0, device=device).requires_grad_(False))
 
         self.max_radii2D = torch.zeros((init_n_gs), device=device)
 
@@ -558,7 +593,7 @@ class GaussianModelColor:
         if self.use_simplified_color:
             # Simplified parameterization
             l.append({'params': [self._v_12], 'lr': training_args.feature_lr, "name": "v_12"})
-            l.append({'params': [self._L_22_inv], 'lr': training_args.scale_lr, "name": "L_22_inv"})
+            l.append({'params': [self._L_22], 'lr': training_args.scale_lr, "name": "L_22"})
             # Placeholders with zero lr
             l.append({'params': [self._color_scale], 'lr': 0.0, "name": "color_scale"})
             l.append({'params': [self._color_l_triangle], 'lr': 0.0, "name": "color_l_triangle"})
@@ -568,7 +603,7 @@ class GaussianModelColor:
             l.append({'params': [self._color_l_triangle], 'lr': training_args.l_triangle_lr, "name": "color_l_triangle"})
             # Placeholders with zero lr
             l.append({'params': [self._v_12], 'lr': 0.0, "name": "v_12"})
-            l.append({'params': [self._L_22_inv], 'lr': 0.0, "name": "L_22_inv"})
+            l.append({'params': [self._L_22], 'lr': 0.0, "name": "L_22"})
 
         if self.learnable_lambda_opc:
             l.append({'params': [self._lambda_opc], 'lr': training_args.opacity_lr, "name": "lambda_opc"})
@@ -601,7 +636,7 @@ class GaussianModelColor:
 
         if self.use_simplified_color:
             l.extend(['v_12_{}'.format(i) for i in range(self._v_12.shape[1])])
-            l.extend(['L_22_inv_{}'.format(i) for i in range(self._L_22_inv.shape[1])])
+            l.extend(['L_22_{}'.format(i) for i in range(self._L_22.shape[1])])
         else:
             l.extend(['color_scale_{}'.format(i) for i in range(self._color_scale.shape[1])])
             l.extend(['color_l_triangle_{}'.format(i) for i in range(self._color_l_triangle.shape[1])])
@@ -623,10 +658,10 @@ class GaussianModelColor:
 
         if self.use_simplified_color:
             v_12 = self._v_12.detach().cpu().numpy()
-            L_22_inv = self._L_22_inv.detach().cpu().numpy()
+            L_22 = self._L_22.detach().cpu().numpy()
             attributes = np.concatenate([
                 xyz, scales, rots, opacities, lambda_opcs,
-                color_mean, view_mean, v_12, L_22_inv
+                color_mean, view_mean, v_12, L_22
             ], axis=1)
         else:
             color_scale = self._color_scale.detach().cpu().numpy()
@@ -689,21 +724,21 @@ class GaussianModelColor:
 
         # Check if file contains simplified or full parameterization
         v_12_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("v_12_")]
-        L_22_inv_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("L_22_inv_")]
+        L_22_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("L_22_")]
 
-        if len(v_12_names) > 0 and len(L_22_inv_names) > 0:
+        if len(v_12_names) > 0 and len(L_22_names) > 0:
             # Load simplified parameterization
             self.use_simplified_color = True
             v_12 = np.stack([
                 np.asarray(plydata.elements[0]["v_12_{}".format(i)])
                 for i in range(len(v_12_names))
             ], axis=1)
-            L_22_inv = np.stack([
-                np.asarray(plydata.elements[0]["L_22_inv_{}".format(i)])
-                for i in range(len(L_22_inv_names))
+            L_22 = np.stack([
+                np.asarray(plydata.elements[0]["L_22_{}".format(i)])
+                for i in range(len(L_22_names))
             ], axis=1)
             self._v_12 = nn.Parameter(torch.tensor(v_12, dtype=torch.float, device="cuda").requires_grad_(True))
-            self._L_22_inv = nn.Parameter(torch.tensor(L_22_inv, dtype=torch.float, device="cuda").requires_grad_(True))
+            self._L_22 = nn.Parameter(torch.tensor(L_22, dtype=torch.float, device="cuda").requires_grad_(True))
             self._color_scale = nn.Parameter(torch.empty(0, device="cuda").requires_grad_(False))
             self._color_l_triangle = nn.Parameter(torch.empty(0, device="cuda").requires_grad_(False))
         else:
@@ -722,7 +757,7 @@ class GaussianModelColor:
             self._color_scale = nn.Parameter(torch.tensor(color_scale, dtype=torch.float, device="cuda").requires_grad_(True))
             self._color_l_triangle = nn.Parameter(torch.tensor(color_l_triangle, dtype=torch.float, device="cuda").requires_grad_(True))
             self._v_12 = nn.Parameter(torch.empty(0, device="cuda").requires_grad_(False))
-            self._L_22_inv = nn.Parameter(torch.empty(0, device="cuda").requires_grad_(False))
+            self._L_22 = nn.Parameter(torch.empty(0, device="cuda").requires_grad_(False))
 
         # Precompute test-time values (only for full parameterization)
         if not self.use_simplified_color:
@@ -802,7 +837,7 @@ class GaussianModelColor:
 
         if self.use_simplified_color:
             self._v_12 = optimizable_tensors["v_12"]
-            self._L_22_inv = optimizable_tensors["L_22_inv"]
+            self._L_22 = optimizable_tensors["L_22"]
         else:
             self._color_scale = optimizable_tensors["color_scale"]
             self._color_l_triangle = optimizable_tensors["color_l_triangle"]
@@ -836,7 +871,7 @@ class GaussianModelColor:
     def densification_postfix(self, new_xyz, new_scaling, new_rotation, new_opacity,
                               new_lambda_opc, new_color_mean, new_view_mean,
                               new_color_scale=None, new_color_l_triangle=None,
-                              new_v_12=None, new_L_22_inv=None):
+                              new_v_12=None, new_L_22=None):
         d = {
             "xyz": new_xyz,
             "scaling": new_scaling,
@@ -849,14 +884,14 @@ class GaussianModelColor:
 
         if self.use_simplified_color:
             d["v_12"] = new_v_12
-            d["L_22_inv"] = new_L_22_inv
+            d["L_22"] = new_L_22
             d["color_scale"] = torch.empty(0, device="cuda")
             d["color_l_triangle"] = torch.empty(0, device="cuda")
         else:
             d["color_scale"] = new_color_scale
             d["color_l_triangle"] = new_color_l_triangle
             d["v_12"] = torch.empty(0, device="cuda")
-            d["L_22_inv"] = torch.empty(0, device="cuda")
+            d["L_22"] = torch.empty(0, device="cuda")
 
         optimizable_tensors = self.cat_tensors_to_optimizer(d)
         self._xyz = optimizable_tensors["xyz"]
@@ -869,7 +904,7 @@ class GaussianModelColor:
 
         if self.use_simplified_color:
             self._v_12 = optimizable_tensors["v_12"]
-            self._L_22_inv = optimizable_tensors["L_22_inv"]
+            self._L_22 = optimizable_tensors["L_22"]
         else:
             self._color_scale = optimizable_tensors["color_scale"]
             self._color_l_triangle = optimizable_tensors["color_l_triangle"]
@@ -907,10 +942,10 @@ class GaussianModelColor:
 
         if self.use_simplified_color:
             new_v_12 = self._v_12[selected_pts_mask].repeat(N, 1)
-            new_L_22_inv = self._L_22_inv[selected_pts_mask].repeat(N, 1)
+            new_L_22 = self._L_22[selected_pts_mask].repeat(N, 1)
             self.densification_postfix(
                 new_xyz, new_scaling, new_rotation, new_opacity, new_lambda_opc,
-                new_color_mean, new_view_mean, new_v_12=new_v_12, new_L_22_inv=new_L_22_inv
+                new_color_mean, new_view_mean, new_v_12=new_v_12, new_L_22=new_L_22
             )
         else:
             new_color_scale = self._color_scale[selected_pts_mask].repeat(N, 1)
@@ -943,10 +978,10 @@ class GaussianModelColor:
 
         if self.use_simplified_color:
             new_v_12 = self._v_12[selected_pts_mask]
-            new_L_22_inv = self._L_22_inv[selected_pts_mask]
+            new_L_22 = self._L_22[selected_pts_mask]
             self.densification_postfix(
                 new_xyz, new_scaling, new_rotation, new_opacity, new_lambda_opc,
-                new_color_mean, new_view_mean, new_v_12=new_v_12, new_L_22_inv=new_L_22_inv
+                new_color_mean, new_view_mean, new_v_12=new_v_12, new_L_22=new_L_22
             )
         else:
             new_color_scale = self._color_scale[selected_pts_mask]
@@ -1176,7 +1211,7 @@ class GaussianModelColor:
 
         if self.use_simplified_color:
             orig_v_12, self._v_12 = self._v_12, self._v_12[mask]
-            orig_L_22_inv, self._L_22_inv = self._L_22_inv, self._L_22_inv[mask]
+            orig_L_22, self._L_22 = self._L_22, self._L_22[mask]
         else:
             orig_color_scale, self._color_scale = self._color_scale, self._color_scale[mask]
             orig_color_l_triangle, self._color_l_triangle = self._color_l_triangle, self._color_l_triangle[mask]
@@ -1210,7 +1245,7 @@ class GaussianModelColor:
             self._view_mean = orig_view_mean
             if self.use_simplified_color:
                 self._v_12 = orig_v_12
-                self._L_22_inv = orig_L_22_inv
+                self._L_22 = orig_L_22
             else:
                 self._color_scale = orig_color_scale
                 self._color_l_triangle = orig_color_l_triangle
