@@ -182,9 +182,14 @@ class GaussianModelColor:
         # Color mean (base RGB)
         color_mean = self._color_mean  # [N, 3]
 
-        # View direction mean (+ optional time), normalized
-        view_mean = self._view_mean.clone()  # [N, 3] or [N, 4]
-        view_mean[:, :3] = view_mean[:, :3] / (view_mean[:, :3].norm(dim=1, keepdim=True) + 1e-8)
+        # View direction mean (+ optional time), normalized (avoid inplace ops for autograd)
+        view_dir = self._view_mean[:, :3]  # [N, 3]
+        view_dir_normalized = view_dir / (view_dir.norm(dim=1, keepdim=True) + 1e-8)
+        if self._view_mean.shape[1] > 3:
+            # Has time component
+            view_mean = torch.cat([view_dir_normalized, self._view_mean[:, 3:]], dim=1)
+        else:
+            view_mean = view_dir_normalized
 
         # Full covariance [N, D, D] where D = 3 + C (6 or 7)
         covars = self.get_color_covariance()
