@@ -28,7 +28,7 @@ from utils.general_utils import strip_symmetric, build_scaling_rotation
 
 # Import CUDA-accelerated slice function (reuse color version for position slicing)
 # The math is identical: output = mean + v_12 @ V_22^{-1} @ (query - view_mean)
-from gsplat import slice_gaussian_color_simple
+from gsplat import slice_gaussian_color_simple as slice_gaussian_simple
 
 
 class GaussianModel:
@@ -209,7 +209,7 @@ class GaussianModel:
         # output = mean + v_12 @ V_22^{-1} @ (query - view_mean)
         # For color: color_cond = color_mean + shift
         # For position: x_cond = xyz + shift
-        x_cond, opacity_scale = slice_gaussian_color_simple(
+        x_cond, opacity_scale = slice_gaussian_simple(
             self._xyz,              # [N, 3] - treat position as "color mean"
             self.get_view_mean,     # [N, C] - view direction mean
             query,                  # [N, C] - query view direction
