@@ -83,7 +83,7 @@ class GaussianModelColor:
         self.rotation_activation = torch.nn.functional.normalize
 
     def __init__(self, sh_degree: int = 0, input_dim: int = 6, use_rot_scale_l_triangle: bool = False,
-                 learnable_lambda_opc: bool = False, use_simplified_color: bool = True):
+                 learnable_lambda_opc: bool = False, use_simplified_color: bool = False):
         """
         Initialize Color-based N-DGS model.
 
