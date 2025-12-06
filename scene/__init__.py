@@ -26,7 +26,7 @@ def get_gaussian_model(mode: str):
     """Factory function to get the appropriate GaussianModel class based on mode.
 
     Args:
-        mode: One of "ndgs", "ddgs", "3dgs", "ubs", "ndgs_merged"
+        mode: One of "ndgs", "ddgs", "3dgs", "ubs", "ndgs-2sh", "ndgs-color"
 
     Returns:
         GaussianModel class for the specified mode
@@ -39,10 +39,12 @@ def get_gaussian_model(mode: str):
         from scene.gaussian_model_ubs import GaussianModel
     elif mode == "ndgs":  ## N-DGS (supports both 6DGS and 7DGS with time, with merged parametrization)
         from scene.gaussian_model_ndgs import GaussianModel
-    elif mode == "ndgs-2sh":  ## N-DGS (supports both 6DGS and 7DGS with time, with merged parametrization)
+    elif mode == "ndgs-2sh":  ## N-DGS with 2 SH bands
         from scene.gaussian_model_ndgs_2sh import GaussianModel
+    elif mode == "ndgs-color":  ## Color-based N-DGS: conditional color instead of position shift
+        from scene.gaussian_model_ndgs_color import GaussianModelColor as GaussianModel
     else:
-        raise ValueError(f"Unknown mode: {mode}. Must be one of: ndgs, ddgs, 3dgs, ubs, ndgs_original")
+        raise ValueError(f"Unknown mode: {mode}. Must be one of: ndgs, ddgs, 3dgs, ubs, ndgs-2sh, ndgs-color")
     return GaussianModel
 
 
@@ -131,7 +133,7 @@ class Scene:
             if "ddgs" in args.mode:
                 self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent, args.source_path)
             elif "ubs" in args.mode or "ndgs" in args.mode:
-                # UBS and N-DGS models support MCMC initialization sampling
+                # UBS and N-DGS models (including ndgs-color) support MCMC initialization sampling
                 self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent,
                                                 mcmc_cap_max=mcmc_cap_max,
                                                 densification_strategy=densification_strategy)
