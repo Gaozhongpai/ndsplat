@@ -27,7 +27,7 @@ from utils.general_utils import strip_symmetric, build_scaling_rotation
 
 # Import CUDA-accelerated slice function (reuse color version for position slicing)
 # The math is identical: output = mean + v_12 @ V_22^{-1} @ (query - view_mean)
-from gsplat import slice_gaussian_color_simple as slice_gaussian_simple
+from gsplat import slice_gaussian_simple
 
 
 class GaussianModel:
@@ -188,7 +188,7 @@ class GaussianModel:
     def slice_gaussian(self, query, lambda_opc=0.35):
         """
         Perform conditional Gaussian slicing for position using simplified parameterization.
-        Uses CUDA-accelerated slice_gaussian_color_simple (math is identical for position/color).
+        Uses CUDA-accelerated slice_gaussian_simple (math is identical for position/color).
 
         Given query view direction (+ optional time), compute:
         - Conditional position mean: x_cond = x + v_12 @ V_22^{-1} @ (v - μ_v)
@@ -204,7 +204,7 @@ class GaussianModel:
             x_cond: Conditional 3D position [N, 3]
             opacity_scale: View-dependent opacity scaling [N, 1]
         """
-        # Reuse slice_gaussian_color_simple - the math is identical:
+        # Reuse slice_gaussian_simple - the math is identical:
         # output = mean + v_12 @ V_22^{-1} @ (query - view_mean)
         # For color: color_cond = color_mean + shift
         # For position: x_cond = xyz + shift

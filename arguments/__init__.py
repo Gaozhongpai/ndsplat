@@ -54,7 +54,7 @@ class ModelParams(ParamGroup):
         self._white_background = False
         self.data_device = "cuda"
         self.eval = False
-        self.mode = "ndgs-color"  # Options: "ddgs", "3dgs", "ubs", "ndgs", "ndgs-2sh", "ndgs-color", "dgs"
+        self.mode = "dgs"  # Options: "ddgs", "3dgs", "ubs", "ndgs", "ndgs-2sh", "ndgs-color", "dgs"
         self.input_dim = 6  # Gaussian dimension: 6 for 6DGS/UBS, 7 for 7DGS (with time)
         self.use_rot_scale_l_triangle = True  # If True: use rotation-scale-l_triangle (UBS-style), If False: use diagonal-l_triangle (NDGS-style)
         self.learnable_lambda_opc = False  # If True: make lambda_opc a learnable parameter per Gaussian
@@ -71,7 +71,7 @@ class PipelineParams(ParamGroup):
         self.convert_SHs_python = False
         self.compute_cov3D_python = False
         self.debug = False
-        self.mv = 4
+        self.mv = 1
         super().__init__(parser, "Pipeline Parameters")
 
 class OptimizationParams(ParamGroup):

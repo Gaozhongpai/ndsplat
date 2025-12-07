@@ -25,7 +25,7 @@ from utils.graphics_utils import BasicPointCloud
 from utils.general_utils import strip_symmetric, build_scaling_rotation
 
 # Import CUDA-accelerated functions from gsplat
-from gsplat import slice_gaussian_color, l_triangle_to_covar, slice_gaussian_color_simple, _slice_gaussian_color_simple
+from gsplat import slice_gaussian_color, l_triangle_to_covar, slice_gaussian_simple, _slice_gaussian_simple
 
 # Import TCGS rasterizer for rendering
 from tcgs_speedy_rasterizer import (
@@ -254,9 +254,9 @@ class GaussianModelColor:
             color_cond: Conditional RGB color [N, 3]
             opacity_scale: View-dependent opacity scaling [N, 1]
         """
-        # Use CUDA-accelerated slice_gaussian_color_simple
+        # Use CUDA-accelerated slice_gaussian_simple
         # v_12 is stored as [N, 3*C], will be reshaped inside the kernel
-        color_cond, opacity_scale = slice_gaussian_color_simple(
+        color_cond, opacity_scale = slice_gaussian_simple(
             color_mean=self._color_mean,
             view_mean=view_mean,
             query=query,
