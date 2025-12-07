@@ -61,11 +61,11 @@ def render_wrapper(viewpoint_cam, gaussians, pipe, bg, mode, scaling_modifier=1.
         gaussians: GaussianModel instance
         pipe: Pipeline parameters
         bg: Background color
-        mode: Rendering mode ("ddgs", "3dgs", "ubs", "ndgs", "dgs")
+        mode: Rendering mode ("ddgs", "3dgs", "ubs", "ndgs", "dgs", "dgs-color")
         scaling_modifier: Scaling modifier for rendering
     """
-    if "ubs" in mode or "ndgs" in mode or mode == "dgs":
-        # UBS/N-DGS/DGS mode: use render_tcgs with CUDA-accelerated conditional slicing
+    if "ubs" in mode or "ndgs" in mode or mode == "dgs" or mode == "dgs-color":
+        # UBS/N-DGS/DGS/DGS-color mode: use render_tcgs with CUDA-accelerated conditional slicing
         gaussians.background = bg
         return gaussians.render_tcgs(viewpoint_cam, render_mode="RGB", use_tcgs=False, scaling_modifier=scaling_modifier)
     elif "ddgs" in mode or "3dgs" in mode:
@@ -89,8 +89,8 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
     elif "ndgs" in mode:
         gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim,
                                     use_rot_scale_l_triangle=dataset.use_rot_scale_l_triangle)
-    elif mode == "dgs":
-        # DGS mode: Position-based with simplified v_12/L_22_inv parameterization
+    elif mode == "dgs" or mode == "dgs-color":
+        # DGS/DGS-color mode: Position-based (dgs) or joint position+color (dgs-color) with simplified v_12/L_22_inv parameterization
         gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim)
     else:
         gaussians = GaussianModel(dataset.sh_degree)
@@ -257,7 +257,7 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
 
                     if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                         size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                        min_opacity = 0.01 if "ndgs" in mode or mode == "dgs" else 0.005 ## RSNA 0.005, paper 0.01
+                        min_opacity = 0.01 if "ndgs" in mode or mode == "dgs" or mode == "dgs-color" else 0.005 ## RSNA 0.005, paper 0.01
                         gaussians.densify_and_prune(opt.densify_grad_threshold, min_opacity, scene.cameras_extent, size_threshold, iteration)
                         # Clear CUDA cache after densification to free memory from pruned Gaussians
                         torch.cuda.empty_cache()

@@ -25,7 +25,7 @@ from utils.graphics_utils import BasicPointCloud
 from utils.general_utils import strip_symmetric, build_scaling_rotation
 
 # Import CUDA-accelerated functions from gsplat
-from gsplat import slice_gaussian_color, l_triangle_to_covar, slice_gaussian_color_simple, _slice_gaussian_color_simple
+from gsplat import slice_gaussian_color, l_triangle_to_covar, slice_gaussian_simple, _slice_gaussian_simple
 
 # Import TCGS rasterizer for rendering
 from tcgs_speedy_rasterizer import (

@@ -26,7 +26,7 @@ def get_gaussian_model(mode: str):
     """Factory function to get the appropriate GaussianModel class based on mode.
 
     Args:
-        mode: One of "ndgs", "ddgs", "3dgs", "ubs", "ndgs-2sh", "ndgs-color", "dgs"
+        mode: One of "ndgs", "ddgs", "3dgs", "ubs", "ndgs-2sh", "ndgs-color", "dgs", "dgs-color"
 
     Returns:
         GaussianModel class for the specified mode
@@ -45,8 +45,10 @@ def get_gaussian_model(mode: str):
         from scene.gaussian_model_ndgs_color import GaussianModelColor as GaussianModel
     elif mode == "dgs":  ## Position-based DGS with simplified v_12/L_22_inv parameterization
         from scene.gaussian_model_dgs import GaussianModel
+    elif mode == "dgs-color":  ## Joint position+color DGS with simplified v_12/L_22_inv parameterization
+        from scene.gaussian_model_dgs_color import GaussianModel
     else:
-        raise ValueError(f"Unknown mode: {mode}. Must be one of: ndgs, ddgs, 3dgs, ubs, ndgs-2sh, ndgs-color, dgs")
+        raise ValueError(f"Unknown mode: {mode}. Must be one of: ndgs, ddgs, 3dgs, ubs, ndgs-2sh, ndgs-color, dgs, dgs-color")
     return GaussianModel
 
 
@@ -139,8 +141,8 @@ class Scene:
                 self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent,
                                                 mcmc_cap_max=mcmc_cap_max,
                                                 densification_strategy=densification_strategy)
-            elif args.mode == "dgs":
-                # DGS mode: standard 3DGS-style initialization
+            elif args.mode == "dgs" or args.mode == "dgs-color":
+                # DGS/DGS-color mode: standard 3DGS-style initialization
                 self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent)
             else:
                 self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent)
