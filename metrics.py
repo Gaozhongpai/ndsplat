@@ -69,6 +69,16 @@ def evaluate(model_paths):
 
             test_dir = Path(scene_dir) / "test"
 
+            # Load training time from training_time.txt if available
+            training_time_path = Path(scene_dir) / "training_time.txt"
+            training_time = None
+            if training_time_path.exists():
+                with open(training_time_path, 'r') as f:
+                    content = f.read().strip()
+                    if content:  # Only parse if file is not empty
+                        training_time = float(content)
+                        print(f"  Training time: {training_time:.2f} seconds ({training_time/60:.2f} minutes)")
+
             for method in os.listdir(test_dir):
                 print("Method:", method)
 
@@ -90,6 +100,20 @@ def evaluate(model_paths):
 
                 full_dict[scene_dir][method].update({"Number": num_gaussians})
                 print(f"  Number: {num_gaussians}")
+
+                # Add training time if available
+                if training_time is not None:
+                    full_dict[scene_dir][method].update({"Training_time": training_time})
+
+                # Load FPS from fps.txt if available
+                fps_path = method_dir / "fps.txt"
+                if fps_path.exists():
+                    with open(fps_path, 'r') as f:
+                        content = f.read().strip()
+                        if content:  # Only parse if file is not empty
+                            fps = float(content)
+                            full_dict[scene_dir][method].update({"FPS": fps})
+                            print(f"  FPS: {fps:.2f}")
 
                 # Compute metrics
                 ssims = []

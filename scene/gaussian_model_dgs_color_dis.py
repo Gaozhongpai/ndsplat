@@ -9,14 +9,14 @@
 # For inquiries contact  george.drettakis@inria.fr
 #
 # Position + Color DGS with DISENTANGLED key_means for position, color, and opacity.
-# Uses slice_gaussian_disentangled with SEPARATE key_means but SHARED v_12:
-# - Position: pos_cond = xyz + v_regr @ (query - key_mean_pos)  [learned centering]
-# - Color: color_cond = color_mean + v_regr @ (query - key_mean_color)  [key_mean_color=0 for SH-like]
+# Uses slice_gaussian_disentangled with SHARED DIRECTION but SEPARATE SCALES:
+# - Position: pos_cond = xyz + (v_12_dir * scale_pos) @ V_22^{-1} @ (query - key_mean_pos)
+# - Color: color_cond = color_mean + (v_12_dir * scale_color) @ V_22^{-1} @ (query - key_mean_color)
 # - Opacity: attention_weight = exp(-λ * (query - key_mean_opacity)^T @ V_22^{-1} @ (query - key_mean_opacity))
 #
-# Key insight: Shared v_12 defines "sensitivity directions" - how 3D output responds to query.
-# Different key_means produce different residuals (query - key_mean), leading to different shifts.
-# This saves parameters while maintaining expressiveness.
+# Key insight: Shared direction defines "sensitivity directions" - how output responds to query.
+# Separate scales allow position to be bounded by Gaussian size, color by fixed max.
+# This provides structural regularization while maintaining expressiveness.
 #
 # input_dim=6: view direction only (C=3)
 # input_dim=7: view direction + time (C=4)
@@ -42,26 +42,28 @@ from gsplat import slice_gaussian_disentangled
 
 class GaussianModel:
     """
-    Position + Color DGS with DISENTANGLED key_means for position, color, and opacity.
+    Position + Color DGS with DISENTANGLED key_means and SEPARATE SCALES.
 
     This model shifts 3D positions AND colors based on view direction, with
-    SEPARATE key_means but SHARED v_12:
+    SEPARATE key_means AND SEPARATE SCALES for position vs color:
     - Position: key_mean_pos (learned) for full DGS centering
     - Color: key_mean_color=0 (fixed) for SH-like behavior
     - Opacity: key_mean_opacity (learned) for independent opacity control
-    - v_12: SHARED value-key covariance for both position and color
+    - v_12_direction: SHARED direction (normalized to unit vectors)
+    - v_12_scale_pos: position magnitude (bounded by spatial scale)
+    - v_12_scale_color: color magnitude (bounded by max_color_shift)
 
     Key insight:
-    - Shared v_12 defines "sensitivity directions" - how 3D output responds to query
+    - Shared direction defines "sensitivity directions" - how output responds to query
+    - Separate scales allow position to be bounded by Gaussian size, color by fixed max
     - Different key_means produce different residuals (query - key_mean)
-    - Same v_12 @ V_22^{-1} @ different_residuals = different shifts
-    - This saves 3*C parameters per Gaussian while maintaining expressiveness
+    - This provides structural regularization while maintaining expressiveness
 
-    This gives color the same expressiveness as SH degree 1:
-        color(v) = color_mean + v_regr @ v  (linear in view direction)
+    This gives color bounded expressiveness:
+        color(v) = color_mean + (v_12_dir * scale_color) @ V_22^{-1} @ v
 
-    While position retains the full DGS formulation:
-        pos(v) = xyz + v_regr @ (v - key_mean_pos)  (centered at canonical view)
+    While position is bounded by Gaussian size:
+        pos(v) = xyz + (v_12_dir * scale_pos) @ V_22^{-1} @ (v - key_mean_pos)
 
     Parameters:
     - _xyz: [N, 3] base position
@@ -69,12 +71,17 @@ class GaussianModel:
     - _key_mean_pos: [N, C] learned key mean for POSITION (C=3 or 4)
     - _key_mean_color: [N, C] fixed at ZERO for COLOR (NOT learnable)
     - _key_mean_opacity: [N, C] learned key mean for OPACITY
-    - _v_12: [N, 3*C] SHARED value-key covariance block for position and color
+    - _v_12_direction: [N, 3*C] SHARED direction (normalized to unit vectors)
+    - _v_12_scale_pos: [N, 1] raw position scale (outputs [N, 3] via sigmoid * max_pos_shift * spatial_scale)
+    - _v_12_scale_color: [N, 1] color magnitude scale
     - _L_22_inv: [N, C*(C+1)/2] Cholesky of V_22^{-1} (precision, shared)
 
     At runtime (via slice_gaussian_disentangled):
-    - pos_cond = xyz + v_regr @ (query - key_mean_pos)
-    - color_cond = color_mean + v_regr @ (query - key_mean_color)  [key_mean_color=0]
+    - v_12_dir = normalize(v_12_direction)  # Global normalization of entire [3*C] vector
+    - v_12_pos[i,j] = v_12_dir[i,j] * scale_pos[i]  # ANISOTROPIC per-axis
+    - v_12_color = v_12_dir * scale_color  # isotropic
+    - pos_cond = xyz + v_12_pos @ V_22^{-1} @ (query - key_mean_pos)
+    - color_cond = color_mean + v_12_color @ V_22^{-1} @ (query - key_mean_color)
     - attention_weight = exp(-λ * (query - key_mean_opacity)^T @ V_22^{-1} @ (query - key_mean_opacity))
 
     For input_dim=6: view(3) conditioning only
@@ -129,10 +136,18 @@ class GaussianModel:
         self._key_mean_color = torch.empty(0)  # [N, C] fixed at zero
         # Key mean for OPACITY (learned, can be different from position)
         self._key_mean_opacity = torch.empty(0)  # [N, C] learned
-        # v_12: [N, 3*C] SHARED value-key covariance block for position and color
-        self._v_12 = torch.empty(0)
+        # v_12_direction: [N, 3*C] SHARED direction (normalized to unit vectors)
+        self._v_12_direction = torch.empty(0)
+        # v_12_scale_pos: [N, 1] raw scale (outputs [N, 3] ANISOTROPIC via sigmoid * max_pos_shift * spatial_scale)
+        self._v_12_scale_pos = torch.empty(0)
+        # v_12_scale_color: [N, 1] color magnitude scale (will be sigmoid * max_color_shift at runtime)
+        self._v_12_scale_color = torch.empty(0)
         # L_22_inv: [N, C*(C+1)/2] Cholesky of V_22^{-1} (precision, shared)
         self._L_22_inv = torch.empty(0)
+
+        # Hyperparameter for maximum color shift
+        self.max_color_shift = 0.5  # Maximum RGB shift (0.4 allows ±0.4 shift per channel)
+        self.max_pos_shift = 0.5  # Maximum position shift factor (multiplied by spatial_scale)
 
         # Auxiliary tensors
         self.max_radii2D = torch.empty(0)
@@ -156,7 +171,9 @@ class GaussianModel:
             self._rotation,
             self._key_mean_pos,
             self._key_mean_opacity,
-            self._v_12,
+            self._v_12_direction,
+            self._v_12_scale_pos,
+            self._v_12_scale_color,
             self._L_22_inv,
             self._opacity,
             self.max_radii2D,
@@ -174,7 +191,9 @@ class GaussianModel:
          self._rotation,
          self._key_mean_pos,
          self._key_mean_opacity,
-         self._v_12,
+         self._v_12_direction,
+         self._v_12_scale_pos,
+         self._v_12_scale_color,
          self._L_22_inv,
          self._opacity,
          self.max_radii2D,
@@ -228,6 +247,22 @@ class GaussianModel:
         return view_dir_normalized
 
     @property
+    def get_v_12_direction(self):
+        """Get shared v_12 direction (will be normalized in CUDA kernel)."""
+        return self._v_12_direction
+
+    @property
+    def get_v_12_scale_pos(self):
+        """Get bounded position scale: sigmoid(raw) * max_pos_shift * spatial_scale (anisotropic)."""
+        spatial_scale = self.get_scaling  # [N, 3] full anisotropic scale
+        return torch.sigmoid(self._v_12_scale_pos) * self.max_pos_shift * spatial_scale  # [N, 1] * scalar * [N, 3] = [N, 3]
+
+    @property
+    def get_v_12_scale_color(self):
+        """Get bounded color scale: sigmoid(raw) * max_color_shift."""
+        return torch.sigmoid(self._v_12_scale_color) * self.max_color_shift  # [N, 1]
+
+    @property
     def get_features(self):
         """Get color features for compatibility (returns color_mean as [N, 1, 3])."""
         return self._color_mean.unsqueeze(1)
@@ -247,16 +282,18 @@ class GaussianModel:
         """
         Perform disentangled conditional Gaussian slicing for position, color, and opacity.
 
-        Each component has its own key_mean, but v_12 is SHARED:
-        - Position: key_mean_pos (learned) for full DGS centering
-        - Color: key_mean_color=0 (fixed) for SH-like behavior
-        - Opacity: key_mean_opacity (learned) for independent opacity control
-        - v_12: SHARED value-key covariance for position and color
+        Each component has its own key_mean, and separate scales for position vs color:
+        - Position: key_mean_pos (learned), scale bounded by spatial scale
+        - Color: key_mean_color=0 (fixed), scale bounded by max_color_shift
+        - Opacity: key_mean_opacity (learned)
+        - v_12_direction: SHARED direction (normalized to unit vectors)
 
         Given query view direction (+ optional time), compute:
-        - Position: pos_cond = xyz + v_regr @ (query - key_mean_pos)
-        - Color: color_cond = color_mean + v_regr @ (query - key_mean_color)  [key_mean_color=0]
-        - Attention weight: exp(-λ * (query - key_mean_opacity)^T @ V_22^{-1} @ (query - key_mean_opacity))
+        - v_12_pos = normalize(direction) * scale_pos
+        - v_12_color = normalize(direction) * scale_color
+        - pos_cond = xyz + v_12_pos @ V_22^{-1} @ (query - key_mean_pos)
+        - color_cond = color_mean + v_12_color @ V_22^{-1} @ (query - key_mean_color)
+        - attention_weight = exp(-λ * (query - key_mean_opacity)^T @ V_22^{-1} @ (query - key_mean_opacity))
 
         V_22^{-1} = L_22_inv @ L_22_inv^T (precision from Cholesky, no matrix inversion!)
 
@@ -269,7 +306,7 @@ class GaussianModel:
             color_cond: Conditional RGB color [N, 3]
             attention_weight: View-dependent opacity scaling [N, 1]
         """
-        # Use disentangled slicing with separate key_means but shared v_12
+        # Use disentangled slicing with shared direction but separate scales
         pos_cond, color_cond, attention_weight = slice_gaussian_disentangled(
             # Position inputs
             self._xyz,               # [N, 3] - position mean
@@ -279,10 +316,12 @@ class GaussianModel:
             self.get_key_mean_color, # [N, C] - ZERO (no centering, like SH)
             # Opacity key mean
             self.get_key_mean_opacity,  # [N, C] - learned key mean for opacity
-            # Shared inputs
-            self._v_12,              # [N, 3*C] - SHARED value-key covariance
-            query,                   # [N, C] - query view direction (+ time)
-            self._L_22_inv,          # [N, C*(C+1)/2] - Cholesky of precision (shared)
+            # Shared direction with separate scales
+            self.get_v_12_direction,    # [N, 3*C] - shared direction (will be normalized)
+            self.get_v_12_scale_pos,    # [N, 3] - ANISOTROPIC position scale (per-axis, bounded by spatial scale)
+            self.get_v_12_scale_color,  # [N, 1] - color scale (isotropic, bounded by max_color_shift)
+            query,                      # [N, C] - query view direction (+ time)
+            self._L_22_inv,             # [N, C*(C+1)/2] - Cholesky of precision (shared)
             lambda_opc,
         )
 
@@ -334,8 +373,16 @@ class GaussianModel:
         # This makes color slicing equivalent to SH degree 1: color = color_mean + linear @ view
         key_mean_color = torch.zeros((num_gaussians, C), device=device)
 
-        # v_12: [N, 3*C] SHARED value-key covariance block for position and color
-        v_12 = torch.normal(0, 0.01, size=(num_gaussians, 3 * C), device=device)
+        # v_12_direction: [N, 3*C] SHARED direction (normalized in CUDA kernel)
+        v_12_direction = torch.randn(num_gaussians, 3 * C, device=device)
+
+        # v_12_scale_pos: [N, 1] raw scale (outputs [N, 3] ANISOTROPIC via sigmoid * max_pos_shift * spatial_scale)
+        # Initialize to 0 so sigmoid(0)=0.5, giving moderate initial scale
+        v_12_scale_pos = torch.zeros(num_gaussians, 1, device=device)
+
+        # v_12_scale_color: [N, 1] raw scale for color (will be sigmoid * max_color_shift)
+        # Initialize to 0 so sigmoid(0)=0.5, giving moderate initial scale
+        v_12_scale_color = torch.zeros(num_gaussians, 1, device=device)
 
         # L_22_inv: [N, C*(C+1)/2] Cholesky of V_22^{-1} (precision, shared)
         # Diagonal uses exp() activation, so initialize with log(2.0) ≈ 0.693
@@ -356,7 +403,9 @@ class GaussianModel:
         # key_mean_color is NOT a Parameter - fixed at zero (equivalent to SH deg 1)
         self._key_mean_color = key_mean_color  # [N, C] fixed tensor, not nn.Parameter
         self._key_mean_opacity = nn.Parameter(key_mean_opacity.requires_grad_(True))
-        self._v_12 = nn.Parameter(v_12.requires_grad_(True))
+        self._v_12_direction = nn.Parameter(v_12_direction.requires_grad_(True))
+        self._v_12_scale_pos = nn.Parameter(v_12_scale_pos.requires_grad_(True))
+        self._v_12_scale_color = nn.Parameter(v_12_scale_color.requires_grad_(True))
         self._L_22_inv = nn.Parameter(L_22_inv.requires_grad_(True))
         self._opacity = nn.Parameter(opacities.requires_grad_(True))
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device=device)
@@ -374,7 +423,9 @@ class GaussianModel:
             {'params': [self._rotation], 'lr': training_args.rotation_lr, "name": "rotation"},
             {'params': [self._key_mean_pos], 'lr': training_args.feature_lr, "name": "key_mean_pos"},
             {'params': [self._key_mean_opacity], 'lr': training_args.feature_lr, "name": "key_mean_opacity"},
-            {'params': [self._v_12], 'lr': training_args.feature_lr, "name": "v_12"},
+            {'params': [self._v_12_direction], 'lr': training_args.feature_lr, "name": "v_12_direction"},
+            {'params': [self._v_12_scale_pos], 'lr': training_args.feature_lr, "name": "v_12_scale_pos"},
+            {'params': [self._v_12_scale_color], 'lr': training_args.feature_lr, "name": "v_12_scale_color"},
             {'params': [self._L_22_inv], 'lr': training_args.rotation_lr, "name": "L_22_inv"},
         ]
 
@@ -407,8 +458,10 @@ class GaussianModel:
             l.append('key_mean_pos_{}'.format(i))
         for i in range(self._key_mean_opacity.shape[1]):
             l.append('key_mean_opacity_{}'.format(i))
-        for i in range(self._v_12.shape[1]):
-            l.append('v_12_{}'.format(i))
+        for i in range(self._v_12_direction.shape[1]):
+            l.append('v_12_direction_{}'.format(i))
+        l.append('v_12_scale_pos')
+        l.append('v_12_scale_color')
         for i in range(self._L_22_inv.shape[1]):
             l.append('L_22_inv_{}'.format(i))
         return l
@@ -423,7 +476,9 @@ class GaussianModel:
         rotation = self._rotation.detach().cpu().numpy()
         key_mean_pos = self._key_mean_pos.detach().cpu().numpy()
         key_mean_opacity = self._key_mean_opacity.detach().cpu().numpy()
-        v_12 = self._v_12.detach().cpu().numpy()
+        v_12_direction = self._v_12_direction.detach().cpu().numpy()
+        v_12_scale_pos = self._v_12_scale_pos.detach().cpu().numpy()
+        v_12_scale_color = self._v_12_scale_color.detach().cpu().numpy()
         L_22_inv = self._L_22_inv.detach().cpu().numpy()
 
         dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
@@ -431,7 +486,7 @@ class GaussianModel:
         elements = np.empty(xyz.shape[0], dtype=dtype_full)
         attributes = np.concatenate([
             xyz, color_mean, opacities, scale, rotation,
-            key_mean_pos, key_mean_opacity, v_12, L_22_inv
+            key_mean_pos, key_mean_opacity, v_12_direction, v_12_scale_pos, v_12_scale_color, L_22_inv
         ], axis=1)
         elements[:] = list(map(tuple, attributes))
         el = PlyElement.describe(elements, 'vertex')
@@ -480,11 +535,14 @@ class GaussianModel:
         for idx, attr_name in enumerate(key_mean_opacity_names):
             key_mean_opacity[:, idx] = np.asarray(plydata.elements[0][attr_name])
 
-        v_12_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("v_12_")]
-        v_12_names = sorted(v_12_names, key=lambda x: int(x.split('_')[-1]))
-        v_12 = np.zeros((xyz.shape[0], len(v_12_names)))
-        for idx, attr_name in enumerate(v_12_names):
-            v_12[:, idx] = np.asarray(plydata.elements[0][attr_name])
+        v_12_direction_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("v_12_direction_")]
+        v_12_direction_names = sorted(v_12_direction_names, key=lambda x: int(x.split('_')[-1]))
+        v_12_direction = np.zeros((xyz.shape[0], len(v_12_direction_names)))
+        for idx, attr_name in enumerate(v_12_direction_names):
+            v_12_direction[:, idx] = np.asarray(plydata.elements[0][attr_name])
+
+        v_12_scale_pos = np.asarray(plydata.elements[0]["v_12_scale_pos"])[..., np.newaxis]
+        v_12_scale_color = np.asarray(plydata.elements[0]["v_12_scale_color"])[..., np.newaxis]
 
         L_22_inv_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("L_22_inv_")]
         L_22_inv_names = sorted(L_22_inv_names, key=lambda x: int(x.split('_')[-1]))
@@ -502,7 +560,9 @@ class GaussianModel:
         C = key_mean_pos.shape[1]  # infer cond_dim from loaded key_mean_pos
         self._key_mean_color = torch.zeros((xyz.shape[0], C), dtype=torch.float, device="cuda")
         self._key_mean_opacity = nn.Parameter(torch.tensor(key_mean_opacity, dtype=torch.float, device="cuda").requires_grad_(True))
-        self._v_12 = nn.Parameter(torch.tensor(v_12, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._v_12_direction = nn.Parameter(torch.tensor(v_12_direction, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._v_12_scale_pos = nn.Parameter(torch.tensor(v_12_scale_pos, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._v_12_scale_color = nn.Parameter(torch.tensor(v_12_scale_color, dtype=torch.float, device="cuda").requires_grad_(True))
         self._L_22_inv = nn.Parameter(torch.tensor(L_22_inv, dtype=torch.float, device="cuda").requires_grad_(True))
 
         self.active_sh_degree = self.max_sh_degree
@@ -551,7 +611,9 @@ class GaussianModel:
         self._rotation = optimizable_tensors["rotation"]
         self._key_mean_pos = optimizable_tensors["key_mean_pos"]
         self._key_mean_opacity = optimizable_tensors["key_mean_opacity"]
-        self._v_12 = optimizable_tensors["v_12"]
+        self._v_12_direction = optimizable_tensors["v_12_direction"]
+        self._v_12_scale_pos = optimizable_tensors["v_12_scale_pos"]
+        self._v_12_scale_color = optimizable_tensors["v_12_scale_color"]
         self._L_22_inv = optimizable_tensors["L_22_inv"]
 
         # _key_mean_color is not optimized, just slice it directly
@@ -585,7 +647,8 @@ class GaussianModel:
 
     def densification_postfix(self, new_xyz, new_color_mean, new_opacities,
                               new_scaling, new_rotation, new_key_mean_pos, new_key_mean_color,
-                              new_key_mean_opacity, new_v_12, new_L_22_inv):
+                              new_key_mean_opacity, new_v_12_direction, new_v_12_scale_pos,
+                              new_v_12_scale_color, new_L_22_inv):
         d = {
             "xyz": new_xyz,
             "color_mean": new_color_mean,
@@ -594,7 +657,9 @@ class GaussianModel:
             "rotation": new_rotation,
             "key_mean_pos": new_key_mean_pos,
             "key_mean_opacity": new_key_mean_opacity,
-            "v_12": new_v_12,
+            "v_12_direction": new_v_12_direction,
+            "v_12_scale_pos": new_v_12_scale_pos,
+            "v_12_scale_color": new_v_12_scale_color,
             "L_22_inv": new_L_22_inv,
         }
 
@@ -606,7 +671,9 @@ class GaussianModel:
         self._rotation = optimizable_tensors["rotation"]
         self._key_mean_pos = optimizable_tensors["key_mean_pos"]
         self._key_mean_opacity = optimizable_tensors["key_mean_opacity"]
-        self._v_12 = optimizable_tensors["v_12"]
+        self._v_12_direction = optimizable_tensors["v_12_direction"]
+        self._v_12_scale_pos = optimizable_tensors["v_12_scale_pos"]
+        self._v_12_scale_color = optimizable_tensors["v_12_scale_color"]
         self._L_22_inv = optimizable_tensors["L_22_inv"]
 
         # _key_mean_color is not optimized (fixed at zero), just concatenate directly
@@ -639,13 +706,16 @@ class GaussianModel:
         new_key_mean_pos = self._key_mean_pos[selected_pts_mask].repeat(N, 1)
         new_key_mean_color = self._key_mean_color[selected_pts_mask].repeat(N, 1)  # Fixed zeros
         new_key_mean_opacity = self._key_mean_opacity[selected_pts_mask].repeat(N, 1)
-        new_v_12 = self._v_12[selected_pts_mask].repeat(N, 1)
+        new_v_12_direction = self._v_12_direction[selected_pts_mask].repeat(N, 1)
+        new_v_12_scale_pos = self._v_12_scale_pos[selected_pts_mask].repeat(N, 1)
+        new_v_12_scale_color = self._v_12_scale_color[selected_pts_mask].repeat(N, 1)
         new_L_22_inv = self._L_22_inv[selected_pts_mask].repeat(N, 1)
 
         self.densification_postfix(
             new_xyz, new_color_mean, new_opacity,
             new_scaling, new_rotation, new_key_mean_pos, new_key_mean_color,
-            new_key_mean_opacity, new_v_12, new_L_22_inv
+            new_key_mean_opacity, new_v_12_direction, new_v_12_scale_pos,
+            new_v_12_scale_color, new_L_22_inv
         )
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
@@ -667,13 +737,16 @@ class GaussianModel:
         new_key_mean_pos = self._key_mean_pos[selected_pts_mask]
         new_key_mean_color = self._key_mean_color[selected_pts_mask]  # Fixed zeros
         new_key_mean_opacity = self._key_mean_opacity[selected_pts_mask]
-        new_v_12 = self._v_12[selected_pts_mask]
+        new_v_12_direction = self._v_12_direction[selected_pts_mask]
+        new_v_12_scale_pos = self._v_12_scale_pos[selected_pts_mask]
+        new_v_12_scale_color = self._v_12_scale_color[selected_pts_mask]
         new_L_22_inv = self._L_22_inv[selected_pts_mask]
 
         self.densification_postfix(
             new_xyz, new_color_mean, new_opacities,
             new_scaling, new_rotation, new_key_mean_pos, new_key_mean_color,
-            new_key_mean_opacity, new_v_12, new_L_22_inv
+            new_key_mean_opacity, new_v_12_direction, new_v_12_scale_pos,
+            new_v_12_scale_color, new_L_22_inv
         )
 
     def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size, iteration):
@@ -882,7 +955,9 @@ class GaussianModel:
         orig_key_mean_pos, self._key_mean_pos = self._key_mean_pos, self._key_mean_pos[mask]
         orig_key_mean_color, self._key_mean_color = self._key_mean_color, self._key_mean_color[mask]
         orig_key_mean_opacity, self._key_mean_opacity = self._key_mean_opacity, self._key_mean_opacity[mask]
-        orig_v_12, self._v_12 = self._v_12, self._v_12[mask]
+        orig_v_12_direction, self._v_12_direction = self._v_12_direction, self._v_12_direction[mask]
+        orig_v_12_scale_pos, self._v_12_scale_pos = self._v_12_scale_pos, self._v_12_scale_pos[mask]
+        orig_v_12_scale_color, self._v_12_scale_color = self._v_12_scale_color, self._v_12_scale_color[mask]
         orig_L_22_inv, self._L_22_inv = self._L_22_inv, self._L_22_inv[mask]
 
         try:
@@ -913,7 +988,9 @@ class GaussianModel:
             self._key_mean_pos = orig_key_mean_pos
             self._key_mean_color = orig_key_mean_color
             self._key_mean_opacity = orig_key_mean_opacity
-            self._v_12 = orig_v_12
+            self._v_12_direction = orig_v_12_direction
+            self._v_12_scale_pos = orig_v_12_scale_pos
+            self._v_12_scale_color = orig_v_12_scale_color
             self._L_22_inv = orig_L_22_inv
 
         render_colors = render_colors.permute(1, 2, 0)

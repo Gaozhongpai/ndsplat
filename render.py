@@ -25,7 +25,7 @@ from scene import Scene, get_gaussian_model
 from utils.general_utils import safe_state
 
 
-def render_wrapper(view, gaussians, pipeline, background, mode, is_test=False):
+def render_wrapper(view, gaussians, pipeline, background, mode, is_test=False, tight_snugbox=False):
     """Wrapper function that handles model-specific rendering.
 
     All models now have render_tcgs as a class method, so we dispatch to the
@@ -36,18 +36,19 @@ def render_wrapper(view, gaussians, pipeline, background, mode, is_test=False):
         gaussians: GaussianModel instance
         pipeline: Pipeline parameters
         background: Background color
-        mode: Rendering mode ("ndgs", "ddgs", "3dgs", "ubs")
+        mode: Rendering mode ("ndgs", "ddgs", "3dgs", "ubs", "dgs", "dgs-color")
         is_test: Whether in test mode
+        tight_snugbox: Whether to use tight snugbox for faster rendering (FPS measurement)
 
     Returns:
         Dictionary containing render outputs
     """
-    if "ubs" in mode or "ndgs" in mode:
-        # UBS mode: use render_tcgs with CUDA-accelerated conditional slicing
+    if "ubs" in mode or "ndgs" in mode or mode == "dgs" or mode == "dgs-color":
+        # UBS/N-DGS/DGS/DGS-color mode: use render_tcgs with CUDA-accelerated conditional slicing
         gaussians.background = background
-        return gaussians.render_tcgs(view, render_mode="RGB", use_tcgs=is_test)
+        return gaussians.render_tcgs(view, render_mode="RGB", use_tcgs=is_test, tight_snugbox=tight_snugbox)
     elif "ddgs" in mode or "3dgs" in mode:
-        # DDGS/3DGS mode: use model's render_tcgs method
+        # DDGS/3DGS mode: use model's render_tcgs method (no tight_snugbox support)
         return gaussians.render_tcgs(view, pipeline, background, is_test=is_test)
     else:
         raise ValueError(f"Unknown mode: {mode}. All modes should have render_tcgs method.")
@@ -78,39 +79,58 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         makedirs(render_path.replace("renders", "renders_principle"), exist_ok=True)
         makedirs(render_path.replace("renders", "renders_non_principle"), exist_ok=True)
 
-    # FPS measurement
-    fpslist = []
+    # FPS measurement and training time report only at iteration 30000 (final iteration)
+    if iteration == 30000:
+        # Report training time if available
+        training_time_path = os.path.join(model_path, "training_time.txt")
+        if os.path.exists(training_time_path):
+            with open(training_time_path, 'r') as f:
+                training_time = float(f.read().strip())
+            print(f"Training time: {training_time:.2f} seconds ({training_time/60:.2f} minutes)")
 
-    for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
-        # Calculate FPS for first 20 frames
-        if measure_fps:
-            rendering_principle = None
+        fpslist = []
+        fps_measure_count = min(20, len(views))
+
+        print("Measuring FPS for first 20 frames (tight_snugbox=True)...")
+        for idx in range(fps_measure_count):
+            view = views[idx]
             num_frames = 500
 
-            # Measure rendering time
+            # Measure rendering time with tight_snugbox=True
             start_time = time.time()
             for _ in range(num_frames):
-                rendering = render_wrapper(view, gaussians, pipeline, background, mode, is_test=True)["render"]
+                rendering = render_wrapper(view, gaussians, pipeline, background, mode, is_test=True, tight_snugbox=True)["render"]
             end_time = time.time()
 
             # Calculate FPS
             total_time = end_time - start_time
             fps = num_frames / total_time
             fpslist.append(fps)
-            print(f"Rendering FPS: {fps:.2f}")
+            if measure_fps:
+                print(f"Frame {idx}: Rendering FPS: {fps:.2f}")
 
-            if len(fpslist) == 20:
-                print(f"Average Rendering FPS: {np.array(fpslist).mean():.2f}")
-        else:
-            renderings = render_wrapper(view, gaussians, pipeline, background, mode, is_test=True)
-            rendering = renderings["render"]
+        # Save FPS results
+        if fpslist:
+            avg_fps = np.array(fpslist).mean()
+            print(f"Average Rendering FPS (first {len(fpslist)} frames): {avg_fps:.2f}")
+
+            # Save FPS to file in the iteration directory
+            fps_path = os.path.join(model_path, name, "ours_{}".format(iteration), "fps.txt")
+            with open(fps_path, 'w') as f:
+                f.write(f"{avg_fps:.2f}")
+
+    print("Rendering all frames for saving (tight_snugbox=False)...")
+    for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
+        # Render with tight_snugbox=False for quality
+        renderings = render_wrapper(view, gaussians, pipeline, background, mode, is_test=True, tight_snugbox=False)
+        rendering = renderings["render"]
 
         # Save rendered images
         gt = view.original_image[0:3, :, :]
         torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
 
         # Save principle/non-principle splits (DDGS mode only)
-        if not measure_fps and "ddgs" in mode.lower():
+        if "ddgs" in mode.lower():
             rendering_principle = renderings.get("render_principle")
             rendering_non_principle = renderings.get("render_non_principle")
 
@@ -148,6 +168,9 @@ def render_sets(dataset: ModelParams, iteration: int, pipeline: PipelineParams, 
         elif "ndgs" in mode:
             gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim,
                                         use_rot_scale_l_triangle=dataset.use_rot_scale_l_triangle)
+        elif mode == "dgs" or mode == "dgs-color":
+            # DGS/DGS-color mode: Position-based or joint position+color with simplified v_12/L_22_inv parameterization
+            gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim)
         else:
             gaussians = GaussianModel(dataset.sh_degree)
 

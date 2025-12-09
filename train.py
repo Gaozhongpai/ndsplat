@@ -78,6 +78,9 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
 
+    # Track total training time
+    training_start_time = time.time()
+
     # Get the appropriate GaussianModel class based on mode
     mode = dataset.mode
     GaussianModel = get_gaussian_model(mode)
@@ -418,6 +421,14 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
+
+    # Save total training time
+    training_end_time = time.time()
+    total_training_time = training_end_time - training_start_time
+    training_time_path = os.path.join(scene.model_path, "training_time.txt")
+    with open(training_time_path, 'w') as f:
+        f.write(f"{total_training_time:.2f}")
+    print(f"\nTotal training time: {total_training_time:.2f} seconds ({total_training_time/60:.2f} minutes)")
 
     # Return viewer to keep it alive after training if needed
     return viewer

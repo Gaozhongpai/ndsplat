@@ -11,6 +11,10 @@
 # Position-based DGS with simplified v_12/L_22_inv parameterization
 # Combines N-DGS position shifting with simplified covariance parameterization
 #
+# Option 2: Normalized Coupling with Learnable Magnitude
+# v_12 is decomposed into direction (unit vectors) and magnitude (bounded by spatial scale)
+# This provides structural regularization: small Gaussians can only shift small amounts
+#
 
 import torch
 import numpy as np
@@ -66,11 +70,18 @@ class GaussianModel:
 
     def __init__(self, sh_degree: int, input_dim: int = 6):
         """
-        Initialize Position-based DGS with simplified parameterization.
+        Initialize Position-based DGS with bounded v_12 parameterization.
 
         Args:
             sh_degree: Maximum SH degree for color
             input_dim: 6 for position+view, 7 for position+view+time
+
+        Bounded v_12 parameterization:
+            v_12 = normalize(_v_12_direction) * sigmoid(_v_12_scale) * max_pos_shift * spatial_scale
+
+        This provides structural regularization like full N-DGS:
+        - Small Gaussians can only shift small amounts
+        - Large Gaussians can shift more
         """
         self.active_sh_degree = 0
         self.max_sh_degree = sh_degree
@@ -89,10 +100,17 @@ class GaussianModel:
         # Simplified N-DGS parameters (position+view covariance)
         # View direction mean (learned "canonical" view direction per Gaussian)
         self._view_mean = torch.empty(0)  # [N, C] where C=3 or 4 (with time)
-        # v_12: [N, 3*C] position-view covariance block
-        self._v_12 = torch.empty(0)
+
+        # Bounded v_12 parameterization:
+        # v_12 = normalize(_v_12_direction) * sigmoid(_v_12_scale) * max_pos_shift * spatial_scale
+        self._v_12_direction = torch.empty(0)  # [N, 3*C] - will be normalized to unit vectors
+        self._v_12_scale = torch.empty(0)  # [N, 1] - sigmoid gives [0,1], then scaled by max_pos_shift * spatial scale
+
         # L_22_inv: [N, C*(C+1)/2] Cholesky of V_22^{-1} (precision)
         self._L_22_inv = torch.empty(0)
+
+        # Hyperparameter for maximum position shift
+        self.max_pos_shift = 0.5  # Maximum position shift factor (multiplied by spatial_scale)
 
         # Auxiliary tensors
         self.max_radii2D = torch.empty(0)
@@ -116,7 +134,8 @@ class GaussianModel:
             self._scaling,
             self._rotation,
             self._view_mean,
-            self._v_12,
+            self._v_12_direction,
+            self._v_12_scale,
             self._L_22_inv,
             self._opacity,
             self.max_radii2D,
@@ -134,7 +153,8 @@ class GaussianModel:
          self._scaling,
          self._rotation,
          self._view_mean,
-         self._v_12,
+         self._v_12_direction,
+         self._v_12_scale,
          self._L_22_inv,
          self._opacity,
          self.max_radii2D,
@@ -178,6 +198,41 @@ class GaussianModel:
     def get_opacity(self):
         return self.opacity_activation(self._opacity)
 
+    @property
+    def get_v_12(self):
+        """
+        Get effective v_12 (position-view covariance block) with bounded magnitude.
+
+        Computes: v_12 = normalize(_v_12_direction) * sigmoid(_v_12_scale) * max_pos_shift * spatial_scale
+
+        With global normalization: the entire [3*C] direction vector is normalized to unit norm.
+        This allows relative magnitudes between x, y, z axes to be encoded in the direction itself.
+
+        With anisotropic scaling: each of the 3 output dimensions is scaled by its corresponding
+        spatial scale, allowing position shifts to be bounded per-axis by Gaussian shape.
+
+        This provides structural regularization like full N-DGS:
+        - Small Gaussians (small spatial scale) -> small v_12 -> small position shifts
+        - Large Gaussians (large spatial scale) -> can have larger v_12 -> larger shifts allowed
+
+        This mimics the implicit constraint in full N-DGS where V_12 = L_11 @ L_21^T
+        """
+        # Global normalization: normalize entire [3*C] vector, then reshape
+        # This allows relative magnitudes between axes to be encoded in the direction
+        C = self._v_12_direction.shape[1] // 3
+        v_12_dir = F.normalize(self._v_12_direction, dim=1)  # [N, 3*C] normalized to unit norm
+        v_12_dir = v_12_dir.view(-1, 3, C)  # Reshape after normalization
+
+        # Magnitude: sigmoid to [0, 1], then scale by max_pos_shift and anisotropic spatial scale
+        # This ensures shift magnitude is bounded by max_pos_shift * Gaussian size per axis
+        spatial_scale = self.get_scaling  # [N, 3] - full anisotropic scale
+        v_12_magnitude = torch.sigmoid(self._v_12_scale) * self.max_pos_shift  # [N, 1]
+
+        # Apply anisotropic scaling: each row i scaled by spatial_scale[:, i]
+        v_12_scaled = v_12_dir * (v_12_magnitude * spatial_scale).unsqueeze(-1)  # [N, 3, 1] * [N, 3, C] = [N, 3, C]
+
+        return v_12_scaled.view(-1, 3 * C)  # [N, 3*C]
+
     def get_covariance(self, scaling_modifier=1):
         return self.covariance_activation(self.get_scaling, scaling_modifier, self._rotation)
 
@@ -212,7 +267,7 @@ class GaussianModel:
             self._xyz,              # [N, 3] - treat position as "color mean"
             self.get_view_mean,     # [N, C] - view direction mean
             query,                  # [N, C] - query view direction
-            self._v_12,             # [N, 3*C] - position-view covariance
+            self.get_v_12,          # [N, 3*C] - position-view covariance (bounded if use_bounded_v12)
             self._L_22_inv,         # [N, C*(C+1)/2] - Cholesky of precision
             lambda_opc,
         )
@@ -258,8 +313,13 @@ class GaussianModel:
             mean_time = torch.empty(num_gaussians, 1, device=device).uniform_(0.0, 1.0)
             view_mean = torch.cat([view_mean, mean_time], dim=-1)
 
-        # v_12: [N, 3*C] position-view covariance block, initialized near zero
-        v_12 = torch.normal(0, 0.01, size=(num_gaussians, 3 * C), device=device)
+        # v_12_direction: [N, 3*C] direction vectors (will be normalized in get_v_12)
+        # Initialize with small random values
+        v_12_direction = torch.normal(0, 0.01, size=(num_gaussians, 3 * C), device=device)
+
+        # v_12_scale: [N, 1] magnitude scale
+        # sigmoid(0) = 0.5, so effective magnitude starts at 0.5 * spatial_scale
+        v_12_scale = torch.zeros((num_gaussians, 1), device=device)
 
         # L_22_inv: [N, C*(C+1)/2] Cholesky of V_22^{-1} (precision)
         # Diagonal uses exp() activation, so initialize with log(2.0) ≈ 0.693
@@ -281,7 +341,8 @@ class GaussianModel:
         self._scaling = nn.Parameter(scales.requires_grad_(True))
         self._rotation = nn.Parameter(rots.requires_grad_(True))
         self._view_mean = nn.Parameter(view_mean.requires_grad_(True))
-        self._v_12 = nn.Parameter(v_12.requires_grad_(True))
+        self._v_12_direction = nn.Parameter(v_12_direction.requires_grad_(True))
+        self._v_12_scale = nn.Parameter(v_12_scale.requires_grad_(True))
         self._L_22_inv = nn.Parameter(L_22_inv.requires_grad_(True))
         self._opacity = nn.Parameter(opacities.requires_grad_(True))
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device=device)
@@ -299,7 +360,8 @@ class GaussianModel:
             {'params': [self._scaling], 'lr': training_args.scaling_lr, "name": "scaling"},
             {'params': [self._rotation], 'lr': training_args.rotation_lr, "name": "rotation"},
             {'params': [self._view_mean], 'lr': training_args.feature_lr, "name": "view_mean"},
-            {'params': [self._v_12], 'lr': training_args.feature_lr, "name": "v_12"},
+            {'params': [self._v_12_direction], 'lr': training_args.feature_lr, "name": "v_12_direction"},
+            {'params': [self._v_12_scale], 'lr': training_args.feature_lr, "name": "v_12_scale"},
             {'params': [self._L_22_inv], 'lr': training_args.rotation_lr, "name": "L_22_inv"},
         ]
 
@@ -334,8 +396,10 @@ class GaussianModel:
         # Simplified parameterization attributes
         for i in range(self._view_mean.shape[1]):
             l.append('view_mean_{}'.format(i))
-        for i in range(self._v_12.shape[1]):
-            l.append('v_12_{}'.format(i))
+        for i in range(self._v_12_direction.shape[1]):
+            l.append('v_12_direction_{}'.format(i))
+        for i in range(self._v_12_scale.shape[1]):
+            l.append('v_12_scale_{}'.format(i))
         for i in range(self._L_22_inv.shape[1]):
             l.append('L_22_inv_{}'.format(i))
         return l
@@ -350,7 +414,8 @@ class GaussianModel:
         scale = self._scaling.detach().cpu().numpy()
         rotation = self._rotation.detach().cpu().numpy()
         view_mean = self._view_mean.detach().cpu().numpy()
-        v_12 = self._v_12.detach().cpu().numpy()
+        v_12_direction = self._v_12_direction.detach().cpu().numpy()
+        v_12_scale = self._v_12_scale.detach().cpu().numpy()
         L_22_inv = self._L_22_inv.detach().cpu().numpy()
 
         dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
@@ -358,7 +423,7 @@ class GaussianModel:
         elements = np.empty(xyz.shape[0], dtype=dtype_full)
         attributes = np.concatenate([
             xyz, f_dc, f_rest, opacities, scale, rotation,
-            view_mean, v_12, L_22_inv
+            view_mean, v_12_direction, v_12_scale, L_22_inv
         ], axis=1)
         elements[:] = list(map(tuple, attributes))
         el = PlyElement.describe(elements, 'vertex')
@@ -410,11 +475,17 @@ class GaussianModel:
         for idx, attr_name in enumerate(view_mean_names):
             view_mean[:, idx] = np.asarray(plydata.elements[0][attr_name])
 
-        v_12_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("v_12_")]
-        v_12_names = sorted(v_12_names, key=lambda x: int(x.split('_')[-1]))
-        v_12 = np.zeros((xyz.shape[0], len(v_12_names)))
-        for idx, attr_name in enumerate(v_12_names):
-            v_12[:, idx] = np.asarray(plydata.elements[0][attr_name])
+        v_12_direction_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("v_12_direction_")]
+        v_12_direction_names = sorted(v_12_direction_names, key=lambda x: int(x.split('_')[-1]))
+        v_12_direction = np.zeros((xyz.shape[0], len(v_12_direction_names)))
+        for idx, attr_name in enumerate(v_12_direction_names):
+            v_12_direction[:, idx] = np.asarray(plydata.elements[0][attr_name])
+
+        v_12_scale_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("v_12_scale_")]
+        v_12_scale_names = sorted(v_12_scale_names, key=lambda x: int(x.split('_')[-1]))
+        v_12_scale = np.zeros((xyz.shape[0], len(v_12_scale_names)))
+        for idx, attr_name in enumerate(v_12_scale_names):
+            v_12_scale[:, idx] = np.asarray(plydata.elements[0][attr_name])
 
         L_22_inv_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("L_22_inv_")]
         L_22_inv_names = sorted(L_22_inv_names, key=lambda x: int(x.split('_')[-1]))
@@ -429,7 +500,8 @@ class GaussianModel:
         self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True))
         self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
         self._view_mean = nn.Parameter(torch.tensor(view_mean, dtype=torch.float, device="cuda").requires_grad_(True))
-        self._v_12 = nn.Parameter(torch.tensor(v_12, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._v_12_direction = nn.Parameter(torch.tensor(v_12_direction, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._v_12_scale = nn.Parameter(torch.tensor(v_12_scale, dtype=torch.float, device="cuda").requires_grad_(True))
         self._L_22_inv = nn.Parameter(torch.tensor(L_22_inv, dtype=torch.float, device="cuda").requires_grad_(True))
 
         self.active_sh_degree = self.max_sh_degree
@@ -478,7 +550,8 @@ class GaussianModel:
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
         self._view_mean = optimizable_tensors["view_mean"]
-        self._v_12 = optimizable_tensors["v_12"]
+        self._v_12_direction = optimizable_tensors["v_12_direction"]
+        self._v_12_scale = optimizable_tensors["v_12_scale"]
         self._L_22_inv = optimizable_tensors["L_22_inv"]
 
         self.xyz_gradient_accum = self.xyz_gradient_accum[valid_points_mask]
@@ -508,7 +581,7 @@ class GaussianModel:
         return optimizable_tensors
 
     def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities,
-                              new_scaling, new_rotation, new_view_mean, new_v_12, new_L_22_inv):
+                              new_scaling, new_rotation, new_view_mean, new_v_12_direction, new_v_12_scale, new_L_22_inv):
         d = {
             "xyz": new_xyz,
             "f_dc": new_features_dc,
@@ -517,7 +590,8 @@ class GaussianModel:
             "scaling": new_scaling,
             "rotation": new_rotation,
             "view_mean": new_view_mean,
-            "v_12": new_v_12,
+            "v_12_direction": new_v_12_direction,
+            "v_12_scale": new_v_12_scale,
             "L_22_inv": new_L_22_inv,
         }
 
@@ -529,7 +603,8 @@ class GaussianModel:
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
         self._view_mean = optimizable_tensors["view_mean"]
-        self._v_12 = optimizable_tensors["v_12"]
+        self._v_12_direction = optimizable_tensors["v_12_direction"]
+        self._v_12_scale = optimizable_tensors["v_12_scale"]
         self._L_22_inv = optimizable_tensors["L_22_inv"]
 
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
@@ -558,12 +633,13 @@ class GaussianModel:
         new_features_rest = self._features_rest[selected_pts_mask].repeat(N, 1, 1)
         new_opacity = self._opacity[selected_pts_mask].repeat(N, 1)
         new_view_mean = self._view_mean[selected_pts_mask].repeat(N, 1)
-        new_v_12 = self._v_12[selected_pts_mask].repeat(N, 1)
+        new_v_12_direction = self._v_12_direction[selected_pts_mask].repeat(N, 1)
+        new_v_12_scale = self._v_12_scale[selected_pts_mask].repeat(N, 1)
         new_L_22_inv = self._L_22_inv[selected_pts_mask].repeat(N, 1)
 
         self.densification_postfix(
             new_xyz, new_features_dc, new_features_rest, new_opacity,
-            new_scaling, new_rotation, new_view_mean, new_v_12, new_L_22_inv
+            new_scaling, new_rotation, new_view_mean, new_v_12_direction, new_v_12_scale, new_L_22_inv
         )
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
@@ -584,12 +660,13 @@ class GaussianModel:
         new_scaling = self._scaling[selected_pts_mask]
         new_rotation = self._rotation[selected_pts_mask]
         new_view_mean = self._view_mean[selected_pts_mask]
-        new_v_12 = self._v_12[selected_pts_mask]
+        new_v_12_direction = self._v_12_direction[selected_pts_mask]
+        new_v_12_scale = self._v_12_scale[selected_pts_mask]
         new_L_22_inv = self._L_22_inv[selected_pts_mask]
 
         self.densification_postfix(
             new_xyz, new_features_dc, new_features_rest, new_opacities,
-            new_scaling, new_rotation, new_view_mean, new_v_12, new_L_22_inv
+            new_scaling, new_rotation, new_view_mean, new_v_12_direction, new_v_12_scale, new_L_22_inv
         )
 
     def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size, iteration):
@@ -833,7 +910,8 @@ class GaussianModel:
         _rotation_masked = self._rotation[mask]
         _opacity_masked = self._opacity[mask]
         _view_mean_masked = self._view_mean[mask]
-        _v_12_masked = self._v_12[mask]
+        _v_12_direction_masked = self._v_12_direction[mask]
+        _v_12_scale_masked = self._v_12_scale[mask]
         _L_22_inv_masked = self._L_22_inv[mask]
 
         # Temporarily swap in masked tensors
@@ -844,7 +922,8 @@ class GaussianModel:
         orig_rotation, self._rotation = self._rotation, _rotation_masked
         orig_opacity, self._opacity = self._opacity, _opacity_masked
         orig_view_mean, self._view_mean = self._view_mean, _view_mean_masked
-        orig_v_12, self._v_12 = self._v_12, _v_12_masked
+        orig_v_12_direction, self._v_12_direction = self._v_12_direction, _v_12_direction_masked
+        orig_v_12_scale, self._v_12_scale = self._v_12_scale, _v_12_scale_masked
         orig_L_22_inv, self._L_22_inv = self._L_22_inv, _L_22_inv_masked
 
         try:
@@ -878,7 +957,8 @@ class GaussianModel:
             self._rotation = orig_rotation
             self._opacity = orig_opacity
             self._view_mean = orig_view_mean
-            self._v_12 = orig_v_12
+            self._v_12_direction = orig_v_12_direction
+            self._v_12_scale = orig_v_12_scale
             self._L_22_inv = orig_L_22_inv
 
         # Convert from [C, H, W] to [H, W, C] for viewer
