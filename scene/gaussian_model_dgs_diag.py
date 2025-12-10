@@ -73,13 +73,17 @@ class GaussianModel:
 
         self.rotation_activation = torch.nn.functional.normalize
 
-    def __init__(self, sh_degree: int, input_dim: int = 6):
+        # Beta activation: same as UBS - 4.0 * exp(beta)
+        self.beta_activation = lambda x: 4.0 * torch.exp(x)
+
+    def __init__(self, sh_degree: int, input_dim: int = 6, use_beta: bool = False):
         """
         Initialize Position-based DGS with diagonal-only L_22_inv parameterization.
 
         Args:
             sh_degree: Maximum SH degree for color
             input_dim: 6 for position+view, 7 for position+view+time
+            use_beta: Whether to use spatial beta parameter (default: False)
 
         Bounded v_12 parameterization:
             v_12 = normalize(_v_12_direction) * sigmoid(_v_12_scale) * max_pos_shift * spatial_scale
@@ -91,6 +95,7 @@ class GaussianModel:
         self.active_sh_degree = 0
         self.max_sh_degree = sh_degree
         self.input_dim = input_dim
+        self.use_beta = use_beta
         self.cond_dim = input_dim - 3  # C = 3 for view-only, 4 for view+time
 
         # Standard 3DGS parameters
@@ -115,8 +120,12 @@ class GaussianModel:
         # No off-diagonal elements, no lambda_opc needed
         self._L_22_inv_diag = torch.empty(0)
 
+        # Spatial beta: [N, 1] controls spatial uncertainty/bandwidth (like UBS)
+        # Activated as 4.0 * exp(beta) to control Gaussian spatial extent
+        self._beta = torch.empty(0)
+
         # Hyperparameter for maximum position shift
-        self.max_pos_shift = 0.5  # Maximum position shift factor (multiplied by spatial_scale)
+        self.max_pos_shift = 1.0  # Maximum position shift factor (multiplied by spatial_scale)
 
         # Auxiliary tensors
         self.max_radii2D = torch.empty(0)
@@ -132,7 +141,7 @@ class GaussianModel:
         self.setup_functions()
 
     def capture(self):
-        return (
+        state = (
             self.active_sh_degree,
             self._xyz,
             self._features_dc,
@@ -143,6 +152,7 @@ class GaussianModel:
             self._v_12_direction,
             self._v_12_scale,
             self._L_22_inv_diag,
+            self._beta if self.use_beta else None,
             self._opacity,
             self.max_radii2D,
             self.xyz_gradient_accum,
@@ -150,6 +160,7 @@ class GaussianModel:
             self.optimizer.state_dict(),
             self.spatial_lr_scale,
         )
+        return state
 
     def restore(self, model_args, training_args):
         (self.active_sh_degree,
@@ -162,12 +173,15 @@ class GaussianModel:
          self._v_12_direction,
          self._v_12_scale,
          self._L_22_inv_diag,
+         _beta,
          self._opacity,
          self.max_radii2D,
          xyz_gradient_accum,
          denom,
          opt_dict,
          self.spatial_lr_scale) = model_args
+        if self.use_beta and _beta is not None:
+            self._beta = _beta
         self.training_setup(training_args)
         self.xyz_gradient_accum = xyz_gradient_accum
         self.denom = denom
@@ -205,6 +219,15 @@ class GaussianModel:
         return self.opacity_activation(self._opacity)
 
     @property
+    def get_beta(self):
+        """Get activated spatial beta (controls spatial uncertainty/bandwidth).
+        Returns None if use_beta=False.
+        """
+        if not self.use_beta:
+            return None
+        return self.beta_activation(self._beta)
+
+    @property
     def get_v_12(self):
         """
         Get effective v_12 (position-view covariance block) with bounded magnitude.
@@ -229,13 +252,13 @@ class GaussianModel:
         v_12_dir = F.normalize(self._v_12_direction, dim=1)  # [N, 3*C] normalized to unit norm
         v_12_dir = v_12_dir.view(-1, 3, C)  # Reshape after normalization
 
-        # Magnitude: sigmoid to [0, 1], then scale by max_pos_shift and anisotropic spatial scale
-        # This ensures shift magnitude is bounded by max_pos_shift * Gaussian size per axis
-        spatial_scale = self.get_scaling  # [N, 3] - full anisotropic scale
+        # Magnitude: sigmoid to [0, 1], then scale by max_pos_shift and mean spatial scale
+        # This ensures shift magnitude is bounded by max_pos_shift * mean Gaussian size
+        spatial_scale = self.get_scaling.mean(dim=1, keepdim=True)  # [N, 1] - mean of x, y, z
         v_12_magnitude = torch.sigmoid(self._v_12_scale) * self.max_pos_shift  # [N, 1]
 
-        # Apply anisotropic scaling: each row i scaled by spatial_scale[:, i]
-        v_12_scaled = v_12_dir * (v_12_magnitude * spatial_scale).unsqueeze(-1)  # [N, 3, 1] * [N, 3, C] = [N, 3, C]
+        # Apply isotropic scaling: all elements scaled by mean spatial_scale
+        v_12_scaled = v_12_dir * (v_12_magnitude * spatial_scale).unsqueeze(-1)  # [N, 1, 1] * [N, 3, C] = [N, 3, C]
 
         return v_12_scaled.view(-1, 3 * C)  # [N, 3*C]
 
@@ -327,6 +350,13 @@ class GaussianModel:
         # This gives a moderate opacity falloff rate
         L_22_inv_diag = torch.full((num_gaussians, C), 0.347, device=device)
 
+        # Spatial beta: [N, 1] controls spatial uncertainty/bandwidth (optional)
+        # Initialize to 0.0 so beta_activation(0) = 4.0 * exp(0) = 4.0
+        if self.use_beta:
+            betas = torch.zeros((num_gaussians, 1), dtype=torch.float, device=device)
+        else:
+            betas = torch.empty(0, device=device)
+
         opacities = inverse_sigmoid(0.1 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device=device))
 
         self._label = torch.zeros((fused_point_cloud.shape[0], 1), dtype=torch.int32).cuda()
@@ -340,6 +370,8 @@ class GaussianModel:
         self._v_12_scale = nn.Parameter(v_12_scale.requires_grad_(True))
         self._L_22_inv_diag = nn.Parameter(L_22_inv_diag.requires_grad_(True))
         self._opacity = nn.Parameter(opacities.requires_grad_(True))
+        if self.use_beta:
+            self._beta = nn.Parameter(betas.requires_grad_(True))
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device=device)
 
     def training_setup(self, training_args):
@@ -359,6 +391,11 @@ class GaussianModel:
             {'params': [self._v_12_scale], 'lr': training_args.feature_lr, "name": "v_12_scale"},
             {'params': [self._L_22_inv_diag], 'lr': training_args.rotation_lr, "name": "L_22_inv_diag"},
         ]
+
+        # Add beta to optimizer only if use_beta is enabled
+        if self.use_beta:
+            beta_lr = getattr(training_args, 'beta_lr', training_args.rotation_lr)
+            l.append({'params': [self._beta], 'lr': beta_lr, "name": "beta"})
 
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
         self.xyz_scheduler_args = get_expon_lr_func(
@@ -397,6 +434,9 @@ class GaussianModel:
             l.append('v_12_scale_{}'.format(i))
         for i in range(self._L_22_inv_diag.shape[1]):
             l.append('L_22_inv_diag_{}'.format(i))
+        if self.use_beta:
+            for i in range(self._beta.shape[1]):
+                l.append('beta_{}'.format(i))
         return l
 
     def save_ply(self, path):
@@ -416,10 +456,12 @@ class GaussianModel:
         dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
 
         elements = np.empty(xyz.shape[0], dtype=dtype_full)
-        attributes = np.concatenate([
-            xyz, f_dc, f_rest, opacities, scale, rotation,
-            view_mean, v_12_direction, v_12_scale, L_22_inv_diag
-        ], axis=1)
+        attrs_list = [xyz, f_dc, f_rest, opacities, scale, rotation,
+                      view_mean, v_12_direction, v_12_scale, L_22_inv_diag]
+        if self.use_beta:
+            betas = self._beta.detach().cpu().numpy()
+            attrs_list.append(betas)
+        attributes = np.concatenate(attrs_list, axis=1)
         elements[:] = list(map(tuple, attributes))
         el = PlyElement.describe(elements, 'vertex')
         PlyData([el]).write(path)
@@ -488,6 +530,14 @@ class GaussianModel:
         for idx, attr_name in enumerate(L_22_inv_diag_names):
             L_22_inv_diag[:, idx] = np.asarray(plydata.elements[0][attr_name])
 
+        # Load beta (spatial uncertainty) - only if use_beta is enabled
+        if self.use_beta:
+            beta_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("beta_")]
+            beta_names = sorted(beta_names, key=lambda x: int(x.split('_')[-1]))
+            betas = np.zeros((xyz.shape[0], len(beta_names)))
+            for idx, attr_name in enumerate(beta_names):
+                betas[:, idx] = np.asarray(plydata.elements[0][attr_name])
+
         self._xyz = nn.Parameter(torch.tensor(xyz, dtype=torch.float, device="cuda").requires_grad_(True))
         self._features_dc = nn.Parameter(torch.tensor(features_dc, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
         self._features_rest = nn.Parameter(torch.tensor(features_extra, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
@@ -498,6 +548,8 @@ class GaussianModel:
         self._v_12_direction = nn.Parameter(torch.tensor(v_12_direction, dtype=torch.float, device="cuda").requires_grad_(True))
         self._v_12_scale = nn.Parameter(torch.tensor(v_12_scale, dtype=torch.float, device="cuda").requires_grad_(True))
         self._L_22_inv_diag = nn.Parameter(torch.tensor(L_22_inv_diag, dtype=torch.float, device="cuda").requires_grad_(True))
+        if self.use_beta:
+            self._beta = nn.Parameter(torch.tensor(betas, dtype=torch.float, device="cuda").requires_grad_(True))
 
         self.active_sh_degree = self.max_sh_degree
 
@@ -548,6 +600,8 @@ class GaussianModel:
         self._v_12_direction = optimizable_tensors["v_12_direction"]
         self._v_12_scale = optimizable_tensors["v_12_scale"]
         self._L_22_inv_diag = optimizable_tensors["L_22_inv_diag"]
+        if self.use_beta:
+            self._beta = optimizable_tensors["beta"]
 
         self.xyz_gradient_accum = self.xyz_gradient_accum[valid_points_mask]
         self.denom = self.denom[valid_points_mask]
@@ -576,7 +630,7 @@ class GaussianModel:
         return optimizable_tensors
 
     def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities,
-                              new_scaling, new_rotation, new_view_mean, new_v_12_direction, new_v_12_scale, new_L_22_inv_diag):
+                              new_scaling, new_rotation, new_view_mean, new_v_12_direction, new_v_12_scale, new_L_22_inv_diag, new_beta=None):
         d = {
             "xyz": new_xyz,
             "f_dc": new_features_dc,
@@ -589,6 +643,8 @@ class GaussianModel:
             "v_12_scale": new_v_12_scale,
             "L_22_inv_diag": new_L_22_inv_diag,
         }
+        if self.use_beta:
+            d["beta"] = new_beta
 
         optimizable_tensors = self.cat_tensors_to_optimizer(d)
         self._xyz = optimizable_tensors["xyz"]
@@ -601,6 +657,8 @@ class GaussianModel:
         self._v_12_direction = optimizable_tensors["v_12_direction"]
         self._v_12_scale = optimizable_tensors["v_12_scale"]
         self._L_22_inv_diag = optimizable_tensors["L_22_inv_diag"]
+        if self.use_beta:
+            self._beta = optimizable_tensors["beta"]
 
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
@@ -631,10 +689,11 @@ class GaussianModel:
         new_v_12_direction = self._v_12_direction[selected_pts_mask].repeat(N, 1)
         new_v_12_scale = self._v_12_scale[selected_pts_mask].repeat(N, 1)
         new_L_22_inv_diag = self._L_22_inv_diag[selected_pts_mask].repeat(N, 1)
+        new_beta = self._beta[selected_pts_mask].repeat(N, 1) if self.use_beta else None
 
         self.densification_postfix(
             new_xyz, new_features_dc, new_features_rest, new_opacity,
-            new_scaling, new_rotation, new_view_mean, new_v_12_direction, new_v_12_scale, new_L_22_inv_diag
+            new_scaling, new_rotation, new_view_mean, new_v_12_direction, new_v_12_scale, new_L_22_inv_diag, new_beta
         )
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
@@ -658,10 +717,11 @@ class GaussianModel:
         new_v_12_direction = self._v_12_direction[selected_pts_mask]
         new_v_12_scale = self._v_12_scale[selected_pts_mask]
         new_L_22_inv_diag = self._L_22_inv_diag[selected_pts_mask]
+        new_beta = self._beta[selected_pts_mask] if self.use_beta else None
 
         self.densification_postfix(
             new_xyz, new_features_dc, new_features_rest, new_opacities,
-            new_scaling, new_rotation, new_view_mean, new_v_12_direction, new_v_12_scale, new_L_22_inv_diag
+            new_scaling, new_rotation, new_view_mean, new_v_12_direction, new_v_12_scale, new_L_22_inv_diag, new_beta
         )
 
     def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size, iteration):
@@ -778,6 +838,7 @@ class GaussianModel:
             scales=self.get_scaling,
             rotations=self.get_rotation,
             cov3D_precomp=None,
+            betas=self.get_beta,
         )
 
         return {
@@ -908,6 +969,8 @@ class GaussianModel:
         _v_12_direction_masked = self._v_12_direction[mask]
         _v_12_scale_masked = self._v_12_scale[mask]
         _L_22_inv_diag_masked = self._L_22_inv_diag[mask]
+        if self.use_beta:
+            _beta_masked = self._beta[mask]
 
         # Temporarily swap in masked tensors
         orig_xyz, self._xyz = self._xyz, _xyz_masked
@@ -920,6 +983,8 @@ class GaussianModel:
         orig_v_12_direction, self._v_12_direction = self._v_12_direction, _v_12_direction_masked
         orig_v_12_scale, self._v_12_scale = self._v_12_scale, _v_12_scale_masked
         orig_L_22_inv_diag, self._L_22_inv_diag = self._L_22_inv_diag, _L_22_inv_diag_masked
+        if self.use_beta:
+            orig_beta, self._beta = self._beta, _beta_masked
 
         try:
             # Call render_tcgs with masked Gaussians
@@ -955,6 +1020,8 @@ class GaussianModel:
             self._v_12_direction = orig_v_12_direction
             self._v_12_scale = orig_v_12_scale
             self._L_22_inv_diag = orig_L_22_inv_diag
+            if self.use_beta:
+                self._beta = orig_beta
 
         # Convert from [C, H, W] to [H, W, C] for viewer
         render_colors = render_colors.permute(1, 2, 0)

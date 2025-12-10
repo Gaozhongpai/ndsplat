@@ -113,7 +113,7 @@ class GaussianModel:
         self._L_22_inv = torch.empty(0)
 
         # Hyperparameter for maximum position shift
-        self.max_pos_shift = 0.5  # Maximum position shift factor (multiplied by spatial_scale)
+        self.max_pos_shift = 1.0  # Maximum position shift factor (multiplied by spatial_scale)
 
         # Auxiliary tensors
         self.max_radii2D = torch.empty(0)
@@ -242,13 +242,13 @@ class GaussianModel:
         v_12_dir = F.normalize(self._v_12_direction, dim=1)  # [N, 3*C] normalized to unit norm
         v_12_dir = v_12_dir.view(-1, 3, C)  # Reshape after normalization
 
-        # Magnitude: sigmoid to [0, 1], then scale by max_pos_shift and anisotropic spatial scale
-        # This ensures shift magnitude is bounded by max_pos_shift * Gaussian size per axis
-        spatial_scale = self.get_scaling  # [N, 3] - full anisotropic scale
+        # Magnitude: sigmoid to [0, 1], then scale by max_pos_shift and mean spatial scale
+        # This ensures shift magnitude is bounded by max_pos_shift * mean Gaussian size
+        spatial_scale = self.get_scaling.mean(dim=1, keepdim=True)  # [N, 1] - mean of x, y, z
         v_12_magnitude = torch.sigmoid(self._v_12_scale) * self.max_pos_shift  # [N, 1]
 
-        # Apply anisotropic scaling: each row i scaled by spatial_scale[:, i]
-        v_12_scaled = v_12_dir * (v_12_magnitude * spatial_scale).unsqueeze(-1)  # [N, 3, 1] * [N, 3, C] = [N, 3, C]
+        # Apply isotropic scaling: all elements scaled by mean spatial_scale
+        v_12_scaled = v_12_dir * (v_12_magnitude * spatial_scale).unsqueeze(-1)  # [N, 1, 1] * [N, 3, C] = [N, 3, C]
 
         return v_12_scaled.view(-1, 3 * C)  # [N, 3*C]
 
