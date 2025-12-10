@@ -42,7 +42,7 @@ def get_gaussian_model(mode: str):
     elif mode == "ndgs-2sh":  ## N-DGS with 2 SH bands
         from scene.gaussian_model_ndgs_2sh import GaussianModel
     elif mode == "ndgs-color":  ## Color-based N-DGS: conditional color instead of position shift
-        from scene.gaussian_model_ndgs_color_dis import GaussianModelColor as GaussianModel
+        from scene.gaussian_model_ndgs_color import GaussianModelColor as GaussianModel
     elif mode == "dgs":  ## Position-based DGS with simplified v_12/L_22_inv parameterization
         from scene.gaussian_model_dgs import GaussianModel
     elif mode == "dgs-color":  ## Joint position+color DGS with simplified v_12/L_22_inv parameterization

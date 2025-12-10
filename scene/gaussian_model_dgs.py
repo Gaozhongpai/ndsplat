@@ -68,13 +68,14 @@ class GaussianModel:
 
         self.rotation_activation = torch.nn.functional.normalize
 
-    def __init__(self, sh_degree: int, input_dim: int = 6):
+    def __init__(self, sh_degree: int, input_dim: int = 6, learnable_lambda_opc: bool = False):
         """
         Initialize Position-based DGS with bounded v_12 parameterization.
 
         Args:
             sh_degree: Maximum SH degree for color
             input_dim: 6 for position+view, 7 for position+view+time
+            learnable_lambda_opc: If True, make lambda_opc a learnable parameter per Gaussian
 
         Bounded v_12 parameterization:
             v_12 = normalize(_v_12_direction) * sigmoid(_v_12_scale) * max_pos_shift * spatial_scale
@@ -87,6 +88,7 @@ class GaussianModel:
         self.max_sh_degree = sh_degree
         self.input_dim = input_dim
         self.cond_dim = input_dim - 3  # C = 3 for view-only, 4 for view+time
+        self.learnable_lambda_opc = learnable_lambda_opc
 
         # Standard 3DGS parameters
         self._xyz = torch.empty(0)
@@ -95,6 +97,7 @@ class GaussianModel:
         self._scaling = torch.empty(0)
         self._rotation = torch.empty(0)
         self._opacity = torch.empty(0)
+        self._lambda_opc = torch.empty(0)  # Learnable opacity scaling parameter
         self._label = torch.empty(0)
 
         # Simplified N-DGS parameters (position+view covariance)
@@ -138,6 +141,7 @@ class GaussianModel:
             self._v_12_scale,
             self._L_22_inv,
             self._opacity,
+            self._lambda_opc,
             self.max_radii2D,
             self.xyz_gradient_accum,
             self.denom,
@@ -157,6 +161,7 @@ class GaussianModel:
          self._v_12_scale,
          self._L_22_inv,
          self._opacity,
+         self._lambda_opc,
          self.max_radii2D,
          xyz_gradient_accum,
          denom,
@@ -197,6 +202,20 @@ class GaussianModel:
     @property
     def get_opacity(self):
         return self.opacity_activation(self._opacity)
+
+    @property
+    def get_lambda_opc(self):
+        """Get lambda_opc parameter (learnable or fixed).
+
+        Returns:
+            If learnable_lambda_opc=True: sigmoid-activated per-Gaussian lambda [N, 1]
+            If learnable_lambda_opc=False: fixed value of 0.35 for all Gaussians [N, 1]
+        """
+        if self.learnable_lambda_opc:
+            return self.opacity_activation(self._lambda_opc)
+        else:
+            # Return fixed value of 0.35 for all Gaussians
+            return torch.ones_like(self._opacity) * 0.35
 
     @property
     def get_v_12(self):
@@ -253,7 +272,7 @@ class GaussianModel:
 
         Args:
             query: Query direction [N, C] where C=3 (view) or 4 (view+time)
-            lambda_opc: Opacity scaling factor (default 0.35)
+            lambda_opc: Opacity scaling factor (default 0.35, can be [N, 1] per-Gaussian)
 
         Returns:
             x_cond: Conditional 3D position [N, 3]
@@ -333,6 +352,8 @@ class GaussianModel:
             L_22_inv[:, diag_idx] = math.log(2.0)
 
         opacities = inverse_sigmoid(0.1 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device=device))
+        # Initialize lambda_opc: sigmoid(inverse_sigmoid(0.35)) = 0.35
+        lambda_opcs = inverse_sigmoid(0.35 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device=device))
 
         self._label = torch.zeros((fused_point_cloud.shape[0], 1), dtype=torch.int32).cuda()
         self._xyz = nn.Parameter(fused_point_cloud.requires_grad_(True))
@@ -345,6 +366,7 @@ class GaussianModel:
         self._v_12_scale = nn.Parameter(v_12_scale.requires_grad_(True))
         self._L_22_inv = nn.Parameter(L_22_inv.requires_grad_(True))
         self._opacity = nn.Parameter(opacities.requires_grad_(True))
+        self._lambda_opc = nn.Parameter(lambda_opcs.requires_grad_(self.learnable_lambda_opc))
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device=device)
 
     def training_setup(self, training_args):
@@ -364,6 +386,13 @@ class GaussianModel:
             {'params': [self._v_12_scale], 'lr': training_args.feature_lr, "name": "v_12_scale"},
             {'params': [self._L_22_inv], 'lr': training_args.rotation_lr, "name": "L_22_inv"},
         ]
+
+        # Add lambda_opc parameter (learnable or not)
+        if self.learnable_lambda_opc:
+            l.append({'params': [self._lambda_opc], 'lr': training_args.opacity_lr, "name": "lambda_opc"})
+        else:
+            # Still add to optimizer but with lr=0 for consistency in state management
+            l.append({'params': [self._lambda_opc], 'lr': 0.0, "name": "lambda_opc"})
 
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
         self.xyz_scheduler_args = get_expon_lr_func(
@@ -389,6 +418,7 @@ class GaussianModel:
         for i in range(self._features_rest.shape[1] * self._features_rest.shape[2]):
             l.append('f_rest_{}'.format(i))
         l.append('opacity')
+        l.append('lambda_opc')
         for i in range(self._scaling.shape[1]):
             l.append('scale_{}'.format(i))
         for i in range(self._rotation.shape[1]):
@@ -411,6 +441,7 @@ class GaussianModel:
         f_dc = self._features_dc.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
         f_rest = self._features_rest.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
         opacities = self._opacity.detach().cpu().numpy()
+        lambda_opcs = self._lambda_opc.detach().cpu().numpy()
         scale = self._scaling.detach().cpu().numpy()
         rotation = self._rotation.detach().cpu().numpy()
         view_mean = self._view_mean.detach().cpu().numpy()
@@ -422,7 +453,7 @@ class GaussianModel:
 
         elements = np.empty(xyz.shape[0], dtype=dtype_full)
         attributes = np.concatenate([
-            xyz, f_dc, f_rest, opacities, scale, rotation,
+            xyz, f_dc, f_rest, opacities, lambda_opcs, scale, rotation,
             view_mean, v_12_direction, v_12_scale, L_22_inv
         ], axis=1)
         elements[:] = list(map(tuple, attributes))
@@ -442,6 +473,14 @@ class GaussianModel:
                         np.asarray(plydata.elements[0]["z"])), axis=1)
 
         opacities = np.asarray(plydata.elements[0]["opacity"])[..., np.newaxis]
+
+        # Load lambda_opc (with backward compatibility)
+        try:
+            lambda_opcs = np.asarray(plydata.elements[0]["lambda_opc"])[..., np.newaxis]
+        except:
+            # Default to inverse_sigmoid(0.35) if not present in file
+            lambda_opcs = np.full((xyz.shape[0], 1), inverse_sigmoid(torch.tensor(0.35)).item(), dtype=np.float32)
+        lambda_opcs = np.ascontiguousarray(lambda_opcs, dtype=np.float32)
 
         features_dc = np.zeros((xyz.shape[0], 3, 1))
         features_dc[:, 0, 0] = np.asarray(plydata.elements[0]["f_dc_0"])
@@ -497,6 +536,7 @@ class GaussianModel:
         self._features_dc = nn.Parameter(torch.tensor(features_dc, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
         self._features_rest = nn.Parameter(torch.tensor(features_extra, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
         self._opacity = nn.Parameter(torch.tensor(opacities, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._lambda_opc = nn.Parameter(torch.tensor(lambda_opcs, dtype=torch.float, device="cuda").requires_grad_(self.learnable_lambda_opc))
         self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True))
         self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
         self._view_mean = nn.Parameter(torch.tensor(view_mean, dtype=torch.float, device="cuda").requires_grad_(True))
@@ -547,6 +587,7 @@ class GaussianModel:
         self._features_dc = optimizable_tensors["f_dc"]
         self._features_rest = optimizable_tensors["f_rest"]
         self._opacity = optimizable_tensors["opacity"]
+        self._lambda_opc = optimizable_tensors["lambda_opc"]
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
         self._view_mean = optimizable_tensors["view_mean"]
@@ -581,12 +622,13 @@ class GaussianModel:
         return optimizable_tensors
 
     def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities,
-                              new_scaling, new_rotation, new_view_mean, new_v_12_direction, new_v_12_scale, new_L_22_inv):
+                              new_lambda_opc, new_scaling, new_rotation, new_view_mean, new_v_12_direction, new_v_12_scale, new_L_22_inv):
         d = {
             "xyz": new_xyz,
             "f_dc": new_features_dc,
             "f_rest": new_features_rest,
             "opacity": new_opacities,
+            "lambda_opc": new_lambda_opc,
             "scaling": new_scaling,
             "rotation": new_rotation,
             "view_mean": new_view_mean,
@@ -600,6 +642,7 @@ class GaussianModel:
         self._features_dc = optimizable_tensors["f_dc"]
         self._features_rest = optimizable_tensors["f_rest"]
         self._opacity = optimizable_tensors["opacity"]
+        self._lambda_opc = optimizable_tensors["lambda_opc"]
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
         self._view_mean = optimizable_tensors["view_mean"]
@@ -632,6 +675,7 @@ class GaussianModel:
         new_features_dc = self._features_dc[selected_pts_mask].repeat(N, 1, 1)
         new_features_rest = self._features_rest[selected_pts_mask].repeat(N, 1, 1)
         new_opacity = self._opacity[selected_pts_mask].repeat(N, 1)
+        new_lambda_opc = self._lambda_opc[selected_pts_mask].repeat(N, 1)
         new_view_mean = self._view_mean[selected_pts_mask].repeat(N, 1)
         new_v_12_direction = self._v_12_direction[selected_pts_mask].repeat(N, 1)
         new_v_12_scale = self._v_12_scale[selected_pts_mask].repeat(N, 1)
@@ -639,7 +683,7 @@ class GaussianModel:
 
         self.densification_postfix(
             new_xyz, new_features_dc, new_features_rest, new_opacity,
-            new_scaling, new_rotation, new_view_mean, new_v_12_direction, new_v_12_scale, new_L_22_inv
+            new_lambda_opc, new_scaling, new_rotation, new_view_mean, new_v_12_direction, new_v_12_scale, new_L_22_inv
         )
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
@@ -657,6 +701,7 @@ class GaussianModel:
         new_features_dc = self._features_dc[selected_pts_mask]
         new_features_rest = self._features_rest[selected_pts_mask]
         new_opacities = self._opacity[selected_pts_mask]
+        new_lambda_opc = self._lambda_opc[selected_pts_mask]
         new_scaling = self._scaling[selected_pts_mask]
         new_rotation = self._rotation[selected_pts_mask]
         new_view_mean = self._view_mean[selected_pts_mask]
@@ -666,7 +711,7 @@ class GaussianModel:
 
         self.densification_postfix(
             new_xyz, new_features_dc, new_features_rest, new_opacities,
-            new_scaling, new_rotation, new_view_mean, new_v_12_direction, new_v_12_scale, new_L_22_inv
+            new_lambda_opc, new_scaling, new_rotation, new_view_mean, new_v_12_direction, new_v_12_scale, new_L_22_inv
         )
 
     def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size, iteration):
@@ -732,13 +777,20 @@ class GaussianModel:
         else:
             cond_params = view_dir
 
+        # Use fixed or learnable lambda_opc
+        if self.learnable_lambda_opc:
+            lambda_opc = self.get_lambda_opc  # [N, 1] per-Gaussian
+        else:
+            lambda_opc = 0.35  # Fixed scalar
+
         # Compute conditional position and opacity scale using slice_gaussian
-        m_cond, opacity_scale = self.slice_gaussian(cond_params, lambda_opc=0.35)
+        m_cond, opacity_scale = self.slice_gaussian(cond_params, lambda_opc=lambda_opc)
 
         # Get SH features for color
         shs = self.get_features
 
         # Get opacity scaled by view-dependent factor
+        # When learnable_lambda_opc=True, opacity_scale already incorporates per-Gaussian lambda
         opacity = self.get_opacity * opacity_scale
         
         # Set up rasterization
@@ -913,6 +965,7 @@ class GaussianModel:
         _v_12_direction_masked = self._v_12_direction[mask]
         _v_12_scale_masked = self._v_12_scale[mask]
         _L_22_inv_masked = self._L_22_inv[mask]
+        _lambda_opc_masked = self._lambda_opc[mask]
 
         # Temporarily swap in masked tensors
         orig_xyz, self._xyz = self._xyz, _xyz_masked
@@ -925,6 +978,7 @@ class GaussianModel:
         orig_v_12_direction, self._v_12_direction = self._v_12_direction, _v_12_direction_masked
         orig_v_12_scale, self._v_12_scale = self._v_12_scale, _v_12_scale_masked
         orig_L_22_inv, self._L_22_inv = self._L_22_inv, _L_22_inv_masked
+        orig_lambda_opc, self._lambda_opc = self._lambda_opc, _lambda_opc_masked
 
         try:
             # Call render_tcgs with masked Gaussians
@@ -960,6 +1014,7 @@ class GaussianModel:
             self._v_12_direction = orig_v_12_direction
             self._v_12_scale = orig_v_12_scale
             self._L_22_inv = orig_L_22_inv
+            self._lambda_opc = orig_lambda_opc
 
         # Convert from [C, H, W] to [H, W, C] for viewer
         render_colors = render_colors.permute(1, 2, 0)

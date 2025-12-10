@@ -5,7 +5,7 @@
 shopt -s dotglob
 
 base_dir="/code/dataset/tandt_db/6dgs-pbr/"
-modes=("dgs" "dgs-color")
+modes=("dgs")
 
 for mode in "${modes[@]}"; do
     echo "=============================================="
