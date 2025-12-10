@@ -36,7 +36,7 @@ def get_gaussian_model(mode: str):
     elif mode == "3dgs":  ## original 3DGS
         from scene.gaussian_model import GaussianModel
     elif mode == "ubs":  ## UBS (ICLR 2026)
-        from scene.gaussian_model_ubs import GaussianModel
+        from scene.gaussian_model_ubs_sh import GaussianModel
     elif mode == "ndgs":  ## N-DGS (supports both 6DGS and 7DGS with time, with merged parametrization)
         from scene.gaussian_model_ndgs import GaussianModel
     elif mode == "ndgs-2sh":  ## N-DGS with 2 SH bands
@@ -44,7 +44,7 @@ def get_gaussian_model(mode: str):
     elif mode == "ndgs-color":  ## Color-based N-DGS: conditional color instead of position shift
         from scene.gaussian_model_ndgs_color import GaussianModelColor as GaussianModel
     elif mode == "dgs":  ## Position-based DGS with simplified v_12/L_22_inv parameterization
-        from scene.gaussian_model_dgs import GaussianModel
+        from scene.gaussian_model_dgs_diag import GaussianModel
     elif mode == "dgs-color":  ## Joint position+color DGS with simplified v_12/L_22_inv parameterization
         from scene.gaussian_model_dgs_color import GaussianModel
     else:

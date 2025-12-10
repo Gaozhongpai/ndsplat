@@ -31,6 +31,7 @@ from gsplat import (
     l_triangle_to_rotmat,
     rot_scale_l_triangle_to_covar,
     cond_mean_convariance_opacity,
+    cond_mean_covariance_opacity_cholesky,
 )
 
 # Import compression utilities
@@ -193,6 +194,14 @@ class GaussianModel:
         b = self.get_beta[:, 1:]
         return cond_mean_convariance_opacity(m, v, o, b, q)
 
+    def get_cond_mean_covariance_opacity_cholesky(self, q):
+        """Cholesky-based conditional mean/covariance/opacity with positive per-dim distances."""
+        v = self.get_covariance
+        m = self.get_mean
+        o = self.get_opacity
+        b = self.get_beta[:, 1:]
+        return cond_mean_covariance_opacity_cholesky(m, v, o, b, q)
+
     @property
     def get_xyz(self):
         """Return spatial positions (for compatibility with 6dgs-iclr train.py)."""
@@ -204,7 +213,16 @@ class GaussianModel:
         features_rest = self._features_rest
         return torch.cat((features_dc, features_rest), dim=1)
 
-    def create_from_pcd(self, pcd: BasicPointCloud, spatial_lr_scale: float):
+    def create_from_pcd(self, pcd: BasicPointCloud, spatial_lr_scale: float,
+                        mcmc_cap_max: int = None, densification_strategy: str = "standard"):
+        """Initialize Gaussian model from point cloud.
+
+        Args:
+            pcd: Point cloud data
+            spatial_lr_scale: Spatial learning rate scale (camera extent)
+            mcmc_cap_max: Maximum number of Gaussians for MCMC (unused for standard densification)
+            densification_strategy: "standard" or "mcmc" (unused, for compatibility)
+        """
         self.spatial_lr_scale = spatial_lr_scale
         fused_point_cloud = torch.tensor(np.asarray(pcd.points)).float().cuda()
         fused_color = RGB2SH(torch.tensor(np.asarray(pcd.colors)).float().cuda())
@@ -880,14 +898,17 @@ class GaussianModel:
         v_11 = v[:, :3, :3]
         v_12 = v[:, :3, 3:]
         v_21 = v[:, 3:, :3]
-        v_22 = v[:, :3, :3]
+        v_22 = v[:, 3:, 3:]  # Fixed: was incorrectly v[:, :3, :3]
 
         # Get beta parameters for uncertainty adjustment
         # beta shape: [N, input_dim-2] = [N, C] where C = D-3 (conditional dims)
         # For 6D: [N, 4] (1 spatial + 3 view), For 7D: [N, 5] (1 spatial + 3 view + 1 time)
         beta = self.get_beta[:, 1:]  # [N, C] - exclude first beta (used elsewhere)
         beta_adj = torch.clamp_max(beta / 4.0, 1.0)  # [N, C] - clamp like gsplat
-        v_22_inv = torch.linalg.inv(v_22)
+        # Add small regularization to ensure invertibility
+        eps = 1e-6
+        v_22_reg = v_22 + eps * torch.eye(v_22.shape[-1], device=v_22.device, dtype=v_22.dtype).unsqueeze(0)
+        v_22_inv = torch.linalg.inv(v_22_reg)
 
         # Compute regression matrix with per-dimension beta adjustment (like gsplat CUDA impl)
         v_regr = torch.bmm(v_12, v_22_inv)  # [N, 3, C]
@@ -920,7 +941,10 @@ class GaussianModel:
         # beta shape: [N, input_dim-2] = [N, C] where C = D-3 (conditional dims)
         beta = self.get_beta[:, 1:]  # [N, C] - exclude first beta (used elsewhere)
         beta_adj = torch.clamp_max(beta / 4.0, 1.0)  # [N, C] - clamp like gsplat
-        v_22_inv = torch.linalg.inv(v_22)
+        # Add small regularization to ensure invertibility
+        eps = 1e-6
+        v_22_reg = v_22 + eps * torch.eye(v_22.shape[-1], device=v_22.device, dtype=v_22.dtype).unsqueeze(0)
+        v_22_inv = torch.linalg.inv(v_22_reg)
 
         # Compute regression matrix with per-dimension beta adjustment (like gsplat CUDA impl)
         v_regr = torch.bmm(v_12, v_22_inv)  # [N, 3, C]
@@ -931,7 +955,7 @@ class GaussianModel:
         v_cond = v_11 - v_change
 
         U, S, _ = torch.linalg.svd(v_cond)
-        scale = torch.sqrt(S)
+        scale = torch.sqrt(torch.clamp(S, min=eps))  # Clamp to avoid sqrt of negative
         rotation = U
 
         # Ensure right-handed coordinate system
@@ -1230,7 +1254,7 @@ class GaussianModel:
         means2d = screenspace_points  # Pass the full [N, 3] tensor, rasterizer will use [:, :2]
         scores = means3d.new_empty(0)
 
-        outputs = rasterizer(
+        rendered_image, radii, render_time, _ = rasterizer(
             means3D=means3d,
             means2D=means2d,
             shs=shs,
@@ -1240,11 +1264,6 @@ class GaussianModel:
             cov3D_precomp=covars,
             betas=betas,
         )
-
-        if len(outputs) == 3:
-            rendered_image, radii, _ = outputs
-        else:
-            rendered_image, radii = outputs
 
         if rendered_image.dim() == 4:
             rendered_image = rendered_image[0]

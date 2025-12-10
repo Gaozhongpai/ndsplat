@@ -870,7 +870,10 @@ class GaussianModel:
         # For 6D: [N, 4] (1 spatial + 3 view), For 7D: [N, 5] (1 spatial + 3 view + 1 time)
         beta = self.get_beta[:, 1:]  # [N, C] - exclude first beta (used elsewhere)
         beta_adj = torch.clamp_max(beta / 4.0, 1.0)  # [N, C] - clamp like gsplat
-        v_22_inv = torch.linalg.inv(v_22)
+        # Add small regularization to ensure invertibility
+        eps = 1e-6
+        v_22_reg = v_22 + eps * torch.eye(v_22.shape[-1], device=v_22.device, dtype=v_22.dtype).unsqueeze(0)
+        v_22_inv = torch.linalg.inv(v_22_reg)
 
         # Compute regression matrix with per-dimension beta adjustment (like gsplat CUDA impl)
         v_regr = torch.bmm(v_12, v_22_inv)  # [N, 3, C]
@@ -881,7 +884,7 @@ class GaussianModel:
         v_cond = v_11 - v_change
 
         U, S, _ = torch.linalg.svd(v_cond)
-        scale = torch.sqrt(S)
+        scale = torch.sqrt(torch.clamp(S, min=eps))  # Clamp to avoid sqrt of negative
         return scale
 
     @property
@@ -903,7 +906,10 @@ class GaussianModel:
         # beta shape: [N, input_dim-2] = [N, C] where C = D-3 (conditional dims)
         beta = self.get_beta[:, 1:]  # [N, C] - exclude first beta (used elsewhere)
         beta_adj = torch.clamp_max(beta / 4.0, 1.0)  # [N, C] - clamp like gsplat
-        v_22_inv = torch.linalg.inv(v_22)
+        # Add small regularization to ensure invertibility
+        eps = 1e-6
+        v_22_reg = v_22 + eps * torch.eye(v_22.shape[-1], device=v_22.device, dtype=v_22.dtype).unsqueeze(0)
+        v_22_inv = torch.linalg.inv(v_22_reg)
 
         # Compute regression matrix with per-dimension beta adjustment (like gsplat CUDA impl)
         v_regr = torch.bmm(v_12, v_22_inv)  # [N, 3, C]
@@ -914,7 +920,7 @@ class GaussianModel:
         v_cond = v_11 - v_change
 
         U, S, _ = torch.linalg.svd(v_cond)
-        scale = torch.sqrt(S)
+        scale = torch.sqrt(torch.clamp(S, min=eps))  # Clamp to avoid sqrt of negative
         rotation = U
 
         # Ensure right-handed coordinate system

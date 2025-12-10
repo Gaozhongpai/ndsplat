@@ -260,7 +260,7 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
 
                     if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                         size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                        min_opacity = 0.01 if "ndgs" in mode or mode == "dgs" or mode == "dgs-color" else 0.005 ## RSNA 0.005, paper 0.01
+                        min_opacity = 0.005 if "3dgs" in mode else 0.01 ## RSNA 0.005, paper 0.01
                         gaussians.densify_and_prune(opt.densify_grad_threshold, min_opacity, scene.cameras_extent, size_threshold, iteration)
                         # Clear CUDA cache after densification to free memory from pruned Gaussians
                         torch.cuda.empty_cache()
