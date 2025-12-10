@@ -119,10 +119,10 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
             with open(fps_path, 'w') as f:
                 f.write(f"{avg_fps:.2f}")
 
-    print("Rendering all frames for saving (tight_snugbox=False)...")
+    print("Rendering all frames for saving (use_tcgs=False for quality)...")
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
-        # Render with tight_snugbox=False for quality
-        renderings = render_wrapper(view, gaussians, pipeline, background, mode, is_test=True, tight_snugbox=False)
+        # Render with use_tcgs=False for quality-matched evaluation (same as training)
+        renderings = render_wrapper(view, gaussians, pipeline, background, mode, is_test=False, tight_snugbox=False)
         rendering = renderings["render"]
 
         # Save rendered images
