@@ -1,0 +1,290 @@
+\documentclass{article}
+
+
+% if you need to pass options to natbib, use, e.g.:
+\PassOptionsToPackage{numbers, compress}{natbib}
+% before loading neurips_2025
+
+
+% ready for submission
+% \usepackage{neurips_2025}
+
+
+% to compile a preprint version, e.g., for submission to arXiv, add add the
+% [preprint] option:
+\usepackage[preprint]{neurips_2025}
+
+
+% to compile a camera-ready version, add the [final] option, e.g.:
+%\usepackage[final]{neurips_2025}
+
+
+% to avoid loading the natbib package, add option nonatbib:
+%\usepackage[nonatbib]{neurips_2025}
+
+
+
+\usepackage[utf8]{inputenc} % allow utf-8 input
+\usepackage[T1]{fontenc}% use 8-bit T1 fonts
+\usepackage{hyperref}% hyperlinks
+\usepackage{url}% simple URL typesetting
+\usepackage{booktabs}% professional-quality tables
+\usepackage{amsfonts}% blackboard math symbols
+\usepackage{nicefrac}% compact symbols for 1/2, etc.
+\usepackage{microtype}% microtypography
+\usepackage{xcolor}% colors
+
+\usepackage{multirow}
+\usepackage{rotating}
+\usepackage{graphicx}
+\usepackage{siunitx}
+\usepackage{makecell}
+\usepackage{bm}
+\usepackage{amsmath}
+\usepackage{gensymb}
+\usepackage{siunitx}
+\usepackage{makecell}
+
+% Add a period to the end of an abbreviation unless there's one
+% already, then \xspace.
+\usepackage{xspace}
+\makeatletter
+\DeclareRobustCommand\onedot{\futurelet\@let@token\@onedot}
+\def\@onedot{\ifx\@let@token.\else.\null\fi\xspace}
+
+\def\eg{\emph{e.g}\onedot} \def\Eg{\emph{E.g}\onedot}
+\def\ie{\emph{i.e}\onedot} \def\Ie{\emph{I.e}\onedot}
+\def\cf{\emph{c.f}\onedot} \def\Cf{\emph{C.f}\onedot}
+\def\etc{\emph{etc}\onedot} \def\vs{\emph{vs}\onedot}
+\def\wrt{w.r.t\onedot} \def\dof{d.o.f\onedot}
+\def\aka{\emph{a.k.a}\onedot}
+\def\etal{\emph{et al}\onedot}
+\makeatother
+
+\newcommand{\beginsupplement}{%
+\setcounter{table}{0}
+\renewcommand{\thetable}{S\arabic{table}}%
+\setcounter{figure}{0}
+\renewcommand{\thefigure}{S\arabic{figure}}%
+}
+
+% Custom commands
+\newcommand{\modelname}{dGS}
+
+\title{\modelname: Direct Parameterization for Efficient Dynamic Gaussian Splatting}
+
+% The \author macro works with any number of authors. There are two commands
+% used to separate the names and addresses of multiple authors: \And and \AND.
+%
+% Using \And between authors leaves it to LaTeX to determine where to break the
+% lines. Using \AND forces a line break at that point. So, if LaTeX puts 3 of 4
+% authors names on the first line, and the last on the second line, try using
+% \AND instead of \And before the third author name.
+
+
+
+\author{
+ Zhongpai Gao\\%\thanks{Corresponding author}
+% \qquad
+% Meng Zheng
+% \qquad
+% Benjamin Planche
+% \\
+ % \textbf{Anwesa Choudhuri
+% \qquad
+% Terrence Chen
+% \qquad
+% Ziyan Wu}\\
+United Imaging Intelligence, Boston, MA
+\\
+\texttt{\{first.last\}@uii-ai.com}
+\\
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Gaussian Splatting has emerged as a state-of-the-art technique for novel view synthesis, with recent extensions like 6DGS and 7DGS enabling the modeling of complex view-dependent effects and dynamic scenes. However, these advanced formulations rely on high-dimensional covariance matrices, which introduce a critical bottleneck during the training phase: a costly and numerically unstable per-Gaussian matrix inversion required in every forward pass. While the results of this inversion can be pre-computed to accelerate inference, the underlying model remains inefficient to train and parameterize. In this paper, we propose dGS, a unified and lightweight parameterization that overcomes these limitations. The `d' in dGS signifies our core principle: a shift from implicit modeling to an explicit (\ie, direct) mapping of displacement and dynamics. Instead of deriving motion from a full covariance matrix, dGS learns an explicit transformation matrix—a 4D velocity matrix for dynamic scenes—that directly translates temporal and angular deviations into spatial displacements. Furthermore, we replace expensive Mahalanobis-based opacity modulation with streamlined decay functions controlled by intuitive, learnable scalar support ranges. Our approach is not an approximation but a functionally equivalent reparameterization of linear dynamics that yields substantial advantages. It achieves significant gains in training efficiency by replacing cubic-time matrix inversions with linear-time matrix-vector products, ensures numerical stability by design, and improves parameter efficiency with a more compact model. dGS provides a practical and powerful framework for efficiently training and rendering both static scenes with complex view-dependence and large-scale dynamic scenes at high frame rates, without sacrificing expressive power.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:introduction}
+Novel view synthesis has undergone a paradigm shift with the introduction of 3D Gaussian Splatting (3DGS), which revolutionized the field by achieving photorealistic quality at real-time rendering speeds. By representing scenes as collections of explicit 3D Gaussians, 3DGS established a new standard for static scene reconstruction. However, real-world scenes are inherently dynamic and complex, exhibiting phenomena that extend far beyond the capabilities of static representations: surfaces that shimmer with specular reflections, objects that move and deform over time, and viewing angles that reveal hidden parallax effects.
+
+Recent work has responded to these challenges with sophisticated extensions that elevate Gaussian representations into higher-dimensional spaces. 6D Gaussian Splatting (6DGS) addresses view-dependent effects by modeling each primitive as a Gaussian in the joint space of position and viewing direction. Building upon this, 7D Gaussian Splatting (7DGS) incorporates temporal dynamics by adding a time dimension, creating a unified framework for both view-dependent effects and motion.
+
+While these higher-dimensional formulations demonstrate remarkable expressive power, they introduce a fundamental computational bottleneck that severely impacts their training. The mathematical framework underlying both 6DGS and 7DGS relies on conditioning high-dimensional Gaussian distributions, which necessitates the inversion of covariance sub-matrices. For 6DGS, this translates to a $3\times3$ matrix inversion for every Gaussian, and for 7DGS, a $4\times4$ inversion. This cubic-complexity operation, performed in every forward pass during optimization, makes training exceptionally costly and slow. Beyond computational costs, these matrix inversions introduce critical numerical instabilities. During optimization, covariance matrices may become ill-conditioned or approach singularity, leading to numerical errors that derail training. This fragility undermines the reliability of these methods. While it is possible to pre-process the model after training to cache the results of these inversions and accelerate inference, this does not address the core issues of training inefficiency and model complexity. The crux of the problem lies in the fundamental design philosophy: they model dynamics implicitly through complex covariance structures, deriving transformations through expensive matrix operations.
+
+In this paper, we introduce \textbf{dGS}, a unified framework that resolves this tension through a fundamental paradigm shift. The `\textbf{d}' in dGS represents our core contribution: a transition from implicit covariance-based modeling to explicit (\ie, \textbf{d}irect) parameterization of \textbf{d}isplacement and \textbf{d}ynamics. Rather than learning complex covariance matrices and deriving motion through costly inversions during training, dGS learns explicit transformation matrices that directly map temporal and angular deviations to spatial displacements. Our approach centers on two key innovations. First, we replace the expensive matrix inversion operations with efficient matrix-vector products by learning transformation matrices directly. For dynamic scenes, this involves learning a 4D velocity matrix that cleanly separates temporal motion from view-dependent effects. Second, we streamline opacity modulation by replacing complex Mahalanobis-based computations with intuitive decay functions controlled by learnable scalar support ranges.
+
+Critically, dGS is not an approximation—it represents a functionally equivalent reparameterization of linear dynamics that maintains the expressive power of existing methods while delivering substantial practical advantages. Our formulation achieves a threefold improvement: training efficiency by eliminating cubic-time operations, numerical stability by design, and parameter efficiency via a more compact and interpretable model structure. By making the training of large-scale dynamic and view-dependent models more tractable and efficient, dGS opens new possibilities for real-time applications, large-scale scene modeling, and interactive experiences.
+
+\section{Related Work}
+\label{sec:related_work}
+
+
+\section{Preliminary}
+
+Our work builds upon the family of Gaussian Splatting methods. To contextualize our contribution, we first detail the progression from static 3D models to the more complex 6D and 7D formulations, highlighting the trade-offs between expressive power and computational cost at each step.
+
+\subsection{3D Gaussian Splatting}
+3D Gaussian Splatting (3DGS) revolutionized novel view synthesis by representing scenes as a collection of anisotropic 3D Gaussians. Each Gaussian is a primitive defined by a set of learnable attributes that describe its geometry and appearance. Its geometry is determined by a mean vector \(\mu \in \mathbb{R}^3\) specifying its center in 3D space, and a covariance matrix \(\Sigma \in \mathbb{R}^{3 \times 3}\) defining its shape, scale, and orientation. To ensure physical plausibility and simplify optimization, \(\Sigma\) is parameterized by a scaling matrix \(S = \operatorname{diag}(s_x, s_y, s_z)\) and a rotation matrix \(R\) (represented as a quaternion), such that \(\Sigma = R S S^\top R^\top\). The appearance of each Gaussian is governed by a scalar opacity \(\alpha \in [0, 1]\) that controls its transparency, and a view-dependent color modeled using Spherical Harmonics (SH). The color \(c\) for a given viewing direction \(d\) is computed as a sum over the SH basis functions \(Y_{\ell m}\):
+\begin{equation}
+c(d) = \sum_{\ell=0}^{N} \sum_{m=-\ell}^{\ell} \beta_{\ell m} Y_{\ell m}(d),
+\end{equation}
+where \(\beta_{\ell m}\) are the learnable SH coefficients. 3DGS achieves state-of-the-art quality and real-time rendering for static scenes. However, its representation is fundamentally static and cannot model geometric changes arising from complex view-dependent effects or temporal dynamics.
+
+\subsection{6D Gaussian Splatting: Modeling View-Dependent Effects}
+To address the limitations of 3DGS in capturing view-dependent phenomena such as parallax and specular reflections, 6D Gaussian Splatting (6DGS) extends the representation into a 6D space. Each primitive is modeled as a 6D Gaussian over the joint space of position (\(X_p \in \mathbb{R}^3\)) and view direction (\(X_d \in \mathbb{R}^3\)). The joint distribution is:
+\begin{align}
+X = \begin{pmatrix} X_p \\ X_d \end{pmatrix} \sim \mathcal{N}\!\left(
+\begin{pmatrix}
+\mu_p \\ \mu_d
+\end{pmatrix},
+\begin{pmatrix}
+\Sigma_p & \Sigma_{pd} \\
+\Sigma_{pd}^\top & \Sigma_d
+\end{pmatrix}
+\right).
+\end{align}
+Here, the cross-covariance matrix \(\Sigma_{pd}\) models the correlation between a point's spatial properties and its viewing direction. To render an image from a direction \(d\), the 6D Gaussian is conditioned on \(X_d = d\). This yields a 3D Gaussian whose properties are dynamically adjusted. The conditional mean and covariance are given by:
+\begin{align}
+\mu_{\text{cond}}^{6D} &= \mu_p + \Sigma_{pd}\,\Sigma_d^{-1}(d-\mu_d), \\
+\Sigma_{\text{cond}}^{6D} &= \Sigma_p - \Sigma_{pd}\,\Sigma_d^{-1}\,\Sigma_{pd}^\top.
+\end{align}
+Additionally, the opacity is modulated based on the Mahalanobis distance:
+\begin{equation}
+\alpha_{\text{cond}} = \alpha \cdot \exp\left(-\frac{1}{2}\,(d-\mu_d)^\top \Sigma_d^{-1}(d-\mu_d)\right).
+\end{equation}
+While expressive, this formulation introduces a significant bottleneck during training: for every Gaussian, it must compute the inverse of the \(3 \times 3\) matrix \(\Sigma_d\) in each forward pass. This $O(3^3)$ operation is costly and susceptible to numerical instability. Although the matrix \(\Sigma_{pd}\Sigma_d^{-1}\) and the conditional covariance can be pre-computed after training to accelerate inference, the training process itself remains fundamentally inefficient.
+
+\subsection{7D Gaussian Splatting: Incorporating Temporal Dynamics}
+To represent dynamic scenes, 7D Gaussian Splatting (7DGS) further extends the joint space to include a temporal dimension (\(X_t \in \mathbb{R}\)). Each scene element is now a 7D Gaussian defined by:
+\begin{align}
+X = \begin{pmatrix} X_p \\ X_t \\ X_d \end{pmatrix} \sim \mathcal{N}\!\left(
+\begin{pmatrix}
+\mu_p \\ \mu_t \\ \mu_d
+\end{pmatrix},
+\begin{pmatrix}
+\Sigma_p & \Sigma_{pt} & \Sigma_{pd} \\
+\Sigma_{pt}^\top & \Sigma_t & \Sigma_{td} \\
+\Sigma_{pd}^\top & \Sigma_{td}^\top & \Sigma_d
+\end{pmatrix}
+\right).
+\end{align}
+To render a frame at time \(t\) from direction \(d\), we partition the covariance matrix as:
+\[
+\Sigma_{(t,d)} = \begin{pmatrix} \Sigma_t & \Sigma_{td} \\ \Sigma_{td}^\top & \Sigma_d \end{pmatrix} \quad \text{and} \quad
+\Sigma_{p,(t,d)} = \begin{bmatrix} \Sigma_{pt} & \Sigma_{pd} \end{bmatrix}.
+\]
+The conditional 3D Gaussian for rendering is then defined by:
+\begin{align}
+\mu_{\text{cond}}^{7D} &= \mu_p + \Sigma_{p,(t,d)} \, \Sigma_{(t,d)}^{-1} \, \begin{pmatrix} t-\mu_t \\ d-\mu_d \end{pmatrix}, \\
+\Sigma_{\text{cond}}^{7D} &= \Sigma_p - \Sigma_{p,(t,d)} \, \Sigma_{(t,d)}^{-1} \, \Sigma_{p,(t,d)}^\top.
+\end{align}
+Opacity is modulated similarly to 6DGS. This formulation exacerbates the issues of 6DGS. The training process now requires inverting the \(4 \times 4\) matrix \(\Sigma_{(t,d)}\), an $O(4^3)$ operation per-Gaussian, making training even more computationally intensive and prone to instability. This escalating complexity motivates our search for a more efficient and stable parameterization.
+
+\section{Our Approach}
+
+
+The full covariance formulations of 6DGS and 7DGS, while expressive, are fundamentally constrained by a design that is inefficient for training: they model dynamic effects \textit{implicitly} through high-dimensional covariance matrices and derive transformations via costly matrix inversions. We propose a new, unified framework that replaces this implicit modeling with a \textit{direct} and \textit{explicit} parameterization of motion and view-dependence. Our approach retains the expressive power for linear dynamics while dramatically improving training efficiency, stability, and parameter efficiency.
+
+\subsection{The Core Principle: Direct Displacement Mapping}
+The central insight of our method is to reframe the problem. In both 6DGS and 7DGS, the conditional mean is computed by applying a linear transformation to a deviation vector:
+\begin{equation}
+\mu_{\text{cond}} = \mu_p + \mathbf{M} \cdot \mathbf{\delta},
+\end{equation}
+where \(\mathbf{\delta}\) is the vector of deviations from the mean (e.g., \(d-\mu_d\)). The critical step in prior work is that the transformation matrix \(\mathbf{M}\) is \textit{derived} from covariance terms (e.g., \(\mathbf{M} = \Sigma_{pd}\Sigma_d^{-1}\)). This derivation necessitates learning a full covariance matrix and performing an expensive, unstable inversion in every training step.
+
+Our approach bypasses this entire process. We posit that the transformation matrix \(\mathbf{M}\) can be learned directly as a set of explicit parameters. This eliminates the need for matrix inversion entirely, decoupling the modeling of displacement from the full covariance structure and leading to a more efficient and stable system.
+
+\subsection{Lightweight 6DGS for Efficient View-Dependence}
+For static scenes, we target the view-dependent effects of 6DGS. Instead of learning a full $6 \times 6$ covariance matrix, we model the relationship between view direction and spatial position directly.
+
+\paragraph{Direct View-Dependent Transformation.} We introduce a learnable \textbf{view-dependent transformation matrix} $\mathbf{V}_d \in \mathbb{R}^{3 \times 3}$. This matrix directly maps deviations in view direction to spatial displacements. The conditional mean calculation becomes a simple, efficient matrix-vector product:
+\begin{equation}
+\mu_{\text{cond}} = \mu_p + \mathbf{V}_d (d - \mu_d).
+\end{equation}
+This formulation is not only faster to train but also more interpretable: the columns of \(\mathbf{V}_d\) directly represent how the Gaussian's position shifts in response to changes along each axis of the viewing direction space.
+
+\paragraph{Simplified Angular Modulation.} We replace the Mahalanobis-based opacity modulation with a streamlined Gaussian decay function controlled by a single learnable scalar, the \textbf{angular support range} \(\sigma_d\):
+\begin{equation}
+f_{\text{dir}} = \exp\left(-\frac{\|d-\mu_d\|_2^2}{2\sigma_d^2}\right).
+\end{equation}
+This parameter intuitively defines the angular "field of view" within which the Gaussian is active, replacing the three to six parameters of \(\Sigma_d\) with just one.
+
+\subsection{Lightweight 7DGS for Efficient Dynamic Scenes}
+We extend this direct parameterization paradigm to the more complex 7D case to efficiently model both temporal dynamics and view-dependence.
+
+\paragraph{Direct Spatiotemporal Velocity.} We introduce an explicit \textbf{4D velocity matrix} $\mathbf{V} \in \mathbb{R}^{3 \times 4}$, which we partition for clarity and interpretability:
+\begin{equation}
+\mathbf{V} = \begin{bmatrix} \mathbf{v}_t & \mathbf{V}_d \end{bmatrix}.
+\end{equation}
+Here, $\mathbf{v}_t \in \mathbb{R}^3$ is a temporal velocity vector and $\mathbf{V}_d \in \mathbb{R}^{3 \times 3}$ is the view-dependent transformation matrix. The conditional mean is then computed via a highly efficient linear transformation that cleanly separates temporal and view-dependent effects:
+\begin{equation}
+\mu_{\text{cond}} = \mu_p + \underbrace{\mathbf{v}_t (t - \mu_t)}_{\text{Linear Temporal Motion}} + \underbrace{\mathbf{V}_d (d - \mu_d)}_{\text{View-Dependent Displacement}}.
+\end{equation}
+This formulation elegantly captures the two primary dynamic phenomena without any matrix inversions. By keeping the conditional covariance static (\(\Sigma_{\text{cond}} = \Sigma_p\)), we simplify the model and focus the dynamic capacity on the mean, which is most critical for representing motion and parallax.
+
+\paragraph{Simplified Spatiotemporal Modulation.} Similar to the 6D case, we replace the complex opacity modulation with two independent and intuitive decay functions controlled by learnable scalar support ranges, \(\sigma_t\) for time and \(\sigma_d\) for view direction:
+\begin{equation}
+f_{\text{temp}} = \exp\left(-\frac{(t-\mu_t)^2}{2\sigma_t^2}\right), \quad f_{\text{dir}} = \exp\left(-\frac{\|d-\mu_d\|_2^2}{2\sigma_d^2}\right).
+\end{equation}
+The final conditional opacity is \(\alpha_{\text{cond}} = \alpha \cdot f_{\text{temp}} \cdot f_{\text{dir}}\).
+
+\subsection{Optimization and Regularization Framework}
+To ensure stable training and promote physically plausible results, we employ a dedicated initialization and regularization strategy for our lightweight parameters.
+
+\paragraph{Initialization Strategy.} We initialize parameters to encourage a gentle start to the optimization process. Temporal velocities are initialized near zero to prevent explosive initial motion, and the view-dependent matrix is initialized near a scaled identity to avoid drastic initial geometric distortions.
+\begin{align*}
+\mathbf{v}_t \sim \mathcal{N}(\mathbf{0}, 10^{-6}\mathbf{I}), \quad \mathbf{V}_d = 0.01\mathbf{I} + \mathcal{N}(\mathbf{0}, 10^{-6}\mathbf{I}), \quad \sigma_t, \sigma_d = 1.0.
+\end{align*}
+\paragraph{Regularization Framework.} We introduce a composite regularization loss \(\mathcal{L}_{\text{reg}}\) to prevent overfitting and guide the model towards meaningful solutions.
+\begin{equation}
+\mathcal{L}_{\text{reg}} = \lambda_{\text{vel}} \left(\|\mathbf{v}_t\|_2^2 + \|\mathbf{V}_d\|_F^2\right) + \lambda_{\sigma} \left( \frac{1}{\sigma_t} + \frac{1}{\sigma_d} \right).
+\end{equation}
+The \(\lambda_{\text{vel}}\) term penalizes excessive velocities and transformations, encouraging smoother motion fields. The \(\lambda_{\sigma}\) term discourages the support ranges from collapsing to zero. The terms for \(\mathbf{v}_t\) and \(\sigma_t\) are omitted for the 6DGS case. We find \(\lambda_{\text{vel}}=0.01\) and \(\lambda_{\sigma}=0.001\) work well in practice.
+
+\subsection{Analysis: A Paradigm Shift in Efficiency and Stability}
+Our unified lightweight framework provides a practical and powerful alternative to full covariance modeling, offering substantial advantages summarized in Table~\ref{tab:comparison_unified}.
+
+\begin{table}[t!]
+\centering
+\caption{Comparison of Full vs. Lightweight Formulations for 6DGS and 7DGS.}
+\label{tab:comparison_unified}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{@{}llcc@{}}
+\toprule
+\textbf{Model} & \textbf{Component} & \textbf{Full Covariance Formulation} & \textbf{Our Lightweight Approach (dGS)} \\
+\midrule
+\multirow{3}{*}{\textbf{6DGS (Static)}}
+& Parameters (View-dep.) & 21 (for $6 \times 6$ Cholesky) & 10 (9 for $\mathbf{V}_d$, 1 for $\sigma_d$) \\
+& Training Computation & $O(3^3)$ matrix inversion & $O(3 \times 3)$ matrix-vector product \\
+& Numerical Stability & Prone to instability during training & Inherently stable \\
+\midrule
+\multirow{3}{*}{\textbf{7DGS (Dynamic)}}
+& Parameters (Dynamic) & 28 (for $7 \times 7$ Cholesky) & 14 (12 for $\mathbf{V}$, 2 for $\sigma_t, \sigma_d$) \\
+& Training Computation & $O(4^3)$ matrix inversion & $O(3 \times 4)$ matrix-vector product \\
+& Numerical Stability & Prone to instability during training & Inherently stable \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+The benefits are clear across three critical axes:
+\begin{itemize}
+\item \textbf{Training Efficiency:} We replace costly cubic-time matrix inversions with highly efficient linear-time matrix-vector products within the training loop. This fundamental shift drastically reduces the computational overhead per Gaussian, enabling faster and more efficient optimization.
+\item \textbf{Numerical Stability:} By completely eliminating matrix inversion, our method is inherently robust and avoids the numerical errors and training failures that plague full covariance models when their matrices become ill-conditioned.
+\item \textbf{Parameter Efficiency:} Our direct parameterization requires significantly fewer parameters to model dynamics. This not only leads to a more compact model with a smaller memory footprint but also reduces the risk of overfitting and can accelerate training convergence.
+\end{itemize}
+
+% Despite these trade-offs, the lightweight formulation with proper initialization and regularization provides an effective balance between computational efficiency and motion modeling capability, making it particularly suitable for real-time applications where rendering performance is critical.
+
+% References section
+\bibliographystyle{plainnat} % Using plainnat style for compatibility with numbers option if used
+\bibliography{references} % Assumes references are in references.bib
+
+
+\end{document}
