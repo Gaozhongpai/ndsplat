@@ -76,7 +76,7 @@ def render_wrapper(viewpoint_cam, gaussians, pipe, bg, mode, scaling_modifier=1.
 
 def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
     first_iter = 0
-    tb_writer = prepare_output_and_logger(dataset)
+    tb_writer, log_file = prepare_output_and_logger(dataset)
 
     # Track total training time
     training_start_time = time.time()
@@ -241,7 +241,7 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
                 progress_bar.close()
 
             # Log and save
-            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render_wrapper, (pipe, background, mode))
+            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render_wrapper, (pipe, background, mode), log_file)
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 print("\nNumber Gaussian: {}".format(gaussians.get_xyz.shape[0]))
@@ -433,22 +433,39 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
         f.write(f"{total_training_time:.2f}")
     print(f"\nTotal training time: {total_training_time:.2f} seconds ({total_training_time/60:.2f} minutes)")
 
+    # Write final info to log file and close it
+    if log_file:
+        log_file.write("=" * 60 + "\n")
+        log_file.write(f"Training completed at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        log_file.write(f"Total training time: {total_training_time:.2f} seconds ({total_training_time/60:.2f} minutes)\n")
+        log_file.write(f"Final number of Gaussians: {gaussians.get_xyz.shape[0]}\n")
+        log_file.close()
+
     # Return viewer to keep it alive after training if needed
     return viewer
 
-def prepare_output_and_logger(args):    
+def prepare_output_and_logger(args):
     if not args.model_path:
         if os.getenv('OAR_JOB_ID'):
             unique_str=os.getenv('OAR_JOB_ID')
         else:
             unique_str = str(uuid.uuid4())
         args.model_path = os.path.join("./output/", unique_str[0:10])
-        
+
     # Set up output folder
     print("Output folder: {}".format(args.model_path))
     os.makedirs(args.model_path, exist_ok = True)
     with open(os.path.join(args.model_path, "cfg_args"), 'w') as cfg_log_f:
         cfg_log_f.write(str(Namespace(**vars(args))))
+
+    # Create training log file
+    log_path = os.path.join(args.model_path, "training.log")
+    log_file = open(log_path, 'w')
+    log_file.write(f"Training started at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+    log_file.write(f"Output folder: {args.model_path}\n")
+    log_file.write(f"Mode: {args.mode}\n")
+    log_file.write("=" * 60 + "\n")
+    log_file.flush()
 
     # Create Tensorboard writer
     tb_writer = None
@@ -456,9 +473,9 @@ def prepare_output_and_logger(args):
         tb_writer = SummaryWriter(args.model_path)
     else:
         print("Tensorboard not available: not logging progress")
-    return tb_writer
+    return tb_writer, log_file
 
-def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs):
+def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, log_file=None):
     if tb_writer:
         tb_writer.add_scalar('train_loss_patches/l1_loss', Ll1.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/total_loss', loss.item(), iteration)
@@ -467,7 +484,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
     # Report test and samples of training set
     if iteration in testing_iterations:
         torch.cuda.empty_cache()
-        validation_configs = ({'name': 'test', 'cameras' : scene.getTestCameras()}, 
+        validation_configs = ({'name': 'test', 'cameras' : scene.getTestCameras()},
                               {'name': 'train', 'cameras' : [scene.getTrainCameras()[idx % len(scene.getTrainCameras())] for idx in range(5, 30, 5)]})
 
         for config in validation_configs:
@@ -484,15 +501,26 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                     l1_test += l1_loss(image, gt_image).mean().double()
                     psnr_test += psnr(image, gt_image).mean().double()
                 psnr_test /= len(config['cameras'])
-                l1_test /= len(config['cameras'])          
-                print("\n[ITER {}] Evaluating {}: L1 {} PSNR {}".format(iteration, config['name'], l1_test, psnr_test))
+                l1_test /= len(config['cameras'])
+                log_msg = f"[ITER {iteration}] Evaluating {config['name']}: L1 {l1_test} PSNR {psnr_test}"
+                print("\n" + log_msg)
+                # Write to log file
+                if log_file:
+                    log_file.write(log_msg + "\n")
+                    log_file.flush()
                 if tb_writer:
                     tb_writer.add_scalar(config['name'] + '/loss_viewpoint - l1_loss', l1_test, iteration)
                     tb_writer.add_scalar(config['name'] + '/loss_viewpoint - psnr', psnr_test, iteration)
 
+        # Log number of Gaussians
+        num_gaussians = scene.gaussians.get_xyz.shape[0]
+        if log_file:
+            log_file.write(f"[ITER {iteration}] Number of Gaussians: {num_gaussians}\n")
+            log_file.flush()
+
         if tb_writer:
             tb_writer.add_histogram("scene/opacity_histogram", scene.gaussians.get_opacity, iteration)
-            tb_writer.add_scalar('total_points', scene.gaussians.get_xyz.shape[0], iteration)
+            tb_writer.add_scalar('total_points', num_gaussians, iteration)
         torch.cuda.empty_cache()
 
 if __name__ == "__main__":

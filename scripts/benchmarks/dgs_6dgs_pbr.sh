@@ -7,9 +7,8 @@
 # |--------------|------------------------------|-----|-------|-----|
 # | no_view_dep  | output/dgs_no_view_dep/...   |  -  |   -   |  -  |
 # | pos_only     | output/dgs_pos_only/...      |  +  |   -   |  -  |
-# | pos_scale    | output/dgs_pos_scale/...     |  +  |   +   |  -  |
-# | full         | output/dgs_full/...          |  +  |   +   |  +  |
-# | scale_rot    | output/dgs_scale_rot/...     |  -  |   +   |  +  |
+# | pos_rot      | output/dgs_pos_rot/...       |  +  |   -   |  +  |
+# | rot_only     | output/dgs_rot_only/...      |  -  |   -   |  +  |
 
 shopt -s dotglob
 
@@ -20,9 +19,8 @@ mode="dgs"
 configs=(
     "no_view_dep:False:False:False"
     "pos_only:True:False:False"
-    "pos_scale:True:True:False"
-    "full:True:True:True"
-    "scale_rot:False:True:True"
+    "pos_rot:True:False:True"
+    "rot_only:False:False:True"
 )
 
 for config in "${configs[@]}"; do
@@ -47,6 +45,13 @@ for config in "${configs[@]}"; do
             fi
 
             output_dir="output/${mode}_${config_name}/tandt_pbr/${scene_name}"
+
+            # Skip if results already exist
+            if [ -f "$output_dir/results.json" ]; then
+                echo "Skipping ${scene_name} with config ${config_name} (results.json exists)"
+                continue
+            fi
+
             echo "Processing ${scene_name} with config ${config_name}..."
 
             # Train (training time is saved internally by train.py)
