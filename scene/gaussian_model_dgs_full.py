@@ -155,7 +155,7 @@ class GaussianModel:
         self.beta_activation = lambda x: 4.0 * torch.exp(x)
 
     def __init__(self, sh_degree: int, input_dim: int = 6, use_beta: bool = False,
-                 use_view_dependent_pos: bool = True, use_view_dependent_scale: bool = True,
+                 use_view_dependent_pos: bool = True, use_view_dependent_scale: bool = False,
                  use_view_dependent_rotation: bool = True):
         """
         Initialize Full DGS with view-dependent position, scale, rotation, and opacity.
