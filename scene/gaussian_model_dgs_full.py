@@ -8,23 +8,19 @@
 #
 # For inquiries contact  george.drettakis@inria.fr
 #
-# Full DGS with view-dependent position, scale, rotation, and opacity
+# Full DGS with view-dependent position, time-dependent rotation, and opacity
 #
 # Key features:
-# - Position shift: x_cond = x + v_12 @ V_22^{-1} @ (v - μ_v_pos) (additive)
-# - Scale factor: s_cond = s_base * scale_factor(v, μ_v_scale, L_scale) (multiplicative)
-# - Rotation delta: q_cond = q_base ⊗ q_delta(v, μ_v_rot, L_rot) (compositional)
+# - Position shift: x_cond = x + v_12 @ V_22^{-1} @ (v - μ_v) (additive)
+# - Rotation delta: q_cond = q_base ⊗ slerp(I, q_delta, 1 - attention_rot) (only for time dim when input_dim=7)
 # - Opacity scale: o_cond = o_base * attention (multiplicative)
 #
-# All properties SHARE the same canonical view direction (_view_mean) but have
-# SEPARATE precision parameters to control sensitivity:
-# - Position: _view_mean, _v_12, _L_22_inv_diag (position shift + opacity attention)
-# - Scale: _view_mean, _L_22_inv_diag_scale (scale-specific attention falloff)
-# - Rotation: _view_mean, _L_22_inv_diag_rot (rotation-specific attention falloff)
+# Parameterization uses full Cholesky L_22_inv (like dgs.py) for better opacity:
+# - Position + Opacity: _view_mean, _v_12, _L_22_inv (full Cholesky of V_22^{-1})
+# - Rotation (time-only): _L_22_inv_diag_rot for time attention when input_dim=7
 #
 # Mathematical justification:
 # - Position lives in R³ (unbounded) → additive shift natural
-# - Scale lives in R⁺ (positive only) → multiplicative keeps it positive
 # - Rotation lives on SO(3) manifold → quaternion composition preserves unit norm
 # - Opacity lives in [0,1] (bounded) → multiplicative keeps it bounded
 #
@@ -116,22 +112,21 @@ def quaternion_slerp(q0, q1, t):
 
 class GaussianModel:
     """
-    Full DGS with view-dependent position, scale, rotation, and opacity.
+    Full DGS with view-dependent position, time-dependent rotation, and opacity.
 
-    Extends dgs_diag with additional view-dependent parameters:
-    - Scale deviation: multiplicative factor for anisotropic view-dependent scaling
-    - Rotation delta: quaternion delta for view-dependent rotation
+    Uses full Cholesky parameterization (like dgs.py) for better opacity performance:
+    - _L_22_inv: [N, C*(C+1)/2] Cholesky of V_22^{-1} (precision matrix)
 
     Mathematical formulation:
-    - attention = exp(-||v - μ_v||²_Σ) ∈ [0, 1]
+    - V_22^{-1} = L_22_inv @ L_22_inv^T (precision from Cholesky, no matrix inversion!)
     - x_cond = x + v_12 @ V_22^{-1} @ (v - μ_v)  (position shift)
-    - s_cond = s_base * (1 + scale_dev * (1 - attention))  (scale factor)
-    - q_cond = q_base ⊗ slerp(I, q_delta, 1 - attention)  (rotation composition)
-    - o_cond = o_base * attention  (opacity scale)
+    - attention = exp(-λ * (v - μ_v)^T @ V_22^{-1} @ (v - μ_v))  (opacity scale)
+    - q_cond = q_base ⊗ slerp(I, q_delta, 1 - attention_time)  (rotation, only for time when input_dim=7)
 
     Physical interpretation:
     - attention ≈ 1 (canonical view): use base params unchanged
-    - attention ≈ 0 (oblique view): apply full deviation/delta
+    - attention ≈ 0 (oblique view): apply full position shift and reduce opacity
+    - Rotation only varies with time (not view direction) when input_dim=7
     """
 
     def setup_functions(self):
@@ -155,26 +150,24 @@ class GaussianModel:
         self.beta_activation = lambda x: 4.0 * torch.exp(x)
 
     def __init__(self, sh_degree: int, input_dim: int = 6, use_beta: bool = False,
-                 use_view_dependent_pos: bool = True, use_view_dependent_scale: bool = False,
-                 use_view_dependent_rotation: bool = True):
+                 use_view_dependent_pos: bool = True, use_time_dependent_rotation: bool = True):
         """
-        Initialize Full DGS with view-dependent position, scale, rotation, and opacity.
+        Initialize Full DGS with view-dependent position, time-dependent rotation, and opacity.
 
         Args:
             sh_degree: Maximum SH degree for color
             input_dim: 6 for position+view, 7 for position+view+time
             use_beta: Whether to use spatial beta parameter (default: False)
             use_view_dependent_pos: Enable view-dependent position shift (default: True)
-            use_view_dependent_scale: Enable view-dependent scale (default: True)
-            use_view_dependent_rotation: Enable view-dependent rotation (default: True)
+            use_time_dependent_rotation: Enable time-dependent rotation (only effective when input_dim=7)
         """
         self.active_sh_degree = 0
         self.max_sh_degree = sh_degree
         self.input_dim = input_dim
         self.use_beta = use_beta
         self.use_view_dependent_pos = use_view_dependent_pos
-        self.use_view_dependent_scale = use_view_dependent_scale
-        self.use_view_dependent_rotation = use_view_dependent_rotation
+        # Rotation conditioning only makes sense with time dimension
+        self.use_time_dependent_rotation = use_time_dependent_rotation and (input_dim == 7)
         self.cond_dim = input_dim - 3  # C = 3 for view-only, 4 for view+time
 
         # Standard 3DGS parameters
@@ -186,7 +179,7 @@ class GaussianModel:
         self._opacity = torch.empty(0)
         self._label = torch.empty(0)
 
-        # === Position conditioning (from dgs_diag) ===
+        # === Position + Opacity conditioning (full Cholesky like dgs.py) ===
         # View direction mean (learned "canonical" view direction per Gaussian)
         self._view_mean = torch.empty(0)  # [N, C] where C=3 or 4 (with time)
 
@@ -194,21 +187,15 @@ class GaussianModel:
         self._v_12_direction = torch.empty(0)  # [N, 3*C] - will be normalized
         self._v_12_scale = torch.empty(0)  # [N, 1] - sigmoid gives [0,1]
 
-        # L_22_inv_diag: [N, C] diagonal precision (controls attention falloff)
-        self._L_22_inv_diag = torch.empty(0)
+        # L_22_inv: [N, C*(C+1)/2] Cholesky of V_22^{-1} (precision matrix)
+        # Uses full Cholesky (not diagonal) for better opacity performance
+        self._L_22_inv = torch.empty(0)
 
-        # === Scale conditioning (NEW) ===
-        # SHARES _view_mean but has separate precision for different sensitivity
-        # Scale attention: exp(-||v - μ_v||²_{Σ_scale})
-        # Scale factor: s_cond = s_base * (1 + scale_dev * (1 - attention_scale))
-        self._L_22_inv_diag_scale = torch.empty(0)  # [N, C] precision for scale attention
-        self._scale_deviation = torch.empty(0)      # [N, 3] per-axis deviation magnitude
-
-        # === Rotation conditioning (NEW) ===
-        # SHARES _view_mean but has separate precision for different sensitivity
-        # Rotation attention: exp(-||v - μ_v||²_{Σ_rot})
+        # === Time-dependent Rotation conditioning (only when input_dim=7) ===
+        # Only uses the time dimension (index 3) for rotation attention
+        # Rotation attention: exp(-||t - μ_t||² * precision_rot)
         # Rotation: q_cond = q_base ⊗ slerp(I, q_delta, 1 - attention_rot)
-        self._L_22_inv_diag_rot = torch.empty(0)    # [N, C] precision for rotation attention
+        self._L_22_inv_diag_rot = torch.empty(0)    # [N, 1] precision for time-based rotation attention
         self._rotation_delta = torch.empty(0)       # [N, 4] quaternion delta
 
         # Spatial beta: [N, 1] controls spatial uncertainty/bandwidth (optional)
@@ -241,11 +228,9 @@ class GaussianModel:
             self._view_mean,
             self._v_12_direction if self.use_view_dependent_pos else None,
             self._v_12_scale if self.use_view_dependent_pos else None,
-            self._L_22_inv_diag,
-            self._L_22_inv_diag_scale if self.use_view_dependent_scale else None,
-            self._scale_deviation if self.use_view_dependent_scale else None,
-            self._L_22_inv_diag_rot if self.use_view_dependent_rotation else None,
-            self._rotation_delta if self.use_view_dependent_rotation else None,
+            self._L_22_inv,
+            self._L_22_inv_diag_rot if self.use_time_dependent_rotation else None,
+            self._rotation_delta if self.use_time_dependent_rotation else None,
             self._beta if self.use_beta else None,
             self._opacity,
             self.max_radii2D,
@@ -266,9 +251,7 @@ class GaussianModel:
          self._view_mean,
          _v_12_direction,
          _v_12_scale,
-         self._L_22_inv_diag,
-         _L_22_inv_diag_scale,
-         _scale_deviation,
+         self._L_22_inv,
          _L_22_inv_diag_rot,
          _rotation_delta,
          _beta,
@@ -283,12 +266,7 @@ class GaussianModel:
                 self._v_12_direction = _v_12_direction
             if _v_12_scale is not None:
                 self._v_12_scale = _v_12_scale
-        if self.use_view_dependent_scale:
-            if _L_22_inv_diag_scale is not None:
-                self._L_22_inv_diag_scale = _L_22_inv_diag_scale
-            if _scale_deviation is not None:
-                self._scale_deviation = _scale_deviation
-        if self.use_view_dependent_rotation:
+        if self.use_time_dependent_rotation:
             if _L_22_inv_diag_rot is not None:
                 self._L_22_inv_diag_rot = _L_22_inv_diag_rot
             if _rotation_delta is not None:
@@ -358,48 +336,37 @@ class GaussianModel:
         return v_12_scaled.view(-1, 3 * C)
 
     @property
-    def get_scale_deviation(self):
-        """
-        Get scale deviation factor.
-        Using tanh activation to bound in [-1, 1], then allow slight expansion.
-        """
-        if not self.use_view_dependent_scale:
-            return None
-        # tanh bounds to [-1, 1], scale by 0.5 for gentler effect
-        return torch.tanh(self._scale_deviation) * 0.5
-
-    @property
     def get_rotation_delta(self):
         """
         Get normalized rotation delta quaternion.
         """
-        if not self.use_view_dependent_rotation:
+        if not self.use_time_dependent_rotation:
             return None
         return F.normalize(self._rotation_delta, dim=1)
 
-    def compute_attention(self, query, view_mean, L_22_inv_diag):
+    def compute_time_attention(self, query_time, mean_time, L_22_inv_diag_rot):
         """
-        Compute view-dependent attention weight.
+        Compute time-dependent attention weight for rotation.
 
-        attention = exp(-sum_i (v_i - μ_v_i)^2 * exp(d_i)^2)
+        attention = exp(-(t - μ_t)^2 * exp(d)^2)
 
         Args:
-            query: [N, C] current view direction
-            view_mean: [N, C] canonical view direction
-            L_22_inv_diag: [N, C] diagonal precision parameters
+            query_time: [N, 1] current timestamp
+            mean_time: [N, 1] canonical timestamp
+            L_22_inv_diag_rot: [N, 1] precision parameter for time
 
         Returns:
             attention: [N, 1] attention weight in [0, 1]
         """
         # Compute residual
-        x = query - view_mean  # [N, C]
+        x = query_time - mean_time  # [N, 1]
 
-        # Compute precision diagonal: exp(d)^2
-        L_diag = torch.exp(L_22_inv_diag)  # [N, C]
+        # Compute precision: exp(d)^2
+        L_diag = torch.exp(L_22_inv_diag_rot)  # [N, 1]
 
         # Compute scaled residual and squared norm
-        scaled_x = x * L_diag  # [N, C]
-        query_influence = (scaled_x * scaled_x).sum(dim=-1, keepdim=True)  # [N, 1]
+        scaled_x = x * L_diag  # [N, 1]
+        query_influence = scaled_x * scaled_x  # [N, 1]
 
         # Attention weight
         attention = torch.exp(-query_influence)  # [N, 1]
@@ -412,53 +379,43 @@ class GaussianModel:
         if self.active_sh_degree < self.max_sh_degree:
             self.active_sh_degree += 1
 
-    def slice_gaussian_full_method(self, query):
+    def slice_gaussian_full_method(self, query, lambda_opc=0.35):
         """
-        Perform full conditional Gaussian slicing for position, scale, rotation, and opacity.
+        Perform conditional Gaussian slicing for position, rotation, and opacity.
 
-        Uses the CUDA-accelerated slice_gaussian_full kernel from gsplat for optimal performance.
-
-        All properties SHARE the same canonical view direction (_view_mean) but have
-        SEPARATE precision parameters (_L_22_inv_diag*) for different sensitivity:
-        - Position + Opacity: _view_mean, _v_12, _L_22_inv_diag
-        - Scale: _view_mean, _L_22_inv_diag_scale
-        - Rotation: _view_mean, _L_22_inv_diag_rot
+        Uses the CUDA-accelerated slice_gaussian_full function that handles:
+        - Position + Opacity: full Cholesky L_22_inv parameterization
+        - Rotation: time-only conditioning when input_dim=7
 
         Given query view direction (+ optional time), compute:
         - Conditional position: x_cond = x + v_12 @ V_22^{-1} @ (v - μ_v)
-        - Conditional scale: s_cond = s_base * (1 + scale_dev * (1 - attention_scale))
-        - Conditional rotation: q_cond = q_base ⊗ slerp(I, q_delta, 1 - attention_rot)
-        - Opacity scale: attention = exp(-||v - μ_v||²_Σ)
+        - Opacity scale: attention = exp(-λ * (v - μ_v)^T @ V_22^{-1} @ (v - μ_v))
+        - Conditional rotation: q_cond = q_base ⊗ slerp(I, q_delta, 1 - attention_time)
+          (only for time dimension when input_dim=7)
 
         Args:
             query: Query direction [N, C] where C=3 (view) or 4 (view+time)
+            lambda_opc: Opacity scaling factor (default 0.35)
 
         Returns:
             x_cond: Conditional 3D position [N, 3]
-            scale_cond: Conditional scale [N, 3]
             rotation_cond: Conditional rotation quaternion [N, 4]
             opacity_scale: View-dependent opacity scaling [N, 1]
         """
-        # Use CUDA-accelerated fused kernel
-        x_cond, scale_cond, rotation_cond, attention_pos = slice_gaussian_full(
-            # Position inputs
-            self._xyz,                  # [N, 3] - base position
-            self.get_view_mean,         # [N, C] - shared view mean
-            query,                      # [N, C] - query view direction
-            # Position conditioning (optional)
-            self.get_v_12 if self.use_view_dependent_pos else None,  # [N, 3*C] or None
-            self._L_22_inv_diag,        # [N, C] - diagonal precision for pos+opacity
-            # Scale conditioning
-            self.get_scaling,           # [N, 3] - base scale (after activation)
-            self.get_scale_deviation if self.use_view_dependent_scale else None,  # [N, 3] or None
-            self._L_22_inv_diag_scale if self.use_view_dependent_scale else None, # [N, C] or None
-            # Rotation conditioning
-            self.get_rotation,          # [N, 4] - base rotation (normalized)
-            self.get_rotation_delta if self.use_view_dependent_rotation else None,  # [N, 4] or None
-            self._L_22_inv_diag_rot if self.use_view_dependent_rotation else None,  # [N, C] or None
+        # Use slice_gaussian_full CUDA kernel
+        x_cond, rotation_cond, opacity_scale = slice_gaussian_full(
+            xyz=self._xyz,                   # [N, 3]
+            view_mean=self.get_view_mean,    # [N, C]
+            query=query,                     # [N, C]
+            v_12=self.get_v_12 if self.use_view_dependent_pos else None,  # [N, 3*C] or None
+            L_22_inv=self._L_22_inv,         # [N, C*(C+1)/2] full Cholesky
+            rotation=self.get_rotation,      # [N, 4]
+            rotation_delta=self.get_rotation_delta if self.use_time_dependent_rotation else None,  # [N, 4] or None
+            L_22_inv_diag_rot=self._L_22_inv_diag_rot if self.use_time_dependent_rotation else None,  # [N, 1] or None
+            lambda_opc=lambda_opc,
         )
 
-        return x_cond, scale_cond, rotation_cond, attention_pos
+        return x_cond, rotation_cond, opacity_scale
 
     def create_from_pcd(self, pcd: BasicPointCloud, spatial_lr_scale: float):
         """
@@ -499,28 +456,30 @@ class GaussianModel:
             mean_time = torch.empty(num_gaussians, 1, device=device).uniform_(0.0, 1.0)
             view_mean = torch.cat([view_mean, mean_time], dim=-1)
 
-        # Position shift parameters (from dgs_diag)
+        # Position shift parameters
         if self.use_view_dependent_pos:
             v_12_direction = torch.normal(0, 0.01, size=(num_gaussians, 3 * C), device=device)
             v_12_scale = torch.zeros((num_gaussians, 1), device=device)
         else:
             v_12_direction = torch.empty(0, device=device)
             v_12_scale = torch.empty(0, device=device)
-        L_22_inv_diag = torch.full((num_gaussians, C), 0.347, device=device)
 
-        # Scale conditioning: separate precision + deviation magnitude
-        # Initialize _L_22_inv_diag_scale same as position (moderate falloff)
-        if self.use_view_dependent_scale:
-            L_22_inv_diag_scale = torch.full((num_gaussians, C), 0.347, device=device)
-            scale_deviation = torch.zeros((num_gaussians, 3), device=device)
-        else:
-            L_22_inv_diag_scale = torch.empty(0, device=device)
-            scale_deviation = torch.empty(0, device=device)
+        # L_22_inv: [N, C*(C+1)/2] Cholesky of V_22^{-1} (precision)
+        # Diagonal uses exp() activation, so initialize with log(2.0) ≈ 0.693
+        # This gives diagonal=2.0 after exp, so V_22^{-1} has diagonal ~4.0
+        # Storage format: [l_00, l_10, l_11, l_20, l_21, l_22, ...] (row-major lower triangular)
+        n_L_22_inv = C * (C + 1) // 2
+        L_22_inv = torch.zeros(num_gaussians, n_L_22_inv, device=device)
+        # Diagonal positions: 0 (i=0), 2 (i=1), 5 (i=2), 9 (i=3)
+        for i in range(C):
+            diag_idx = i * (i + 1) // 2 + i
+            L_22_inv[:, diag_idx] = math.log(2.0)
 
-        # Rotation conditioning: separate precision + quaternion delta
-        # Initialize _L_22_inv_diag_rot same as position (moderate falloff)
-        if self.use_view_dependent_rotation:
-            L_22_inv_diag_rot = torch.full((num_gaussians, C), 0.347, device=device)
+        # Time-dependent rotation conditioning (only when input_dim=7)
+        # Uses only time dimension (index 3) for rotation attention
+        if self.use_time_dependent_rotation:
+            # Only 1 dimension for time-based precision
+            L_22_inv_diag_rot = torch.full((num_gaussians, 1), 0.347, device=device)
             rotation_delta = torch.zeros((num_gaussians, 4), device=device)
             rotation_delta[:, 0] = 1.0  # w = 1, x = y = z = 0
             # Add small noise to break symmetry
@@ -545,16 +504,13 @@ class GaussianModel:
         self._scaling = nn.Parameter(scales.requires_grad_(True))
         self._rotation = nn.Parameter(rots.requires_grad_(True))
         self._view_mean = nn.Parameter(view_mean.requires_grad_(True))
-        self._L_22_inv_diag = nn.Parameter(L_22_inv_diag.requires_grad_(True))
+        self._L_22_inv = nn.Parameter(L_22_inv.requires_grad_(True))
         self._opacity = nn.Parameter(opacities.requires_grad_(True))
 
         if self.use_view_dependent_pos:
             self._v_12_direction = nn.Parameter(v_12_direction.requires_grad_(True))
             self._v_12_scale = nn.Parameter(v_12_scale.requires_grad_(True))
-        if self.use_view_dependent_scale:
-            self._L_22_inv_diag_scale = nn.Parameter(L_22_inv_diag_scale.requires_grad_(True))
-            self._scale_deviation = nn.Parameter(scale_deviation.requires_grad_(True))
-        if self.use_view_dependent_rotation:
+        if self.use_time_dependent_rotation:
             self._L_22_inv_diag_rot = nn.Parameter(L_22_inv_diag_rot.requires_grad_(True))
             self._rotation_delta = nn.Parameter(rotation_delta.requires_grad_(True))
         if self.use_beta:
@@ -575,7 +531,7 @@ class GaussianModel:
             {'params': [self._scaling], 'lr': training_args.scaling_lr, "name": "scaling"},
             {'params': [self._rotation], 'lr': training_args.rotation_lr, "name": "rotation"},
             {'params': [self._view_mean], 'lr': training_args.feature_lr, "name": "view_mean"},
-            {'params': [self._L_22_inv_diag], 'lr': training_args.rotation_lr, "name": "L_22_inv_diag"},
+            {'params': [self._L_22_inv], 'lr': training_args.rotation_lr, "name": "L_22_inv"},
         ]
 
         # Add view-dependent position parameters
@@ -583,13 +539,8 @@ class GaussianModel:
             l.append({'params': [self._v_12_direction], 'lr': training_args.feature_lr, "name": "v_12_direction"})
             l.append({'params': [self._v_12_scale], 'lr': training_args.feature_lr, "name": "v_12_scale"})
 
-        # Add view-dependent scale parameters (precision + deviation)
-        if self.use_view_dependent_scale:
-            l.append({'params': [self._L_22_inv_diag_scale], 'lr': training_args.rotation_lr, "name": "L_22_inv_diag_scale"})
-            l.append({'params': [self._scale_deviation], 'lr': training_args.scaling_lr, "name": "scale_deviation"})
-
-        # Add view-dependent rotation parameters (precision + delta)
-        if self.use_view_dependent_rotation:
+        # Add time-dependent rotation parameters (precision + delta)
+        if self.use_time_dependent_rotation:
             l.append({'params': [self._L_22_inv_diag_rot], 'lr': training_args.rotation_lr, "name": "L_22_inv_diag_rot"})
             l.append({'params': [self._rotation_delta], 'lr': training_args.rotation_lr, "name": "rotation_delta"})
 
@@ -626,19 +577,14 @@ class GaussianModel:
             l.append('rot_{}'.format(i))
         for i in range(self._view_mean.shape[1]):
             l.append('view_mean_{}'.format(i))
-        for i in range(self._L_22_inv_diag.shape[1]):
-            l.append('L_22_inv_diag_{}'.format(i))
+        for i in range(self._L_22_inv.shape[1]):
+            l.append('L_22_inv_{}'.format(i))
         if self.use_view_dependent_pos:
             for i in range(self._v_12_direction.shape[1]):
                 l.append('v_12_direction_{}'.format(i))
             for i in range(self._v_12_scale.shape[1]):
                 l.append('v_12_scale_{}'.format(i))
-        if self.use_view_dependent_scale:
-            for i in range(self._L_22_inv_diag_scale.shape[1]):
-                l.append('L_22_inv_diag_scale_{}'.format(i))
-            for i in range(self._scale_deviation.shape[1]):
-                l.append('scale_deviation_{}'.format(i))
-        if self.use_view_dependent_rotation:
+        if self.use_time_dependent_rotation:
             for i in range(self._L_22_inv_diag_rot.shape[1]):
                 l.append('L_22_inv_diag_rot_{}'.format(i))
             for i in range(self._rotation_delta.shape[1]):
@@ -658,25 +604,20 @@ class GaussianModel:
         scale = self._scaling.detach().cpu().numpy()
         rotation = self._rotation.detach().cpu().numpy()
         view_mean = self._view_mean.detach().cpu().numpy()
-        L_22_inv_diag = self._L_22_inv_diag.detach().cpu().numpy()
+        L_22_inv = self._L_22_inv.detach().cpu().numpy()
 
         dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
 
         elements = np.empty(xyz.shape[0], dtype=dtype_full)
         attrs_list = [xyz, f_dc, f_rest, opacities, scale, rotation,
-                      view_mean, L_22_inv_diag]
+                      view_mean, L_22_inv]
 
         if self.use_view_dependent_pos:
             v_12_direction = self._v_12_direction.detach().cpu().numpy()
             v_12_scale = self._v_12_scale.detach().cpu().numpy()
             attrs_list.append(v_12_direction)
             attrs_list.append(v_12_scale)
-        if self.use_view_dependent_scale:
-            L_22_inv_diag_scale = self._L_22_inv_diag_scale.detach().cpu().numpy()
-            scale_deviation = self._scale_deviation.detach().cpu().numpy()
-            attrs_list.append(L_22_inv_diag_scale)
-            attrs_list.append(scale_deviation)
-        if self.use_view_dependent_rotation:
+        if self.use_time_dependent_rotation:
             L_22_inv_diag_rot = self._L_22_inv_diag_rot.detach().cpu().numpy()
             rotation_delta = self._rotation_delta.detach().cpu().numpy()
             attrs_list.append(L_22_inv_diag_rot)
@@ -750,35 +691,16 @@ class GaussianModel:
             for idx, attr_name in enumerate(v_12_scale_names):
                 v_12_scale[:, idx] = np.asarray(plydata.elements[0][attr_name])
 
-        # Load L_22_inv_diag (opacity precision) - exclude scale/rot variants
-        L_22_inv_diag_names = [p.name for p in plydata.elements[0].properties
-                               if p.name.startswith("L_22_inv_diag_")
-                               and not p.name.startswith("L_22_inv_diag_scale_")
-                               and not p.name.startswith("L_22_inv_diag_rot_")]
-        L_22_inv_diag_names = sorted(L_22_inv_diag_names, key=lambda x: int(x.split('_')[-1]))
-        L_22_inv_diag = np.zeros((xyz.shape[0], len(L_22_inv_diag_names)))
-        for idx, attr_name in enumerate(L_22_inv_diag_names):
-            L_22_inv_diag[:, idx] = np.asarray(plydata.elements[0][attr_name])
+        # Load L_22_inv (full Cholesky of precision matrix)
+        L_22_inv_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("L_22_inv_")]
+        L_22_inv_names = sorted(L_22_inv_names, key=lambda x: int(x.split('_')[-1]))
+        L_22_inv = np.zeros((xyz.shape[0], len(L_22_inv_names)))
+        for idx, attr_name in enumerate(L_22_inv_names):
+            L_22_inv[:, idx] = np.asarray(plydata.elements[0][attr_name])
 
-        # Load scale conditioning parameters if enabled
-        if self.use_view_dependent_scale:
-            # L_22_inv_diag_scale (scale-specific precision)
-            L_22_scale_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("L_22_inv_diag_scale_")]
-            L_22_scale_names = sorted(L_22_scale_names, key=lambda x: int(x.split('_')[-1]))
-            L_22_inv_diag_scale = np.zeros((xyz.shape[0], len(L_22_scale_names)))
-            for idx, attr_name in enumerate(L_22_scale_names):
-                L_22_inv_diag_scale[:, idx] = np.asarray(plydata.elements[0][attr_name])
-
-            # scale_deviation
-            scale_dev_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("scale_deviation_")]
-            scale_dev_names = sorted(scale_dev_names, key=lambda x: int(x.split('_')[-1]))
-            scale_deviation = np.zeros((xyz.shape[0], len(scale_dev_names)))
-            for idx, attr_name in enumerate(scale_dev_names):
-                scale_deviation[:, idx] = np.asarray(plydata.elements[0][attr_name])
-
-        # Load rotation conditioning parameters if enabled
-        if self.use_view_dependent_rotation:
-            # L_22_inv_diag_rot (rotation-specific precision)
+        # Load time-dependent rotation conditioning parameters if enabled
+        if self.use_time_dependent_rotation:
+            # L_22_inv_diag_rot (time-specific precision, single dimension)
             L_22_rot_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("L_22_inv_diag_rot_")]
             L_22_rot_names = sorted(L_22_rot_names, key=lambda x: int(x.split('_')[-1]))
             L_22_inv_diag_rot = np.zeros((xyz.shape[0], len(L_22_rot_names)))
@@ -807,15 +729,12 @@ class GaussianModel:
         self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True))
         self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
         self._view_mean = nn.Parameter(torch.tensor(view_mean, dtype=torch.float, device="cuda").requires_grad_(True))
-        self._L_22_inv_diag = nn.Parameter(torch.tensor(L_22_inv_diag, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._L_22_inv = nn.Parameter(torch.tensor(L_22_inv, dtype=torch.float, device="cuda").requires_grad_(True))
 
         if self.use_view_dependent_pos:
             self._v_12_direction = nn.Parameter(torch.tensor(v_12_direction, dtype=torch.float, device="cuda").requires_grad_(True))
             self._v_12_scale = nn.Parameter(torch.tensor(v_12_scale, dtype=torch.float, device="cuda").requires_grad_(True))
-        if self.use_view_dependent_scale:
-            self._L_22_inv_diag_scale = nn.Parameter(torch.tensor(L_22_inv_diag_scale, dtype=torch.float, device="cuda").requires_grad_(True))
-            self._scale_deviation = nn.Parameter(torch.tensor(scale_deviation, dtype=torch.float, device="cuda").requires_grad_(True))
-        if self.use_view_dependent_rotation:
+        if self.use_time_dependent_rotation:
             self._L_22_inv_diag_rot = nn.Parameter(torch.tensor(L_22_inv_diag_rot, dtype=torch.float, device="cuda").requires_grad_(True))
             self._rotation_delta = nn.Parameter(torch.tensor(rotation_delta, dtype=torch.float, device="cuda").requires_grad_(True))
         if self.use_beta:
@@ -867,14 +786,11 @@ class GaussianModel:
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
         self._view_mean = optimizable_tensors["view_mean"]
-        self._L_22_inv_diag = optimizable_tensors["L_22_inv_diag"]
+        self._L_22_inv = optimizable_tensors["L_22_inv"]
         if self.use_view_dependent_pos:
             self._v_12_direction = optimizable_tensors["v_12_direction"]
             self._v_12_scale = optimizable_tensors["v_12_scale"]
-        if self.use_view_dependent_scale:
-            self._L_22_inv_diag_scale = optimizable_tensors["L_22_inv_diag_scale"]
-            self._scale_deviation = optimizable_tensors["scale_deviation"]
-        if self.use_view_dependent_rotation:
+        if self.use_time_dependent_rotation:
             self._L_22_inv_diag_rot = optimizable_tensors["L_22_inv_diag_rot"]
             self._rotation_delta = optimizable_tensors["rotation_delta"]
         if self.use_beta:
@@ -907,8 +823,7 @@ class GaussianModel:
 
     def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities,
                               new_scaling, new_rotation, new_view_mean,
-                              new_L_22_inv_diag, new_v_12_direction=None, new_v_12_scale=None,
-                              new_L_22_inv_diag_scale=None, new_scale_deviation=None,
+                              new_L_22_inv, new_v_12_direction=None, new_v_12_scale=None,
                               new_L_22_inv_diag_rot=None, new_rotation_delta=None, new_beta=None):
         d = {
             "xyz": new_xyz,
@@ -918,15 +833,12 @@ class GaussianModel:
             "scaling": new_scaling,
             "rotation": new_rotation,
             "view_mean": new_view_mean,
-            "L_22_inv_diag": new_L_22_inv_diag,
+            "L_22_inv": new_L_22_inv,
         }
         if self.use_view_dependent_pos:
             d["v_12_direction"] = new_v_12_direction
             d["v_12_scale"] = new_v_12_scale
-        if self.use_view_dependent_scale:
-            d["L_22_inv_diag_scale"] = new_L_22_inv_diag_scale
-            d["scale_deviation"] = new_scale_deviation
-        if self.use_view_dependent_rotation:
+        if self.use_time_dependent_rotation:
             d["L_22_inv_diag_rot"] = new_L_22_inv_diag_rot
             d["rotation_delta"] = new_rotation_delta
         if self.use_beta:
@@ -940,14 +852,11 @@ class GaussianModel:
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
         self._view_mean = optimizable_tensors["view_mean"]
-        self._L_22_inv_diag = optimizable_tensors["L_22_inv_diag"]
+        self._L_22_inv = optimizable_tensors["L_22_inv"]
         if self.use_view_dependent_pos:
             self._v_12_direction = optimizable_tensors["v_12_direction"]
             self._v_12_scale = optimizable_tensors["v_12_scale"]
-        if self.use_view_dependent_scale:
-            self._L_22_inv_diag_scale = optimizable_tensors["L_22_inv_diag_scale"]
-            self._scale_deviation = optimizable_tensors["scale_deviation"]
-        if self.use_view_dependent_rotation:
+        if self.use_time_dependent_rotation:
             self._L_22_inv_diag_rot = optimizable_tensors["L_22_inv_diag_rot"]
             self._rotation_delta = optimizable_tensors["rotation_delta"]
         if self.use_beta:
@@ -979,21 +888,18 @@ class GaussianModel:
         new_features_rest = self._features_rest[selected_pts_mask].repeat(N, 1, 1)
         new_opacity = self._opacity[selected_pts_mask].repeat(N, 1)
         new_view_mean = self._view_mean[selected_pts_mask].repeat(N, 1)
-        new_L_22_inv_diag = self._L_22_inv_diag[selected_pts_mask].repeat(N, 1)
+        new_L_22_inv = self._L_22_inv[selected_pts_mask].repeat(N, 1)
         new_v_12_direction = self._v_12_direction[selected_pts_mask].repeat(N, 1) if self.use_view_dependent_pos else None
         new_v_12_scale = self._v_12_scale[selected_pts_mask].repeat(N, 1) if self.use_view_dependent_pos else None
-        new_L_22_inv_diag_scale = self._L_22_inv_diag_scale[selected_pts_mask].repeat(N, 1) if self.use_view_dependent_scale else None
-        new_scale_deviation = self._scale_deviation[selected_pts_mask].repeat(N, 1) if self.use_view_dependent_scale else None
-        new_L_22_inv_diag_rot = self._L_22_inv_diag_rot[selected_pts_mask].repeat(N, 1) if self.use_view_dependent_rotation else None
-        new_rotation_delta = self._rotation_delta[selected_pts_mask].repeat(N, 1) if self.use_view_dependent_rotation else None
+        new_L_22_inv_diag_rot = self._L_22_inv_diag_rot[selected_pts_mask].repeat(N, 1) if self.use_time_dependent_rotation else None
+        new_rotation_delta = self._rotation_delta[selected_pts_mask].repeat(N, 1) if self.use_time_dependent_rotation else None
         new_beta = self._beta[selected_pts_mask].repeat(N, 1) if self.use_beta else None
 
         self.densification_postfix(
             new_xyz, new_features_dc, new_features_rest, new_opacity,
-            new_scaling, new_rotation, new_view_mean, new_L_22_inv_diag,
-            new_v_12_direction, new_v_12_scale, new_L_22_inv_diag_scale,
-            new_scale_deviation, new_L_22_inv_diag_rot,
-            new_rotation_delta, new_beta
+            new_scaling, new_rotation, new_view_mean, new_L_22_inv,
+            new_v_12_direction, new_v_12_scale,
+            new_L_22_inv_diag_rot, new_rotation_delta, new_beta
         )
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
@@ -1014,21 +920,18 @@ class GaussianModel:
         new_scaling = self._scaling[selected_pts_mask]
         new_rotation = self._rotation[selected_pts_mask]
         new_view_mean = self._view_mean[selected_pts_mask]
-        new_L_22_inv_diag = self._L_22_inv_diag[selected_pts_mask]
+        new_L_22_inv = self._L_22_inv[selected_pts_mask]
         new_v_12_direction = self._v_12_direction[selected_pts_mask] if self.use_view_dependent_pos else None
         new_v_12_scale = self._v_12_scale[selected_pts_mask] if self.use_view_dependent_pos else None
-        new_L_22_inv_diag_scale = self._L_22_inv_diag_scale[selected_pts_mask] if self.use_view_dependent_scale else None
-        new_scale_deviation = self._scale_deviation[selected_pts_mask] if self.use_view_dependent_scale else None
-        new_L_22_inv_diag_rot = self._L_22_inv_diag_rot[selected_pts_mask] if self.use_view_dependent_rotation else None
-        new_rotation_delta = self._rotation_delta[selected_pts_mask] if self.use_view_dependent_rotation else None
+        new_L_22_inv_diag_rot = self._L_22_inv_diag_rot[selected_pts_mask] if self.use_time_dependent_rotation else None
+        new_rotation_delta = self._rotation_delta[selected_pts_mask] if self.use_time_dependent_rotation else None
         new_beta = self._beta[selected_pts_mask] if self.use_beta else None
 
         self.densification_postfix(
             new_xyz, new_features_dc, new_features_rest, new_opacities,
-            new_scaling, new_rotation, new_view_mean, new_L_22_inv_diag,
-            new_v_12_direction, new_v_12_scale, new_L_22_inv_diag_scale,
-            new_scale_deviation, new_L_22_inv_diag_rot,
-            new_rotation_delta, new_beta
+            new_scaling, new_rotation, new_view_mean, new_L_22_inv,
+            new_v_12_direction, new_v_12_scale,
+            new_L_22_inv_diag_rot, new_rotation_delta, new_beta
         )
 
     def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size, iteration):
@@ -1084,7 +987,8 @@ class GaussianModel:
             cond_params = view_dir
 
         # Get all conditional parameters using CUDA-accelerated fused kernel
-        m_cond, scale_cond, rotation_cond, opacity_scale = self.slice_gaussian_full_method(cond_params)
+        # (scale is NOT conditioned, use get_scaling directly)
+        m_cond, rotation_cond, opacity_scale = self.slice_gaussian_full_method(cond_params)
 
         # Get SH features for color
         shs = self.get_features
@@ -1120,7 +1024,7 @@ class GaussianModel:
 
         rasterizer = TCGSRasterizer(raster_settings=raster_settings)
 
-        # Rasterize with ALL conditional parameters
+        # Rasterize with conditional position and rotation (scale is NOT conditioned)
         rendered_image, radii, render_time, _ = rasterizer(
             means3D=m_cond,
             means2D=screenspace_points,
@@ -1128,8 +1032,8 @@ class GaussianModel:
             colors_precomp=None,
             opacities=opacity,
             scores=None,
-            scales=scale_cond,          # View-dependent scale!
-            rotations=rotation_cond,    # View-dependent rotation!
+            scales=self.get_scaling,    # Scale is NOT view-dependent
+            rotations=rotation_cond,    # View/time-dependent rotation
             cov3D_precomp=None,
             betas=self.get_beta,
         )
@@ -1234,14 +1138,11 @@ class GaussianModel:
         _rotation_masked = self._rotation[mask]
         _opacity_masked = self._opacity[mask]
         _view_mean_masked = self._view_mean[mask]
-        _L_22_inv_diag_masked = self._L_22_inv_diag[mask]
+        _L_22_inv_masked = self._L_22_inv[mask]
         if self.use_view_dependent_pos:
             _v_12_direction_masked = self._v_12_direction[mask]
             _v_12_scale_masked = self._v_12_scale[mask]
-        if self.use_view_dependent_scale:
-            _L_22_inv_diag_scale_masked = self._L_22_inv_diag_scale[mask]
-            _scale_deviation_masked = self._scale_deviation[mask]
-        if self.use_view_dependent_rotation:
+        if self.use_time_dependent_rotation:
             _L_22_inv_diag_rot_masked = self._L_22_inv_diag_rot[mask]
             _rotation_delta_masked = self._rotation_delta[mask]
         if self.use_beta:
@@ -1255,14 +1156,11 @@ class GaussianModel:
         orig_rotation, self._rotation = self._rotation, _rotation_masked
         orig_opacity, self._opacity = self._opacity, _opacity_masked
         orig_view_mean, self._view_mean = self._view_mean, _view_mean_masked
-        orig_L_22_inv_diag, self._L_22_inv_diag = self._L_22_inv_diag, _L_22_inv_diag_masked
+        orig_L_22_inv, self._L_22_inv = self._L_22_inv, _L_22_inv_masked
         if self.use_view_dependent_pos:
             orig_v_12_direction, self._v_12_direction = self._v_12_direction, _v_12_direction_masked
             orig_v_12_scale, self._v_12_scale = self._v_12_scale, _v_12_scale_masked
-        if self.use_view_dependent_scale:
-            orig_L_22_inv_diag_scale, self._L_22_inv_diag_scale = self._L_22_inv_diag_scale, _L_22_inv_diag_scale_masked
-            orig_scale_deviation, self._scale_deviation = self._scale_deviation, _scale_deviation_masked
-        if self.use_view_dependent_rotation:
+        if self.use_time_dependent_rotation:
             orig_L_22_inv_diag_rot, self._L_22_inv_diag_rot = self._L_22_inv_diag_rot, _L_22_inv_diag_rot_masked
             orig_rotation_delta, self._rotation_delta = self._rotation_delta, _rotation_delta_masked
         if self.use_beta:
@@ -1296,14 +1194,11 @@ class GaussianModel:
             self._rotation = orig_rotation
             self._opacity = orig_opacity
             self._view_mean = orig_view_mean
-            self._L_22_inv_diag = orig_L_22_inv_diag
+            self._L_22_inv = orig_L_22_inv
             if self.use_view_dependent_pos:
                 self._v_12_direction = orig_v_12_direction
                 self._v_12_scale = orig_v_12_scale
-            if self.use_view_dependent_scale:
-                self._L_22_inv_diag_scale = orig_L_22_inv_diag_scale
-                self._scale_deviation = orig_scale_deviation
-            if self.use_view_dependent_rotation:
+            if self.use_time_dependent_rotation:
                 self._L_22_inv_diag_rot = orig_L_22_inv_diag_rot
                 self._rotation_delta = orig_rotation_delta
             if self.use_beta:

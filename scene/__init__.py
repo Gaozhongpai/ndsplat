@@ -43,9 +43,7 @@ def get_gaussian_model(mode: str):
         from scene.gaussian_model_ndgs_2sh import GaussianModel
     elif mode == "ndgs-color":  ## Color-based N-DGS: conditional color instead of position shift
         from scene.gaussian_model_ndgs_color import GaussianModelColor as GaussianModel
-    elif mode == "dgs":  ## Position-based DGS with simplified v_12/L_22_inv parameterization
-        from scene.gaussian_model_dgs import GaussianModel
-    elif mode == "dgs-full":  ## Position-based DGS with simplified v_12/L_22_inv parameterization
+    elif mode == "dgs":  ## Full DGS with view-dependent position, time-dependent rotation
         from scene.gaussian_model_dgs_full import GaussianModel
     elif mode == "dgs-color":  ## Joint position+color DGS with simplified v_12/L_22_inv parameterization
         from scene.gaussian_model_dgs_color import GaussianModel
@@ -143,8 +141,8 @@ class Scene:
                 self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent,
                                                 mcmc_cap_max=mcmc_cap_max,
                                                 densification_strategy=densification_strategy)
-            elif args.mode == "dgs" or args.mode == "dgs-color" or args.mode == "dgs-full":
-                # DGS/DGS-color/DGS-full mode: standard 3DGS-style initialization
+            elif args.mode == "dgs" or args.mode == "dgs-color":
+                # DGS/DGS-color mode: standard 3DGS-style initialization
                 self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent)
             else:
                 self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent)

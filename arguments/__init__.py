@@ -76,15 +76,15 @@ class ModelParams(ParamGroup):
         self._white_background = False
         self.data_device = "cuda"
         self.eval = False
-        self.mode = "dgs"  # Options: "ddgs", "3dgs", "ubs", "ndgs", "ndgs-2sh", "ndgs-color", "dgs", "dgs-full", "dgs-color"
+        self.mode = "dgs"  # Options: "ddgs", "3dgs", "ubs", "ndgs", "ndgs-2sh", "ndgs-color", "dgs", "dgs-color"
         self.input_dim = 6  # Gaussian dimension: 6 for 6DGS/UBS, 7 for 7DGS (with time)
         self.use_rot_scale_l_triangle = True  # If True: use rotation-scale-l_triangle (UBS-style), If False: use diagonal-l_triangle (NDGS-style)
         self.learnable_lambda_opc = False  # If True: make lambda_opc a learnable parameter per Gaussian
         self.use_jpeg_compression = False  # If True: use JPEG compression for images to save GPU memory (slower but memory-efficient)
-        # DGS view-dependent flags (only used when mode="dgs" or "dgs-color")
+        # DGS view-dependent flags (only used when mode="dgs")
         self.use_view_dependent_pos = True  # Enable view-dependent position shift
-        self.use_view_dependent_scale = False  # Enable view-dependent scale
-        self.use_view_dependent_rotation = True  # Enable view-dependent rotation
+        self.use_view_dependent_scale = False  # NOT USED (scale is not view-dependent)
+        self.use_view_dependent_rotation = True  # Enable time-dependent rotation (only when input_dim=7)
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):

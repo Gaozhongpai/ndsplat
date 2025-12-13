@@ -1,21 +1,16 @@
 #!/bin/bash
 
-# Benchmark different modes and view-dependent configurations on NeRF synthetic datasets
+# Benchmark different modes on NeRF synthetic datasets
 #
 # Modes:
-# | Mode     | Output Dir              | Description                                    |
-# |----------|-------------------------|------------------------------------------------|
-# | dgs      | output/dgs/...          | DGS with bounded v_12 parameterization         |
-# | ndgs     | output/ndgs/...         | N-DGS with full Cholesky precision             |
-# | dgs-full | output/dgs-full_*/...   | DGS-full with configurable view-dependent flags|
+# | Mode         | Output Dir                | Description                            |
+# |--------------|---------------------------|----------------------------------------|
+# | opacity_only | output/opacity_only/...   | Opacity conditioning only (no position)|
+# | opacity_pos  | output/opacity_pos/...    | Opacity + Position conditioning        |
+# | ndgs         | output/ndgs/...           | N-DGS with full Cholesky precision     |
 #
-# DGS-full Configurations:
-# | Config       | Output Dir                        | pos | scale | rot |
-# |--------------|-----------------------------------|-----|-------|-----|
-# | no_view_dep  | output/dgs-full_no_view_dep/...   |  -  |   -   |  -  |
-# | pos_only     | output/dgs-full_pos_only/...      |  +  |   -   |  -  |
-# | pos_rot      | output/dgs-full_pos_rot/...       |  +  |   -   |  +  |
-# | rot_only     | output/dgs-full_rot_only/...      |  -  |   -   |  +  |
+# Note: Rotation conditioning is only available for dynamic scenes (C=4 with time)
+# Note: Scale is NOT view-dependent (use get_scaling directly)
 
 shopt -s dotglob
 
@@ -54,10 +49,10 @@ run_experiment() {
 }
 
 # ============================================
-# 1. DGS mode (bounded v_12 parameterization)
+# 1. opacity_only mode (no position shift)
 # ============================================
 echo "=============================================="
-echo "Running DGS mode benchmarks"
+echo "Running opacity_only mode benchmarks"
 echo "=============================================="
 
 for dir in "$base_dir"*/; do
@@ -68,14 +63,35 @@ for dir in "$base_dir"*/; do
             continue
         fi
 
-        output_dir="output/dgs/nerf_synthetic/${scene_name}"
-        echo "Processing ${scene_name} with mode dgs..."
-        run_experiment "dgs" "$output_dir" "$dir" ""
+        output_dir="output/opacity_only/nerf_synthetic/${scene_name}"
+        echo "Processing ${scene_name} with mode opacity_only..."
+        run_experiment "dgs-full" "$output_dir" "$dir" "--use_view_dependent_pos False"
     fi
 done
 
 # ============================================
-# 2. NDGS mode (full Cholesky precision)
+# 2. opacity_pos mode (opacity + position)
+# ============================================
+echo "=============================================="
+echo "Running opacity_pos mode benchmarks"
+echo "=============================================="
+
+for dir in "$base_dir"*/; do
+    if [ -d "$dir" ]; then
+        clean_dir="${dir%/}"
+        scene_name=$(basename "$clean_dir")
+        if [[ "$scene_name" == "README.txt" ]] || [[ "$scene_name" == *.zip ]]; then
+            continue
+        fi
+
+        output_dir="output/opacity_pos/nerf_synthetic/${scene_name}"
+        echo "Processing ${scene_name} with mode opacity_pos..."
+        run_experiment "dgs-full" "$output_dir" "$dir" "--use_view_dependent_pos True"
+    fi
+done
+
+# ============================================
+# 3. NDGS mode (full Cholesky precision)
 # ============================================
 echo "=============================================="
 echo "Running NDGS mode benchmarks"
@@ -93,45 +109,6 @@ for dir in "$base_dir"*/; do
         echo "Processing ${scene_name} with mode ndgs..."
         run_experiment "ndgs" "$output_dir" "$dir" ""
     fi
-done
-
-# ============================================
-# 3. DGS-full mode with view-dependent configs
-# ============================================
-# Define configurations as "name:pos:scale:rot"
-configs=(
-    "pos_rot:True:False:True"
-    "no_view_dep:False:False:False"
-    "pos_only:True:False:False"
-    "rot_only:False:False:True"
-)
-
-for config in "${configs[@]}"; do
-    # Parse config
-    IFS=':' read -r config_name use_pos use_scale use_rot <<< "$config"
-
-    echo "=============================================="
-    echo "Running DGS-full benchmarks with config: $config_name"
-    echo "  use_view_dependent_pos=$use_pos"
-    echo "  use_view_dependent_scale=$use_scale"
-    echo "  use_view_dependent_rotation=$use_rot"
-    echo "=============================================="
-
-    for dir in "$base_dir"*/; do
-        if [ -d "$dir" ]; then
-            clean_dir="${dir%/}"
-            scene_name=$(basename "$clean_dir")
-            if [[ "$scene_name" == "README.txt" ]] || [[ "$scene_name" == *.zip ]]; then
-                continue
-            fi
-
-            output_dir="output/dgs-full_${config_name}/nerf_synthetic/${scene_name}"
-            echo "Processing ${scene_name} with config ${config_name}..."
-
-            extra_args="--use_view_dependent_pos $use_pos --use_view_dependent_scale $use_scale --use_view_dependent_rotation $use_rot"
-            run_experiment "dgs-full" "$output_dir" "$dir" "$extra_args"
-        fi
-    done
 done
 
 echo "Benchmark completed!"

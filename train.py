@@ -64,8 +64,8 @@ def render_wrapper(viewpoint_cam, gaussians, pipe, bg, mode, scaling_modifier=1.
         mode: Rendering mode ("ddgs", "3dgs", "ubs", "ndgs", "dgs", "dgs-color")
         scaling_modifier: Scaling modifier for rendering
     """
-    if "ubs" in mode or "ndgs" in mode or mode == "dgs" or mode == "dgs-color" or mode == "dgs-full":
-        # UBS/N-DGS/DGS/DGS-color/DGS-full mode: use render_tcgs with CUDA-accelerated conditional slicing
+    if "ubs" in mode or "ndgs" in mode or mode == "dgs" or mode == "dgs-color":
+        # UBS/N-DGS/DGS/DGS-color mode: use render_tcgs with CUDA-accelerated conditional slicing
         gaussians.background = bg
         return gaussians.render_tcgs(viewpoint_cam, render_mode="RGB", use_tcgs=False, scaling_modifier=scaling_modifier)
     elif "ddgs" in mode or "3dgs" in mode:
@@ -93,14 +93,10 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
         gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim,
                                     use_rot_scale_l_triangle=dataset.use_rot_scale_l_triangle)
     elif mode == "dgs":
-        # DGS mode: Position-based with simplified v_12/L_22_inv parameterization (no configurable view-dependent flags)
-        gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim)
-    elif mode == "dgs-full":
-        # DGS-full mode: Full DGS with configurable view-dependent position, scale, rotation
+        # DGS mode: Full DGS with configurable view-dependent position, time-dependent rotation
         gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim,
                                   use_view_dependent_pos=dataset.use_view_dependent_pos,
-                                  use_view_dependent_scale=dataset.use_view_dependent_scale,
-                                  use_view_dependent_rotation=dataset.use_view_dependent_rotation)
+                                  use_time_dependent_rotation=dataset.use_view_dependent_rotation)
     elif mode == "dgs-color":
         # DGS-color mode: Joint position+color with simplified v_12/L_22_inv parameterization
         gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim)
