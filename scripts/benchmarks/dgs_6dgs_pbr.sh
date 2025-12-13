@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Benchmark dgs with different view-dependent configurations on NeRF synthetic datasets
+# Benchmark dgs with different view-dependent configurations on Tanks & Temples PBR datasets
 #
 # Configurations:
 # | Config       | Output Dir                   | pos | scale | rot |
@@ -13,7 +13,7 @@
 
 shopt -s dotglob
 
-base_dir="/code/dataset/nerf_synthetic/"
+base_dir="/code/dataset/tandt_db/6dgs-pbr/"
 mode="dgs"
 
 # Define configurations as "name:pos:scale:rot"
@@ -38,16 +38,15 @@ for config in "${configs[@]}"; do
 
     for dir in "$base_dir"*/; do
         if [ -d "$dir" ]; then
-            # Extract clean directory name
-            clean_dir="${dir%/}"
-            scene_name=$(basename "$clean_dir")
+            # Extract scene name
+            scene_name=$(basename "${dir%/}")
 
-            # Skip non-scene directories
-            if [[ "$scene_name" == "README.txt" ]] || [[ "$scene_name" == *.zip ]]; then
+            # Skip zip files
+            if [[ "$scene_name" == *.zip ]]; then
                 continue
             fi
 
-            output_dir="output/${mode}_${config_name}/nerf_synthetic/${scene_name}"
+            output_dir="output/${mode}_${config_name}/tandt_pbr/${scene_name}"
             echo "Processing ${scene_name} with config ${config_name}..."
 
             # Train (training time is saved internally by train.py)
@@ -57,8 +56,7 @@ for config in "${configs[@]}"; do
                 --use_view_dependent_pos "$use_pos" \
                 --use_view_dependent_scale "$use_scale" \
                 --use_view_dependent_rotation "$use_rot" \
-                --eval \
-                -w
+                --eval
 
             # Render at multiple iterations
             for iter in 7000 30000; do

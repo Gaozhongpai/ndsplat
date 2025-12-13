@@ -13,10 +13,28 @@ from argparse import ArgumentParser, Namespace
 import sys
 import os
 
+def str2bool(v):
+    """Convert string to boolean for argparse."""
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise ValueError(f'Boolean value expected, got {v}')
+
 class GroupParams:
     pass
 
 class ParamGroup:
+    # Parameters that should accept explicit True/False values from command line
+    EXPLICIT_BOOL_PARAMS = {
+        'use_view_dependent_pos',
+        'use_view_dependent_scale',
+        'use_view_dependent_rotation',
+    }
+
     def __init__(self, parser: ArgumentParser, name : str, fill_none = False):
         group = parser.add_argument_group(name)
         for key, value in vars(self).items():
@@ -25,7 +43,7 @@ class ParamGroup:
                 shorthand = True
                 key = key[1:]
             t = type(value)
-            value = value if not fill_none else None 
+            value = value if not fill_none else None
             if shorthand:
                 if t == bool:
                     group.add_argument("--" + key, ("-" + key[0:1]), default=value, action="store_true")
@@ -33,7 +51,11 @@ class ParamGroup:
                     group.add_argument("--" + key, ("-" + key[0:1]), default=value, type=t)
             else:
                 if t == bool:
-                    group.add_argument("--" + key, default=value, action="store_true")
+                    # Use explicit bool type for configurable parameters, store_true for others
+                    if key in self.EXPLICIT_BOOL_PARAMS:
+                        group.add_argument("--" + key, default=value, type=str2bool, nargs='?', const=True)
+                    else:
+                        group.add_argument("--" + key, default=value, action="store_true")
                 else:
                     group.add_argument("--" + key, default=value, type=t)
 
@@ -46,7 +68,7 @@ class ParamGroup:
 
 class ModelParams(ParamGroup):
     def __init__(self, parser, sentinel=False):
-        self.sh_degree = 1
+        self.sh_degree = 3
         self._source_path = ""
         self._model_path = ""
         self._images = "images"
@@ -59,6 +81,10 @@ class ModelParams(ParamGroup):
         self.use_rot_scale_l_triangle = True  # If True: use rotation-scale-l_triangle (UBS-style), If False: use diagonal-l_triangle (NDGS-style)
         self.learnable_lambda_opc = False  # If True: make lambda_opc a learnable parameter per Gaussian
         self.use_jpeg_compression = False  # If True: use JPEG compression for images to save GPU memory (slower but memory-efficient)
+        # DGS view-dependent flags (only used when mode="dgs" or "dgs-color")
+        self.use_view_dependent_pos = True  # Enable view-dependent position shift
+        self.use_view_dependent_scale = True  # Enable view-dependent scale
+        self.use_view_dependent_rotation = True  # Enable view-dependent rotation
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):

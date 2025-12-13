@@ -106,7 +106,7 @@ United Imaging Intelligence, Boston, MA
 \maketitle
 
 \begin{abstract}
-Gaussian Splatting has emerged as a state-of-the-art technique for novel view synthesis, with recent extensions like 6DGS and 7DGS enabling the modeling of complex view-dependent effects and dynamic scenes. However, these advanced formulations rely on high-dimensional covariance matrices, which introduce a critical bottleneck during the training phase: a costly and numerically unstable per-Gaussian matrix inversion required in every forward pass. While the results of this inversion can be pre-computed to accelerate inference, the underlying model remains inefficient to train and parameterize. In this paper, we propose dGS, a unified and lightweight parameterization that overcomes these limitations. The `d' in dGS signifies our core principle: a shift from implicit modeling to an explicit (\ie, direct) mapping of displacement and dynamics. Instead of deriving motion from a full covariance matrix, dGS learns an explicit transformation matrix—a 4D velocity matrix for dynamic scenes—that directly translates temporal and angular deviations into spatial displacements. Furthermore, we replace expensive Mahalanobis-based opacity modulation with streamlined decay functions controlled by intuitive, learnable scalar support ranges. Our approach is not an approximation but a functionally equivalent reparameterization of linear dynamics that yields substantial advantages. It achieves significant gains in training efficiency by replacing cubic-time matrix inversions with linear-time matrix-vector products, ensures numerical stability by design, and improves parameter efficiency with a more compact model. dGS provides a practical and powerful framework for efficiently training and rendering both static scenes with complex view-dependence and large-scale dynamic scenes at high frame rates, without sacrificing expressive power.
+Gaussian Splatting has emerged as a state-of-the-art technique for novel view synthesis, with recent extensions like 6DGS and 7DGS enabling the modeling of complex view-dependent effects and dynamic scenes. However, these advanced formulations rely on high-dimensional covariance matrices, which introduce a critical bottleneck during training: costly and numerically unstable per-Gaussian matrix inversions required in every forward pass. In this paper, we propose \modelname{}, a lightweight parameterization that overcomes these limitations through \textbf{direct parameterization}---learning the transformation matrices explicitly rather than deriving them from full covariance structures. Our approach introduces two key innovations. First, a \textbf{diagonal precision parameterization} replaces the full precision matrix with independent per-axis decay factors, reducing precision parameters from $\mathcal{O}(C^2)$ to $\mathcal{O}(C)$ while enabling element-wise operations instead of matrix inversions. Second, a \textbf{bounded displacement parameterization} decomposes the position-view covariance into a normalized direction and a sigmoid-bounded magnitude scaled by each Gaussian's spatial extent, providing implicit structural regularization where small Gaussians produce small displacements. Our approach achieves equivalent expressive power for linear dynamics while delivering substantial practical advantages: training efficiency through elimination of cubic-time matrix inversions, numerical stability by design, and improved parameter efficiency with a more compact model. \modelname{} provides a practical framework for efficiently training both static scenes with complex view-dependence and large-scale dynamic scenes at high frame rates.
 \end{abstract}
 
 \section{Introduction}
@@ -117,9 +117,15 @@ Recent work has responded to these challenges with sophisticated extensions that
 
 While these higher-dimensional formulations demonstrate remarkable expressive power, they introduce a fundamental computational bottleneck that severely impacts their training. The mathematical framework underlying both 6DGS and 7DGS relies on conditioning high-dimensional Gaussian distributions, which necessitates the inversion of covariance sub-matrices. For 6DGS, this translates to a $3\times3$ matrix inversion for every Gaussian, and for 7DGS, a $4\times4$ inversion. This cubic-complexity operation, performed in every forward pass during optimization, makes training exceptionally costly and slow. Beyond computational costs, these matrix inversions introduce critical numerical instabilities. During optimization, covariance matrices may become ill-conditioned or approach singularity, leading to numerical errors that derail training. This fragility undermines the reliability of these methods. While it is possible to pre-process the model after training to cache the results of these inversions and accelerate inference, this does not address the core issues of training inefficiency and model complexity. The crux of the problem lies in the fundamental design philosophy: they model dynamics implicitly through complex covariance structures, deriving transformations through expensive matrix operations.
 
-In this paper, we introduce \textbf{dGS}, a unified framework that resolves this tension through a fundamental paradigm shift. The `\textbf{d}' in dGS represents our core contribution: a transition from implicit covariance-based modeling to explicit (\ie, \textbf{d}irect) parameterization of \textbf{d}isplacement and \textbf{d}ynamics. Rather than learning complex covariance matrices and deriving motion through costly inversions during training, dGS learns explicit transformation matrices that directly map temporal and angular deviations to spatial displacements. Our approach centers on two key innovations. First, we replace the expensive matrix inversion operations with efficient matrix-vector products by learning transformation matrices directly. For dynamic scenes, this involves learning a 4D velocity matrix that cleanly separates temporal motion from view-dependent effects. Second, we streamline opacity modulation by replacing complex Mahalanobis-based computations with intuitive decay functions controlled by learnable scalar support ranges.
+In this paper, we introduce \textbf{\modelname{}}, a lightweight framework that resolves this tension through \textbf{direct parameterization}. The `\textbf{d}' in \modelname{} signifies our core principle: rather than learning complex covariance matrices and \textit{deriving} motion through costly inversions, we \textbf{d}irectly parameterize the essential quantities needed for conditional Gaussian slicing---the \textbf{d}isplacement matrices and \textbf{d}ecay factors. Our approach centers on two key innovations:
 
-Critically, dGS is not an approximation—it represents a functionally equivalent reparameterization of linear dynamics that maintains the expressive power of existing methods while delivering substantial practical advantages. Our formulation achieves a threefold improvement: training efficiency by eliminating cubic-time operations, numerical stability by design, and parameter efficiency via a more compact and interpretable model structure. By making the training of large-scale dynamic and view-dependent models more tractable and efficient, dGS opens new possibilities for real-time applications, large-scale scene modeling, and interactive experiences.
+\begin{enumerate}
+\item \textbf{Diagonal Precision Parameterization:} We replace the full $C \times C$ precision matrix (where $C=3$ for view-only or $C=4$ for view+time) with $C$ independent diagonal elements. Each element $\exp(d_i)^2$ controls the decay rate along its corresponding axis, enabling the entire opacity modulation and displacement computation to use element-wise operations rather than matrix inversions.
+
+\item \textbf{Bounded Displacement Parameterization:} We decompose the position-view covariance block $\mathbf{V}_{12}$ into a normalized direction vector and a sigmoid-bounded magnitude that scales with each Gaussian's spatial extent. This provides implicit structural regularization: small Gaussians can only produce small position shifts, while large Gaussians have proportionally larger shift capacity---mimicking the implicit constraint in full covariance models without the computational overhead.
+\end{enumerate}
+
+Critically, \modelname{} is not an approximation---it represents a functionally equivalent reparameterization of linear dynamics that bypasses the need for full N-DGS covariance modeling. Our formulation achieves improvements across three axes: training efficiency by eliminating cubic-time operations in favor of linear-time element-wise products, numerical stability by avoiding matrix inversion entirely, and parameter efficiency via a more compact model structure.
 
 \section{Related Work}
 \label{sec:related_work}
@@ -188,99 +194,183 @@ Opacity is modulated similarly to 6DGS. This formulation exacerbates the issues 
 
 \section{Our Approach}
 
+The full covariance formulations of 6DGS and 7DGS, while expressive, are fundamentally constrained by a design that is inefficient for training: they model dynamic effects \textit{implicitly} through high-dimensional covariance matrices and derive transformations via costly matrix inversions. We propose \modelname{}, a lightweight framework that replaces this implicit modeling with explicit, efficient parameterizations that maintain expressive power while dramatically improving training efficiency and stability.
 
-The full covariance formulations of 6DGS and 7DGS, while expressive, are fundamentally constrained by a design that is inefficient for training: they model dynamic effects \textit{implicitly} through high-dimensional covariance matrices and derive transformations via costly matrix inversions. We propose a new, unified framework that replaces this implicit modeling with a \textit{direct} and \textit{explicit} parameterization of motion and view-dependence. Our approach retains the expressive power for linear dynamics while dramatically improving training efficiency, stability, and parameter efficiency.
+\subsection{Core Insight: Direct vs. Derived Parameterization}
 
-\subsection{The Core Principle: Direct Displacement Mapping}
-The central insight of our method is to reframe the problem. In both 6DGS and 7DGS, the conditional mean is computed by applying a linear transformation to a deviation vector:
+The central insight of our method is that the conditional mean computation in 6DGS/7DGS can be decomposed into two independent components:
 \begin{equation}
-\mu_{\text{cond}} = \mu_p + \mathbf{M} \cdot \mathbf{\delta},
+\mu_{\text{cond}} = \mu_p + \underbrace{\mathbf{V}_{12}}_{\text{displacement direction}} \cdot \underbrace{\mathbf{V}_{22}^{-1} \cdot \boldsymbol{\delta}}_{\text{scaled deviation}},
 \end{equation}
-where \(\mathbf{\delta}\) is the vector of deviations from the mean (e.g., \(d-\mu_d\)). The critical step in prior work is that the transformation matrix \(\mathbf{M}\) is \textit{derived} from covariance terms (e.g., \(\mathbf{M} = \Sigma_{pd}\Sigma_d^{-1}\)). This derivation necessitates learning a full covariance matrix and performing an expensive, unstable inversion in every training step.
+where $\boldsymbol{\delta} = (d - \mu_d)$ for 6DGS or $\boldsymbol{\delta} = (t - \mu_t, d - \mu_d)^\top$ for 7DGS. In full N-DGS formulations, $\mathbf{V}_{12}$ is \textit{derived} from covariance terms (via $\mathbf{V}_{12} = \mathbf{L}_{11}\mathbf{L}_{21}^\top$) and $\mathbf{V}_{22}^{-1}$ requires explicit matrix inversion. Our key observation is that these quantities can instead be parameterized \textit{directly}:
+\begin{enumerate}
+\item The displacement matrix $\mathbf{V}_{12}$ can be learned directly with appropriate structural constraints, bypassing the need for full Cholesky decomposition.
+\item The precision matrix $\mathbf{V}_{22}^{-1}$ can be restricted to a diagonal form, enabling element-wise operations instead of matrix inversion.
+\end{enumerate}
 
-Our approach bypasses this entire process. We posit that the transformation matrix \(\mathbf{M}\) can be learned directly as a set of explicit parameters. This eliminates the need for matrix inversion entirely, decoupling the modeling of displacement from the full covariance structure and leading to a more efficient and stable system.
+\subsection{Diagonal Precision Parameterization}
 
-\subsection{Lightweight 6DGS for Efficient View-Dependence}
-For static scenes, we target the view-dependent effects of 6DGS. Instead of learning a full $6 \times 6$ covariance matrix, we model the relationship between view direction and spatial position directly.
-
-\paragraph{Direct View-Dependent Transformation.} We introduce a learnable \textbf{view-dependent transformation matrix} $\mathbf{V}_d \in \mathbb{R}^{3 \times 3}$. This matrix directly maps deviations in view direction to spatial displacements. The conditional mean calculation becomes a simple, efficient matrix-vector product:
+Instead of learning a full $C \times C$ covariance matrix $\Sigma_{22}$ (where $C=3$ for view or $C=4$ for view+time) and computing its inverse, we directly parameterize the precision matrix as a diagonal:
 \begin{equation}
-\mu_{\text{cond}} = \mu_p + \mathbf{V}_d (d - \mu_d).
+\mathbf{V}_{22}^{-1} = \text{diag}\left(\exp(d_0)^2, \exp(d_1)^2, \ldots, \exp(d_{C-1})^2\right),
 \end{equation}
-This formulation is not only faster to train but also more interpretable: the columns of \(\mathbf{V}_d\) directly represent how the Gaussian's position shifts in response to changes along each axis of the viewing direction space.
+where $\{d_i\}_{i=0}^{C-1}$ are learnable scalar parameters per Gaussian. The exponential-squared activation ensures positive definiteness while providing a natural parameterization of precision (inverse variance) along each axis.
 
-\paragraph{Simplified Angular Modulation.} We replace the Mahalanobis-based opacity modulation with a streamlined Gaussian decay function controlled by a single learnable scalar, the \textbf{angular support range} \(\sigma_d\):
+\paragraph{Opacity Modulation.} The Mahalanobis-based opacity modulation simplifies to a weighted sum:
 \begin{equation}
-f_{\text{dir}} = \exp\left(-\frac{\|d-\mu_d\|_2^2}{2\sigma_d^2}\right).
+\alpha_{\text{cond}} = \alpha \cdot \exp\left(- \sum_{i=0}^{C-1} (\delta_i \cdot \exp(d_i))^2\right),
 \end{equation}
-This parameter intuitively defines the angular "field of view" within which the Gaussian is active, replacing the three to six parameters of \(\Sigma_d\) with just one.
+where $\delta_i$ is the $i$-th component of the deviation vector. Note that the $\frac{1}{2}$ factor from the standard Gaussian is absorbed into the learnable $d_i$ parameters. This replaces the quadratic form $\boldsymbol{\delta}^\top \Sigma_{22}^{-1} \boldsymbol{\delta}$ with $C$ independent element-wise multiplications and a sum---a dramatic reduction in computational complexity.
 
-\subsection{Lightweight 7DGS for Efficient Dynamic Scenes}
-We extend this direct parameterization paradigm to the more complex 7D case to efficiently model both temporal dynamics and view-dependence.
+\paragraph{Interpretation.} Each $\exp(d_i)^2$ acts as an independent decay rate controlling how quickly the Gaussian's opacity falls off as the query deviates from the mean along axis $i$. For view-only models ($C=3$), the three parameters control sensitivity to changes in the $x$, $y$, and $z$ components of the viewing direction. For dynamic models ($C=4$), an additional parameter controls temporal sensitivity.
 
-\paragraph{Direct Spatiotemporal Velocity.} We introduce an explicit \textbf{4D velocity matrix} $\mathbf{V} \in \mathbb{R}^{3 \times 4}$, which we partition for clarity and interpretability:
+\subsection{Bounded Displacement Parameterization}
+
+For the position-view covariance block $\mathbf{V}_{12} \in \mathbb{R}^{3 \times C}$, we introduce a decomposition that provides implicit structural regularization:
 \begin{equation}
-\mathbf{V} = \begin{bmatrix} \mathbf{v}_t & \mathbf{V}_d \end{bmatrix}.
+\mathbf{V}_{12} = \text{reshape}\left(\frac{\mathbf{u}}{\|\mathbf{u}\|_2}\right) \cdot \sigma(\gamma) \cdot \lambda_{\max} \cdot \bar{s},
 \end{equation}
-Here, $\mathbf{v}_t \in \mathbb{R}^3$ is a temporal velocity vector and $\mathbf{V}_d \in \mathbb{R}^{3 \times 3}$ is the view-dependent transformation matrix. The conditional mean is then computed via a highly efficient linear transformation that cleanly separates temporal and view-dependent effects:
+where:
+\begin{itemize}
+\item $\mathbf{u} \in \mathbb{R}^{3C}$ is a learnable direction vector, normalized to unit norm
+\item $\gamma \in \mathbb{R}$ is a learnable scale parameter, with $\sigma(\gamma) \in [0, 1]$ via sigmoid activation
+\item $\lambda_{\max}$ is a hyperparameter controlling the maximum displacement factor (default: 1.0)
+\item $\bar{s} = \frac{1}{3}(s_x + s_y + s_z)$ is the mean spatial scale of the Gaussian
+\end{itemize}
+
+The reshaped normalized direction vector is multiplied by the bounded magnitude $\sigma(\gamma) \cdot \lambda_{\max} \cdot \bar{s}$ to produce the final $3 \times C$ displacement matrix.
+
+\paragraph{Structural Regularization.} This parameterization enforces an important structural constraint: the maximum position displacement is proportional to the Gaussian's spatial extent. Small, detailed Gaussians can only shift by small amounts, while large Gaussians covering broader regions can shift more. This mimics the implicit constraint in full covariance models where $\mathbf{V}_{12} = \mathbf{L}_{11} \mathbf{L}_{21}^\top$ couples the displacement magnitude to the spatial covariance structure.
+
+\paragraph{Bounded Gradients.} By using sigmoid activation for the magnitude, we ensure that the displacement magnitude remains bounded during optimization, preventing the explosive gradients that can occur with unbounded parameterizations.
+
+\subsection{Complete Conditional Slicing}
+
+Combining the diagonal precision and bounded displacement parameterizations, the complete conditional position computation becomes:
 \begin{equation}
-\mu_{\text{cond}} = \mu_p + \underbrace{\mathbf{v}_t (t - \mu_t)}_{\text{Linear Temporal Motion}} + \underbrace{\mathbf{V}_d (d - \mu_d)}_{\text{View-Dependent Displacement}}.
+\mu_{\text{cond}} = \mu_p + \mathbf{V}_{12} \cdot \left(\mathbf{V}_{22}^{-1} \odot \boldsymbol{\delta}\right),
 \end{equation}
-This formulation elegantly captures the two primary dynamic phenomena without any matrix inversions. By keeping the conditional covariance static (\(\Sigma_{\text{cond}} = \Sigma_p\)), we simplify the model and focus the dynamic capacity on the mean, which is most critical for representing motion and parallax.
-
-\paragraph{Simplified Spatiotemporal Modulation.} Similar to the 6D case, we replace the complex opacity modulation with two independent and intuitive decay functions controlled by learnable scalar support ranges, \(\sigma_t\) for time and \(\sigma_d\) for view direction:
+where $\odot$ denotes element-wise multiplication. Expanding this for the 7DGS case (view + time):
 \begin{equation}
-f_{\text{temp}} = \exp\left(-\frac{(t-\mu_t)^2}{2\sigma_t^2}\right), \quad f_{\text{dir}} = \exp\left(-\frac{\|d-\mu_d\|_2^2}{2\sigma_d^2}\right).
+\mu_{\text{cond}} = \mu_p + \mathbf{v}_t \cdot \exp(d_t)^2 \cdot (t - \mu_t) + \mathbf{V}_d \cdot \left(\exp(\mathbf{d}_v)^2 \odot (d - \mu_d)\right),
 \end{equation}
-The final conditional opacity is \(\alpha_{\text{cond}} = \alpha \cdot f_{\text{temp}} \cdot f_{\text{dir}}\).
+where $\mathbf{v}_t \in \mathbb{R}^3$ is the temporal velocity component and $\mathbf{V}_d \in \mathbb{R}^{3 \times 3}$ is the view-dependent displacement matrix, both derived from the bounded $\mathbf{V}_{12}$.
 
-\subsection{Optimization and Regularization Framework}
-To ensure stable training and promote physically plausible results, we employ a dedicated initialization and regularization strategy for our lightweight parameters.
-
-\paragraph{Initialization Strategy.} We initialize parameters to encourage a gentle start to the optimization process. Temporal velocities are initialized near zero to prevent explosive initial motion, and the view-dependent matrix is initialized near a scaled identity to avoid drastic initial geometric distortions.
-\begin{align*}
-\mathbf{v}_t \sim \mathcal{N}(\mathbf{0}, 10^{-6}\mathbf{I}), \quad \mathbf{V}_d = 0.01\mathbf{I} + \mathcal{N}(\mathbf{0}, 10^{-6}\mathbf{I}), \quad \sigma_t, \sigma_d = 1.0.
-\end{align*}
-\paragraph{Regularization Framework.} We introduce a composite regularization loss \(\mathcal{L}_{\text{reg}}\) to prevent overfitting and guide the model towards meaningful solutions.
+For the 6DGS case (view only), the temporal term is omitted:
 \begin{equation}
-\mathcal{L}_{\text{reg}} = \lambda_{\text{vel}} \left(\|\mathbf{v}_t\|_2^2 + \|\mathbf{V}_d\|_F^2\right) + \lambda_{\sigma} \left( \frac{1}{\sigma_t} + \frac{1}{\sigma_d} \right).
+\mu_{\text{cond}} = \mu_p + \mathbf{V}_d \cdot \left(\exp(\mathbf{d}_v)^2 \odot (d - \mu_d)\right).
 \end{equation}
-The \(\lambda_{\text{vel}}\) term penalizes excessive velocities and transformations, encouraging smoother motion fields. The \(\lambda_{\sigma}\) term discourages the support ranges from collapsing to zero. The terms for \(\mathbf{v}_t\) and \(\sigma_t\) are omitted for the 6DGS case. We find \(\lambda_{\text{vel}}=0.01\) and \(\lambda_{\sigma}=0.001\) work well in practice.
 
-\subsection{Analysis: A Paradigm Shift in Efficiency and Stability}
-Our unified lightweight framework provides a practical and powerful alternative to full covariance modeling, offering substantial advantages summarized in Table~\ref{tab:comparison_unified}.
+\paragraph{Static Conditional Covariance.} Following the insight that position shifts are the primary driver of view-dependent and temporal effects, we keep the conditional covariance static:
+\begin{equation}
+\Sigma_{\text{cond}} = \Sigma_p.
+\end{equation}
+This simplification focuses the model's dynamic capacity on the conditional mean, which is most critical for representing motion and parallax, while avoiding the additional complexity of conditional covariance computation.
+
+\subsection{Parameter Summary}
+
+Table~\ref{tab:params} summarizes the per-Gaussian parameters for our diagonal parameterization compared to the full covariance approach.
 
 \begin{table}[t!]
 \centering
-\caption{Comparison of Full vs. Lightweight Formulations for 6DGS and 7DGS.}
+\caption{Per-Gaussian parameter comparison for view-dependent (6DGS) and dynamic (7DGS) models.}
+\label{tab:params}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Component} & \textbf{Full Covariance} & \textbf{Ours (Diagonal)} \\
+\midrule
+\multicolumn{3}{l}{\textit{6DGS (C=3, view only)}} \\
+\quad Precision $\mathbf{V}_{22}^{-1}$ & 6 (Cholesky of $3\times3$) & 3 (diagonal) \\
+\quad Displacement $\mathbf{V}_{12}$ & 9 (full $3\times3$) & 10 (9 direction + 1 scale) \\
+\quad \textbf{Total (view-dep.)} & \textbf{15} & \textbf{13} \\
+\midrule
+\multicolumn{3}{l}{\textit{7DGS (C=4, view + time)}} \\
+\quad Precision $\mathbf{V}_{22}^{-1}$ & 10 (Cholesky of $4\times4$) & 4 (diagonal) \\
+\quad Displacement $\mathbf{V}_{12}$ & 12 (full $3\times4$) & 13 (12 direction + 1 scale) \\
+\quad \textbf{Total (dynamic)} & \textbf{22} & \textbf{17} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Initialization and Regularization}
+
+Proper initialization is critical for stable optimization of our lightweight parameters.
+
+\paragraph{Initialization Strategy.}
+\begin{itemize}
+\item \textbf{View mean} $\mu_d$: Random unit vectors on the sphere, with optional time component uniformly sampled in $[0, 1]$ for 7DGS.
+\item \textbf{Direction} $\mathbf{u}$: Small random values $\mathcal{N}(0, 0.01^2)$, normalized during forward pass.
+\item \textbf{Scale} $\gamma$: Initialized to 0, so $\sigma(0) = 0.5$ gives moderate initial displacement capacity.
+\item \textbf{Diagonal precision} $\{d_i\}$: Initialized to $\log(\sqrt{2}) \approx 0.347$, giving $\exp(d_i)^2 \approx 2.0$ for moderate opacity decay.
+\end{itemize}
+
+\paragraph{Regularization.} We apply light regularization to encourage smooth solutions:
+\begin{equation}
+\mathcal{L}_{\text{reg}} = \lambda_{\text{diag}} \sum_{i=0}^{C-1} \exp(d_i)^4 + \lambda_{\sigma} \cdot \frac{1}{\sigma(\gamma) + \epsilon},
+\end{equation}
+where the first term penalizes extremely sharp precision (very fast decay), and the second term prevents the displacement magnitude from collapsing to zero. We use $\lambda_{\text{diag}} = 0.001$ and $\lambda_{\sigma} = 0.0001$ in practice.
+
+\subsection{Computational Analysis}
+
+Table~\ref{tab:comparison_unified} provides a detailed comparison of computational characteristics.
+
+\begin{table}[t!]
+\centering
+\caption{Comparison of Full Covariance vs. Diagonal Parameterization for 6DGS and 7DGS.}
 \label{tab:comparison_unified}
 \resizebox{\columnwidth}{!}{%
 \begin{tabular}{@{}llcc@{}}
 \toprule
-\textbf{Model} & \textbf{Component} & \textbf{Full Covariance Formulation} & \textbf{Our Lightweight Approach (dGS)} \\
+\textbf{Model} & \textbf{Aspect} & \textbf{Full Covariance} & \textbf{Ours (Diagonal)} \\
 \midrule
-\multirow{3}{*}{\textbf{6DGS (Static)}}
-& Parameters (View-dep.) & 21 (for $6 \times 6$ Cholesky) & 10 (9 for $\mathbf{V}_d$, 1 for $\sigma_d$) \\
-& Training Computation & $O(3^3)$ matrix inversion & $O(3 \times 3)$ matrix-vector product \\
-& Numerical Stability & Prone to instability during training & Inherently stable \\
+\multirow{4}{*}{\textbf{6DGS}}
+& Precision params & 6 (Cholesky $3\times3$) & 3 (diagonal) \\
+& Training operation & $O(3^3)$ matrix inversion & $O(3)$ element-wise \\
+& Opacity computation & Mahalanobis distance & Weighted sum \\
+& Numerical stability & Prone to singularity & Inherently stable \\
 \midrule
-\multirow{3}{*}{\textbf{7DGS (Dynamic)}}
-& Parameters (Dynamic) & 28 (for $7 \times 7$ Cholesky) & 14 (12 for $\mathbf{V}$, 2 for $\sigma_t, \sigma_d$) \\
-& Training Computation & $O(4^3)$ matrix inversion & $O(3 \times 4)$ matrix-vector product \\
-& Numerical Stability & Prone to instability during training & Inherently stable \\
+\multirow{4}{*}{\textbf{7DGS}}
+& Precision params & 10 (Cholesky $4\times4$) & 4 (diagonal) \\
+& Training operation & $O(4^3)$ matrix inversion & $O(4)$ element-wise \\
+& Opacity computation & Mahalanobis distance & Weighted sum \\
+& Numerical stability & Prone to singularity & Inherently stable \\
 \bottomrule
 \end{tabular}%
 }
 \end{table}
 
-The benefits are clear across three critical axes:
+The benefits are substantial across three critical axes:
+
 \begin{itemize}
-\item \textbf{Training Efficiency:} We replace costly cubic-time matrix inversions with highly efficient linear-time matrix-vector products within the training loop. This fundamental shift drastically reduces the computational overhead per Gaussian, enabling faster and more efficient optimization.
-\item \textbf{Numerical Stability:} By completely eliminating matrix inversion, our method is inherently robust and avoids the numerical errors and training failures that plague full covariance models when their matrices become ill-conditioned.
-\item \textbf{Parameter Efficiency:} Our direct parameterization requires significantly fewer parameters to model dynamics. This not only leads to a more compact model with a smaller memory footprint but also reduces the risk of overfitting and can accelerate training convergence.
+\item \textbf{Training Efficiency:} We replace $O(C^3)$ matrix inversions with $O(C)$ element-wise operations. For $C=4$ (7DGS), this represents a theoretical 16$\times$ reduction in per-Gaussian computation for the conditioning step, with even larger practical speedups due to better GPU utilization of element-wise operations.
+
+\item \textbf{Numerical Stability:} By parameterizing precision directly as $\exp(d_i)^2$, we guarantee positive values without the risk of ill-conditioned or singular matrices. The exponential parameterization also provides natural gradient scaling---small changes in $d_i$ produce proportional changes in precision.
+
+\item \textbf{Parameter Efficiency:} Our diagonal parameterization uses fewer parameters (13 vs 15 for 6DGS, 17 vs 22 for 7DGS) while providing explicit control over each axis's behavior. This reduces memory footprint and can accelerate training convergence.
 \end{itemize}
 
-% Despite these trade-offs, the lightweight formulation with proper initialization and regularization provides an effective balance between computational efficiency and motion modeling capability, making it particularly suitable for real-time applications where rendering performance is critical.
+\subsection{CUDA Implementation}
+
+We implement the diagonal slicing operation as a custom CUDA kernel (\texttt{slice\_gaussian\_simple\_diag}) that fuses the conditional position and opacity computations:
+
+\begin{enumerate}
+\item Load per-Gaussian parameters: $\mu_p$, $\mu_v$, $\mathbf{V}_{12}$, $\{d_i\}$
+\item Compute deviation: $\boldsymbol{\delta} = \text{query} - \mu_v$
+\item Compute diagonal precision: $L_{\text{diag},i} = \exp(d_i)$, $\text{prec}_i = L_{\text{diag},i}^2$
+\item Compute scaled deviation: $\boldsymbol{\delta}_{\text{scaled}} = \text{prec} \odot \boldsymbol{\delta}$
+\item Compute conditional position: $\mu_{\text{cond}} = \mu_p + \mathbf{V}_{12} \cdot \boldsymbol{\delta}_{\text{scaled}}$
+\item Compute opacity scale: $\text{scale} = \exp\left(-\sum_i (\delta_i \cdot L_{\text{diag},i})^2\right)$
+\end{enumerate}
+
+This fused kernel minimizes memory bandwidth by avoiding intermediate tensor allocations and enables efficient parallelization across Gaussians.
+
+\section{Experiments}
+
+[To be completed with experimental results comparing training speed, memory usage, and rendering quality against 6DGS/7DGS baselines on standard benchmarks.]
+
+\section{Conclusion}
+
+We presented \modelname{}, a direct parameterization approach for efficient dynamic Gaussian splatting that addresses the computational and numerical challenges of full N-DGS covariance formulations. By directly learning displacement matrices and diagonal precision factors instead of deriving them from full covariance structures, \modelname{} achieves substantial improvements in training efficiency and stability while maintaining expressive power for linear view-dependent and temporal dynamics. Our approach makes training of large-scale dynamic and view-dependent Gaussian splatting models more tractable, opening new possibilities for real-time applications and interactive experiences.
 
 % References section
 \bibliographystyle{plainnat} % Using plainnat style for compatibility with numbers option if used

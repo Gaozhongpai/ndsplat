@@ -94,7 +94,10 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
                                     use_rot_scale_l_triangle=dataset.use_rot_scale_l_triangle)
     elif mode == "dgs" or mode == "dgs-color":
         # DGS/DGS-color mode: Position-based (dgs) or joint position+color (dgs-color) with simplified v_12/L_22_inv parameterization
-        gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim)
+        gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim,
+                                  use_view_dependent_pos=dataset.use_view_dependent_pos,
+                                  use_view_dependent_scale=dataset.use_view_dependent_scale,
+                                  use_view_dependent_rotation=dataset.use_view_dependent_rotation)
     else:
         gaussians = GaussianModel(dataset.sh_degree)
 
