@@ -63,7 +63,7 @@ for dir in "$base_dir"*/; do
 
         output_dir="output/opacity_only/tandt_pbr/${scene_name}"
         echo "Processing ${scene_name} with mode opacity_only..."
-        run_experiment "dgs-full" "$output_dir" "$dir" "--use_view_dependent_pos False"
+        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos False"
     fi
 done
 
@@ -83,7 +83,7 @@ for dir in "$base_dir"*/; do
 
         output_dir="output/opacity_pos/tandt_pbr/${scene_name}"
         echo "Processing ${scene_name} with mode opacity_pos..."
-        run_experiment "dgs-full" "$output_dir" "$dir" "--use_view_dependent_pos True"
+        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True"
     fi
 done
 

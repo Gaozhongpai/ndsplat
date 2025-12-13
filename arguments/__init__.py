@@ -31,7 +31,6 @@ class ParamGroup:
     # Parameters that should accept explicit True/False values from command line
     EXPLICIT_BOOL_PARAMS = {
         'use_view_dependent_pos',
-        'use_view_dependent_scale',
         'use_view_dependent_rotation',
     }
 
@@ -83,7 +82,6 @@ class ModelParams(ParamGroup):
         self.use_jpeg_compression = False  # If True: use JPEG compression for images to save GPU memory (slower but memory-efficient)
         # DGS view-dependent flags (only used when mode="dgs")
         self.use_view_dependent_pos = True  # Enable view-dependent position shift
-        self.use_view_dependent_scale = False  # NOT USED (scale is not view-dependent)
         self.use_view_dependent_rotation = True  # Enable time-dependent rotation (only when input_dim=7)
         super().__init__(parser, "Loading Parameters", sentinel)
 
