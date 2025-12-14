@@ -69,6 +69,16 @@ class Scene:
         if load_iteration:
             if load_iteration == -1:
                 self.loaded_iter = searchForMaxIteration(os.path.join(self.model_path, "point_cloud"))
+            elif load_iteration == "best":
+                # Load best iteration from iteration_best folder
+                best_iter_file = os.path.join(self.model_path, "point_cloud", "iteration_best", "iteration.txt")
+                if os.path.exists(best_iter_file):
+                    with open(best_iter_file, 'r') as f:
+                        self.loaded_iter = "best"
+                    print("Loading best model checkpoint")
+                else:
+                    print("Warning: No best checkpoint found, loading latest instead")
+                    self.loaded_iter = searchForMaxIteration(os.path.join(self.model_path, "point_cloud"))
             else:
                 self.loaded_iter = load_iteration
             print("Loading trained model at iteration {}".format(self.loaded_iter))
@@ -147,9 +157,17 @@ class Scene:
             else:
                 self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent)
 
-    def save(self, iteration):
+    def save(self, iteration, is_best=False):
         point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))
         self.gaussians.save_ply(os.path.join(point_cloud_path, "point_cloud.ply"))
+        # Also save as best if requested
+        if is_best:
+            best_path = os.path.join(self.model_path, "point_cloud/iteration_best")
+            os.makedirs(best_path, exist_ok=True)
+            self.gaussians.save_ply(os.path.join(best_path, "point_cloud.ply"))
+            # Write iteration number to a file for reference
+            with open(os.path.join(best_path, "iteration.txt"), 'w') as f:
+                f.write(str(iteration))
 
     def getTrainCameras(self, scale=1.0):
         return self.train_cameras[scale]

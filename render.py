@@ -148,7 +148,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
 
 
-def render_sets(dataset: ModelParams, iteration: int, pipeline: PipelineParams, skip_train: bool, skip_test: bool, measure_fps: bool = False):
+def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_train: bool, skip_test: bool, measure_fps: bool = False):
     """Render train and/or test sets.
 
     Args:
@@ -206,7 +206,7 @@ if __name__ == "__main__":
     parser = ArgumentParser(description="Testing script parameters")
     model = ModelParams(parser, sentinel=True)
     pipeline = PipelineParams(parser)
-    parser.add_argument("--iteration", default=-1, type=int, help="Iteration to load (-1 for latest)")
+    parser.add_argument("--iteration", default="-1", type=str, help="Iteration to load (-1 for latest, 'best' for best checkpoint)")
     parser.add_argument("--skip_train", action="store_true", help="Skip rendering training views")
     parser.add_argument("--skip_test", action="store_true", help="Skip rendering test views")
     parser.add_argument("--measure_fps", action="store_true", help="Measure FPS instead of saving images")
@@ -218,5 +218,11 @@ if __name__ == "__main__":
     # Initialize system state (RNG)
     safe_state(args.quiet)
 
-    render_sets(model.extract(args), args.iteration, pipeline.extract(args),
+    # Handle 'best' iteration specially
+    if args.iteration == "best":
+        iteration = "best"
+    else:
+        iteration = int(args.iteration)
+
+    render_sets(model.extract(args), iteration, pipeline.extract(args),
                 args.skip_train, args.skip_test, args.measure_fps)

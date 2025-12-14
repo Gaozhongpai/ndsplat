@@ -37,8 +37,8 @@ run_experiment() {
         --eval \
         -w
 
-    # Render at multiple iterations
-    for iter in 7000 30000; do
+    # Render at multiple iterations (including best)
+    for iter in 7000 30000 best; do
         python render.py -m "$output_dir" \
             --skip_train \
             --iteration ${iter}

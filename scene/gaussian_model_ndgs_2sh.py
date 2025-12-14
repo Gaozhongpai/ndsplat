@@ -204,7 +204,6 @@ class GaussianModel:
             self.l_triangle_activation = lambda x: torch.sigmoid(x)*2.0-1.0
             self.l_triangle_inverse_activation = lambda x: inverse_sigmoid(torch.clip((x+1.0)/2.0, min=1e-6, max=1.0 - 1e-6))
 
-        self.mean_scale = 1.0
         self.setup_functions()
 
         # Compute indices for rest of l_triangle (excluding first 3 spatial rotation params)

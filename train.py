@@ -186,7 +186,9 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
 
     iter_start = torch.cuda.Event(enable_timing = True)
     iter_end = torch.cuda.Event(enable_timing = True)
-    
+
+    # Track best test PSNR for saving best checkpoint
+    best_psnr_info = {'best_psnr': 0.0, 'best_iteration': 0}
 
     viewpoint_stack = None
     ema_loss_for_log = 0.0
@@ -243,7 +245,7 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
                 progress_bar.close()
 
             # Log and save
-            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render_wrapper, (pipe, background, mode), log_file)
+            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render_wrapper, (pipe, background, mode), log_file, best_psnr_info)
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 print("\nNumber Gaussian: {}".format(gaussians.get_xyz.shape[0]))
@@ -441,7 +443,11 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
         log_file.write(f"Training completed at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
         log_file.write(f"Total training time: {total_training_time:.2f} seconds ({total_training_time/60:.2f} minutes)\n")
         log_file.write(f"Final number of Gaussians: {gaussians.get_xyz.shape[0]}\n")
+        log_file.write(f"Best test PSNR: {best_psnr_info['best_psnr']:.4f} at iteration {best_psnr_info['best_iteration']}\n")
         log_file.close()
+
+    # Print best PSNR info
+    print(f"\nBest test PSNR: {best_psnr_info['best_psnr']:.4f} at iteration {best_psnr_info['best_iteration']}")
 
     # Return viewer to keep it alive after training if needed
     return viewer
@@ -477,7 +483,7 @@ def prepare_output_and_logger(args):
         print("Tensorboard not available: not logging progress")
     return tb_writer, log_file
 
-def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, log_file=None):
+def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, log_file=None, best_psnr_info=None):
     if tb_writer:
         tb_writer.add_scalar('train_loss_patches/l1_loss', Ll1.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/total_loss', loss.item(), iteration)
@@ -489,6 +495,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
         validation_configs = ({'name': 'test', 'cameras' : scene.getTestCameras()},
                               {'name': 'train', 'cameras' : [scene.getTrainCameras()[idx % len(scene.getTrainCameras())] for idx in range(5, 30, 5)]})
 
+        test_psnr_value = None  # Track test PSNR for best checkpoint
         for config in validation_configs:
             if config['cameras'] and len(config['cameras']) > 0:
                 l1_test = 0.0
@@ -514,6 +521,26 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                     tb_writer.add_scalar(config['name'] + '/loss_viewpoint - l1_loss', l1_test, iteration)
                     tb_writer.add_scalar(config['name'] + '/loss_viewpoint - psnr', psnr_test, iteration)
 
+                # Track test PSNR for best checkpoint saving
+                if config['name'] == 'test':
+                    test_psnr_value = float(psnr_test)
+
+        # Save best checkpoint if this is a new best test PSNR
+        if best_psnr_info is not None and test_psnr_value is not None:
+            if test_psnr_value > best_psnr_info['best_psnr']:
+                best_psnr_info['best_psnr'] = test_psnr_value
+                best_psnr_info['best_iteration'] = iteration
+                # Save best checkpoint
+                best_ckpt_path = os.path.join(scene.model_path, "chkpnt_best.pth")
+                torch.save((scene.gaussians.capture(), iteration), best_ckpt_path)
+                # Also save the point cloud
+                scene.save(iteration, is_best=True)
+                log_msg = f"[ITER {iteration}] New best test PSNR: {test_psnr_value:.4f} - Saving best checkpoint"
+                print("\n" + log_msg)
+                if log_file:
+                    log_file.write(log_msg + "\n")
+                    log_file.flush()
+
         # Log number of Gaussians
         num_gaussians = scene.gaussians.get_xyz.shape[0]
         if log_file:
@@ -534,7 +561,7 @@ if __name__ == "__main__":
     vp = ViewerParams(parser)
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
-    parser.add_argument("--test_iterations", nargs="+", type=int, default=[500, 2_000, 7_000, 15_000, 30_000])
+    parser.add_argument("--test_iterations", nargs="+", type=int, default=[i for i in range(500, 30_001, 500)])
     parser.add_argument("--save_iterations", nargs="+", type=int, default=[500, 2_000, 7_000, 15_000, 30_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])

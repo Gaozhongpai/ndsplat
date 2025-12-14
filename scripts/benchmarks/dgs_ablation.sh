@@ -18,15 +18,31 @@ echo "=============================================="
 echo "Running DGS ablation benchmarks"
 echo "=============================================="
 
+# ============================================
+# Static scene benchmarks (input_dim=6)
+# ============================================
+# echo ""
+# echo "[1/4] Running NeRF Synthetic benchmark (static)..."
+# echo ""
+# bash "$SCRIPT_DIR/dgs_nerf_synthetic.sh"
+
+# echo ""
+# echo "[2/4] Running Tanks & Temples PBR benchmark (static)..."
+# echo ""
+# bash "$SCRIPT_DIR/dgs_6dgs_pbr.sh"
+
+# ============================================
+# Dynamic scene benchmarks (input_dim=7, mv=4)
+# ============================================
 echo ""
-echo "[1/2] Running NeRF Synthetic benchmark..."
+echo "[3/4] Running D-NeRF benchmark (dynamic)..."
 echo ""
-bash "$SCRIPT_DIR/dgs_nerf_synthetic.sh"
+bash "$SCRIPT_DIR/dgs_dnerf.sh"
 
 echo ""
-echo "[2/2] Running Tanks & Temples PBR benchmark..."
+echo "[4/4] Running 7DGS PBR benchmark (dynamic)..."
 echo ""
-bash "$SCRIPT_DIR/dgs_6dgs_pbr.sh"
+bash "$SCRIPT_DIR/dgs_7dgs_pbr.sh"
 
 echo ""
 echo "=============================================="

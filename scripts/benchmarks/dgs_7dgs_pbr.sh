@@ -1,12 +1,13 @@
 #!/bin/bash
 
-# Benchmark different modes on Tanks & Temples PBR datasets
+# Benchmark different modes on 7DGS PBR dynamic datasets
 #
 # Modes:
 # | Mode         | Output Dir                | Description                            |
 # |--------------|---------------------------|----------------------------------------|
 # | opacity_only | output/opacity_only/...   | Opacity conditioning only (no position)|
 # | opacity_pos  | output/opacity_pos/...    | Opacity + Position conditioning        |
+# | opacity_pos_rot | output/opacity_pos_rot/... | Opacity + Position + Rotation cond. |
 # | ndgs         | output/ndgs/...           | N-DGS with full Cholesky precision     |
 #
 # Note: Rotation conditioning is only available for dynamic scenes (C=4 with time)
@@ -14,7 +15,7 @@
 
 shopt -s dotglob
 
-base_dir="/code/dataset/tandt_db/6dgs-pbr/"
+base_dir="/code/dataset/dyct/7dgs_pbr/"
 
 # Function to run experiment for a given mode and output directory
 run_experiment() {
@@ -33,6 +34,8 @@ run_experiment() {
     python train.py -s "$dir" \
         --model_path "$output_dir" \
         --mode "$mode" \
+        --mv 4 \
+        --input_dim 7 \
         $extra_args \
         --eval
 
@@ -40,7 +43,8 @@ run_experiment() {
     for iter in 7000 30000 best; do
         python render.py -m "$output_dir" \
             --skip_train \
-            --iteration ${iter}
+            --iteration ${iter} \
+            --input_dim 7
     done
 
     # Compute metrics
@@ -61,7 +65,7 @@ for dir in "$base_dir"*/; do
             continue
         fi
 
-        output_dir="output/opacity_only/tandt_pbr/${scene_name}"
+        output_dir="output/opacity_only/7dgs_pbr/${scene_name}"
         echo "Processing ${scene_name} with mode opacity_only..."
         run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos False"
     fi
@@ -81,14 +85,34 @@ for dir in "$base_dir"*/; do
             continue
         fi
 
-        output_dir="output/opacity_pos/tandt_pbr/${scene_name}"
+        output_dir="output/opacity_pos/7dgs_pbr/${scene_name}"
         echo "Processing ${scene_name} with mode opacity_pos..."
         run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True"
     fi
 done
 
 # ============================================
-# 3. NDGS mode (full Cholesky precision)
+# 3. opacity_pos_rot mode (opacity + position + rotation)
+# ============================================
+echo "=============================================="
+echo "Running opacity_pos_rot mode benchmarks"
+echo "=============================================="
+
+for dir in "$base_dir"*/; do
+    if [ -d "$dir" ]; then
+        scene_name=$(basename "${dir%/}")
+        if [[ "$scene_name" == *.zip ]]; then
+            continue
+        fi
+
+        output_dir="output/opacity_pos_rot/7dgs_pbr/${scene_name}"
+        echo "Processing ${scene_name} with mode opacity_pos_rot..."
+        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --use_view_dependent_rot True"
+    fi
+done
+
+# ============================================
+# 4. NDGS mode (full Cholesky precision)
 # ============================================
 echo "=============================================="
 echo "Running NDGS mode benchmarks"
@@ -101,7 +125,7 @@ for dir in "$base_dir"*/; do
             continue
         fi
 
-        output_dir="output/ndgs/tandt_pbr/${scene_name}"
+        output_dir="output/ndgs/7dgs_pbr/${scene_name}"
         echo "Processing ${scene_name} with mode ndgs..."
         run_experiment "ndgs" "$output_dir" "$dir" ""
     fi
