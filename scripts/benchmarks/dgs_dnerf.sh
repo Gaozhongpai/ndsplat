@@ -44,7 +44,8 @@ run_experiment() {
         python render.py -m "$output_dir" \
             --skip_train \
             --iteration ${iter} \
-            --input_dim 7
+            --input_dim 7 \
+            $extra_args
     done
 
     # Compute metrics
@@ -67,7 +68,7 @@ for dir in "$base_dir"*/; do
 
         output_dir="output/opacity_only/dnerf/${scene_name}"
         echo "Processing ${scene_name} with mode opacity_only..."
-        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos False"
+        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos False --use_view_dependent_rot False"
     fi
 done
 
@@ -87,7 +88,7 @@ for dir in "$base_dir"*/; do
 
         output_dir="output/opacity_pos/dnerf/${scene_name}"
         echo "Processing ${scene_name} with mode opacity_pos..."
-        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True"
+        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --use_view_dependent_rot False"
     fi
 done
 

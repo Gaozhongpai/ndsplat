@@ -530,12 +530,9 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
             if test_psnr_value > best_psnr_info['best_psnr']:
                 best_psnr_info['best_psnr'] = test_psnr_value
                 best_psnr_info['best_iteration'] = iteration
-                # Save best checkpoint
-                best_ckpt_path = os.path.join(scene.model_path, "chkpnt_best.pth")
-                torch.save((scene.gaussians.capture(), iteration), best_ckpt_path)
-                # Also save the point cloud
+                # Save best point cloud (no need for full checkpoint with optimizer state)
                 scene.save(iteration, is_best=True)
-                log_msg = f"[ITER {iteration}] New best test PSNR: {test_psnr_value:.4f} - Saving best checkpoint"
+                log_msg = f"[ITER {iteration}] New best test PSNR: {test_psnr_value:.4f} - Saving best point cloud"
                 print("\n" + log_msg)
                 if log_file:
                     log_file.write(log_msg + "\n")
@@ -569,6 +566,12 @@ if __name__ == "__main__":
     parser.add_argument("--keep_viewer", action="store_true", help="Keep the viewer running after training completes")
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
+
+    # For static scenes (input_dim != 7), use less frequent testing and skip best checkpoint
+    # Dynamic scenes (input_dim=7) need frequent testing to track best checkpoint
+    if args.input_dim != 7:
+        # Static scene: only test at key iterations (same as save_iterations)
+        args.test_iterations = [500, 2_000, 7_000, 15_000, 30_000]
 
     print("Optimizing " + args.model_path)
 

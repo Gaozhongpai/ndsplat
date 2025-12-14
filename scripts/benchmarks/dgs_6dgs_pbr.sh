@@ -40,7 +40,8 @@ run_experiment() {
     for iter in 7000 30000 best; do
         python render.py -m "$output_dir" \
             --skip_train \
-            --iteration ${iter}
+            --iteration ${iter} \
+            $extra_args
     done
 
     # Compute metrics

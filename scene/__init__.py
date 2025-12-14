@@ -158,16 +158,18 @@ class Scene:
                 self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent)
 
     def save(self, iteration, is_best=False):
-        point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))
-        self.gaussians.save_ply(os.path.join(point_cloud_path, "point_cloud.ply"))
-        # Also save as best if requested
         if is_best:
+            # Only save to iteration_best folder (don't create iteration_XXXX folder)
             best_path = os.path.join(self.model_path, "point_cloud/iteration_best")
             os.makedirs(best_path, exist_ok=True)
             self.gaussians.save_ply(os.path.join(best_path, "point_cloud.ply"))
             # Write iteration number to a file for reference
             with open(os.path.join(best_path, "iteration.txt"), 'w') as f:
                 f.write(str(iteration))
+        else:
+            # Regular save to iteration_XXXX folder
+            point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))
+            self.gaussians.save_ply(os.path.join(point_cloud_path, "point_cloud.ply"))
 
     def getTrainCameras(self, scale=1.0):
         return self.train_cameras[scale]

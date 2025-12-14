@@ -79,14 +79,15 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         makedirs(render_path.replace("renders", "renders_principle"), exist_ok=True)
         makedirs(render_path.replace("renders", "renders_non_principle"), exist_ok=True)
 
-    # FPS measurement and training time report only at iteration 30000 (final iteration)
-    if iteration == 30000:
-        # Report training time if available
-        training_time_path = os.path.join(model_path, "training_time.txt")
-        if os.path.exists(training_time_path):
-            with open(training_time_path, 'r') as f:
-                training_time = float(f.read().strip())
-            print(f"Training time: {training_time:.2f} seconds ({training_time/60:.2f} minutes)")
+    # FPS measurement at iteration 30000 (final) or best
+    if iteration == 30000 or iteration == "best":
+        # Report training time only at iteration 30000
+        if iteration == 30000:
+            training_time_path = os.path.join(model_path, "training_time.txt")
+            if os.path.exists(training_time_path):
+                with open(training_time_path, 'r') as f:
+                    training_time = float(f.read().strip())
+                print(f"Training time: {training_time:.2f} seconds ({training_time/60:.2f} minutes)")
 
         fpslist = []
         fps_measure_count = min(20, len(views))
