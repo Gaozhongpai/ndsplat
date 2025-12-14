@@ -42,8 +42,8 @@
 \usepackage{bm}
 \usepackage{amsmath}
 \usepackage{gensymb}
-\usepackage{siunitx}
-\usepackage{makecell}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
 
 % Add a period to the end of an abbreviation unless there's one
 % already, then \xspace.
@@ -69,9 +69,9 @@
 }
 
 % Custom commands
-\newcommand{\modelname}{dGS}
+\newcommand{\modelname}{\textit{d}GS}
 
-\title{\modelname: Direct Parameterization for Efficient Dynamic Gaussian Splatting}
+\title{\modelname: Direct Parameterization for Efficient Conditional Gaussian Splatting}
 
 % The \author macro works with any number of authors. There are two commands
 % used to separate the names and addresses of multiple authors: \And and \AND.
@@ -106,7 +106,7 @@ United Imaging Intelligence, Boston, MA
 \maketitle
 
 \begin{abstract}
-Gaussian Splatting has emerged as a state-of-the-art technique for novel view synthesis, with recent extensions like 6DGS and 7DGS enabling the modeling of complex view-dependent effects and dynamic scenes. However, these advanced formulations rely on high-dimensional covariance matrices that couple all conditioning effects together, introducing a critical bottleneck during training: costly and numerically unstable per-Gaussian matrix inversions required in every forward pass. In this paper, we propose \modelname{}, a lightweight parameterization that overcomes these limitations through \textbf{disentangled direct parameterization}. Our key insight is that the full $(3+C) \times (3+C)$ joint covariance matrix is not necessary---instead, we \textbf{disentangle} conditional Gaussian slicing into three independent components: \textbf{position conditioning} (view/time-dependent displacement), \textbf{opacity conditioning} (attention-based modulation), and \textbf{rotation conditioning} (time-dependent orientation for dynamic scenes). Each component is parameterized directly and efficiently: position uses a bounded displacement matrix $\mathbf{V}_{pq}$ with a shared Cholesky precision factor $\mathbf{L}$, opacity uses the same $\mathbf{L}$ for efficient Mahalanobis distance computation without matrix inversion, and rotation uses quaternion SLERP controlled by temporal attention. This disentanglement eliminates the need for full covariance modeling while maintaining expressiveness, delivering substantial practical advantages: training efficiency through elimination of matrix inversions, numerical stability by design, and modular control over each conditioning effect. \modelname{} provides a practical framework for efficiently training both static scenes with complex view-dependence and large-scale dynamic scenes at high frame rates.
+Gaussian Splatting has emerged as a leading technique for novel view synthesis, with extensions like 6DGS and 7DGS enabling view-dependent effects and dynamic scenes through high-dimensional covariance matrices. However, these formulations require per-Gaussian matrix inversions in every forward pass. We propose \modelname{}, which eliminates this overhead through \textbf{disentangled direct parameterization}. Our key insight is that the full joint covariance matrix is not necessary: we disentangle conditional Gaussian slicing into three independent components: position conditioning (view/time-dependent displacement), opacity conditioning (attention-based modulation), and rotation conditioning (time-dependent orientation for dynamic scenes). Position and opacity share a Cholesky precision factor $\mathbf{L}$ for efficient Mahalanobis distance computation without matrix inversion, while rotation uses quaternion SLERP controlled by temporal attention. This disentanglement eliminates full covariance modeling while maintaining expressiveness, delivering 15\% faster training and 26\% higher rendering throughput.
 \end{abstract}
 
 \section{Introduction}
@@ -115,9 +115,9 @@ Novel view synthesis has undergone a paradigm shift with the introduction of 3D 
 
 Recent work has responded to these challenges with sophisticated extensions that elevate Gaussian representations into higher-dimensional spaces. 6D Gaussian Splatting (6DGS) addresses view-dependent effects by modeling each primitive as a Gaussian in the joint space of position and viewing direction. Building upon this, 7D Gaussian Splatting (7DGS) incorporates temporal dynamics by adding a time dimension, creating a unified framework for both view-dependent effects and motion.
 
-While these higher-dimensional formulations demonstrate remarkable expressive power, they introduce a fundamental computational bottleneck that severely impacts their training. The mathematical framework underlying both 6DGS and 7DGS relies on conditioning high-dimensional Gaussian distributions, which necessitates the inversion of covariance sub-matrices. For 6DGS, this translates to a $3\times3$ matrix inversion for every Gaussian, and for 7DGS, a $4\times4$ inversion. This cubic-complexity operation, performed in every forward pass during optimization, makes training exceptionally costly and slow. Beyond computational costs, these matrix inversions introduce critical numerical instabilities. During optimization, covariance matrices may become ill-conditioned or approach singularity, leading to numerical errors that derail training. This fragility undermines the reliability of these methods. While it is possible to pre-process the model after training to cache the results of these inversions and accelerate inference, this does not address the core issues of training inefficiency and model complexity. The crux of the problem lies in the fundamental design philosophy: they model dynamics implicitly through complex covariance structures, deriving transformations through expensive matrix operations.
+While these higher-dimensional formulations demonstrate remarkable expressive power, their design introduces unnecessary computational overhead. The mathematical framework underlying both 6DGS and 7DGS relies on conditioning high-dimensional Gaussian distributions, which necessitates the inversion of covariance sub-matrices. For 6DGS, this translates to a $3\times3$ matrix inversion for every Gaussian, and for 7DGS, a $4\times4$ inversion. While these small matrix inversions are not prohibitively expensive, they represent an avoidable cost when performed in every forward pass during optimization. Additionally, these matrix inversions can introduce numerical issues when covariance matrices become ill-conditioned during optimization. The crux of the problem lies in the fundamental design philosophy: they model dynamics implicitly through complex covariance structures, deriving transformations through matrix operations that are simply not necessary.
 
-In this paper, we introduce \textbf{\modelname{}}, a lightweight framework that resolves this tension through \textbf{disentangled direct parameterization}. The `\textbf{d}' in \modelname{} signifies our core principle: rather than learning complex covariance matrices and \textit{deriving} motion through costly inversions, we \textbf{d}isentangle the conditioning into independent components and \textbf{d}irectly parameterize each one---the \textbf{d}isplacement for position, \textbf{d}ecay for opacity, and \textbf{d}elta for rotation.
+In this paper, we introduce \textbf{\modelname{}}, a lightweight framework that resolves this tension through \textbf{disentangled direct parameterization}. The `\textbf{d}' in \modelname{} signifies our core principle: rather than learning complex covariance matrices and \textit{deriving} motion through matrix inversions, we \textbf{d}isentangle the conditioning into independent components and \textbf{d}irectly parameterize each one---the \textbf{d}isplacement for position, \textbf{d}ecay for opacity, and \textbf{d}elta for rotation.
 
 Our key insight is that the full $(3+C) \times (3+C)$ joint covariance matrix used in N-DGS is unnecessarily complex. In full covariance models, all effects---position shift, opacity modulation, and covariance adjustment---are entangled through a single matrix that must be inverted. We observe that these effects can be \textbf{disentangled} into independent modules, each with its own efficient parameterization:
 
@@ -129,7 +129,7 @@ Our key insight is that the full $(3+C) \times (3+C)$ joint covariance matrix us
 \item \textbf{Rotation Conditioning:} For dynamic scenes ($C=4$), rotation is handled by a completely separate module using quaternion SLERP controlled by time-based attention. This decouples rotational dynamics from view-dependent effects, reflecting the physical intuition that object rotation varies with time but not viewing angle.
 \end{enumerate}
 
-This disentanglement is the core contribution of \modelname{}. By separating position, opacity, and rotation into independent modules, we eliminate the need for a full joint covariance matrix and its costly inversion. Each module can be optimized and understood independently, while the shared Cholesky factor $\mathbf{L}$ provides efficient computation for both position and opacity conditioning. Our formulation achieves improvements across three axes: training efficiency by eliminating matrix inversion, numerical stability by construction through exponential activation on Cholesky diagonals, and modular design that enables independent control over each conditioning effect.
+This disentanglement is the core contribution of \modelname{}. By separating position, opacity, and rotation into independent modules, we eliminate the need for a full joint covariance matrix and its inversion. Each module can be optimized and understood independently, while the shared Cholesky factor $\mathbf{L}$ provides efficient computation for both position and opacity conditioning. Our formulation achieves improvements across three axes: simpler computation by replacing matrix inversion with triangular solves, numerical stability by construction through exponential activation on Cholesky diagonals, and modular design that enables independent control over each conditioning effect.
 
 \section{Related Work}
 \label{sec:related_work}
@@ -179,15 +179,17 @@ The opacity is modulated based on the Mahalanobis distance to the canonical quer
 \end{equation}
 where $\lambda$ is a scaling factor (default $\lambda = 0.35$).
 
-\paragraph{Computational Bottleneck.} While this unified formulation is mathematically elegant and expressive, it introduces a critical bottleneck during training: for every Gaussian in every forward pass, it requires computing the inverse of the $C \times C$ matrix $\Sigma_{qq}$. For 6DGS this is an $O(3^3)$ operation, and for 7DGS an $O(4^3)$ operation per Gaussian. Beyond computational cost, these matrix inversions are susceptible to numerical instability when $\Sigma_{qq}$ becomes ill-conditioned during optimization. Although $\Sigma_{pq}\Sigma_{qq}^{-1}$ and the conditional covariance can be pre-computed after training to accelerate inference, the training process itself remains fundamentally inefficient. This escalating complexity motivates our search for a more efficient and stable parameterization.
+\paragraph{Computational Overhead.} While this unified formulation is mathematically elegant and expressive, it requires computing the inverse of the $C \times C$ matrix $\Sigma_{qq}$ for every Gaussian in every forward pass. For 6DGS this is an $O(3^3)$ operation, and for 7DGS an $O(4^3)$ operation per Gaussian. These matrix inversions can also be susceptible to numerical instability when $\Sigma_{qq}$ becomes ill-conditioned during optimization. Although $\Sigma_{pq}\Sigma_{qq}^{-1}$ and the conditional covariance can be pre-computed after training to accelerate inference, the training process incurs this overhead repeatedly. This motivates our search for a simpler parameterization.
 
 \section{Our Approach}
 
-The full covariance formulations of 6DGS and 7DGS model all conditioning effects through a single $(3+C) \times (3+C)$ joint covariance matrix. This entanglement is fundamentally inefficient: to compute any single effect (position shift, opacity modulation, or covariance adjustment), one must invert the entire $C \times C$ conditioning block $\Sigma_{qq}$.
+The full covariance formulations of 6DGS and 7DGS model all conditioning effects through a single $(3+C) \times (3+C)$ joint covariance matrix. To compute any single effect (position shift, opacity modulation, or covariance adjustment), one must invert the entire $C \times C$ conditioning block $\Sigma_{qq}$.
 
 We propose \modelname{}, which \textbf{disentangles} these effects into three independent modules. Rather than deriving all transformations from a shared covariance structure, we directly parameterize each conditioning component separately. This disentanglement eliminates the need for full covariance modeling while enabling efficient, modular computation.
 
 \subsection{Overview}
+
+
 
 Our approach reformulates conditional Gaussian slicing into three \textbf{disentangled} components. Given the deviation $\boldsymbol{\delta} = q - \mu_q$ from the canonical view/time:
 \begin{align}
@@ -244,55 +246,42 @@ The original 6DGS does not support rotation conditioning. In 7DGS, rotation is h
 
 For dynamic scenes ($C=4$), we introduce an independent rotation module. Unlike position and opacity which depend on both view direction and time, rotation uses \textit{only the time dimension}, reflecting the physical intuition that object rotation varies with time but not viewing angle. Each Gaussian stores a base rotation $\mathbf{q}_{\text{base}}$, a rotation delta $\mathbf{q}_{\Delta}$, and a time-specific precision $\ell_t^{\text{rot}}$. At canonical time $\mu_t$, $\alpha_{\text{rot}} \approx 1$ and $\mathbf{q}_{\text{cond}} = \mathbf{q}_{\text{base}}$; as time deviates, the full delta is progressively applied via SLERP. This provides physical consistency (rotation varies with time, not view), parameter efficiency (only 5 additional parameters), and smooth dynamics on SO(3).
 
-\subsection{Initialization}
-
-Proper initialization is critical:
-\begin{itemize}
-\item \textbf{View mean} $\mu_d$: Random unit vectors, time in $[0, 1]$ for 7DGS.
-\item \textbf{Direction} $\mathbf{u}$: $\mathcal{N}(0, 0.01^2)$, normalized during forward pass.
-\item \textbf{Scale} $\gamma$: 0, giving $\sigma(0) = 0.5$ for moderate displacement.
-\item \textbf{Cholesky} $\mathbf{L}$: Diagonal $\log(2.0)$, off-diagonal 0.
-\item \textbf{Rotation delta} $\mathbf{q}_{\Delta}$: Identity with small noise on imaginary components.
-\item \textbf{Rotation precision} $\ell_t^{\text{rot}}$: $\log(\sqrt{2})$ for moderate time sensitivity.
-\end{itemize}
 
 \subsection{Computational Analysis}
 
-The benefits of our direct Cholesky parameterization are substantial across three critical axes:
-
-\begin{itemize}
-\item \textbf{Training Efficiency:} We replace $O(C^3)$ matrix inversions with $O(C^2)$ triangular matrix-vector multiplications. While asymptotically similar for small $C$, the practical difference is significant: matrix inversion requires solving a linear system with pivoting and numerical checks, while $\mathbf{L}^\top \boldsymbol{\delta}$ is a simple triangular solve that maps directly to highly optimized BLAS routines and CUDA kernels with no branching or numerical edge cases.
-
-\item \textbf{Numerical Stability:} By parameterizing the Cholesky factor directly with exponential activation on the diagonal, we guarantee that $\mathbf{V}_{qq}^{-1} = \mathbf{L}\mathbf{L}^\top$ is always symmetric positive definite. This eliminates the numerical instabilities that arise when covariance matrices become ill-conditioned during optimization---a common failure mode in the original formulation.
-
-\item \textbf{Unified Framework:} Our approach enables a single fused CUDA kernel that computes conditional position, opacity, and rotation in one pass. This minimizes memory bandwidth and intermediate allocations, providing practical speedups beyond the theoretical complexity reduction.
-\end{itemize}
+Our direct Cholesky parameterization replaces $O(C^3)$ matrix inversions with $O(C^2)$ triangular matrix-vector multiplications. For small $C$, the asymptotic difference is minor, but the simpler operation avoids pivoting and numerical checks required for matrix inversion. Parameterizing the Cholesky factor directly with exponential activation on the diagonal guarantees that $\mathbf{V}_{qq}^{-1} = \mathbf{L}\mathbf{L}^\top$ is always symmetric positive definite, avoiding potential numerical issues from ill-conditioned covariance matrices. Additionally, this formulation enables a single fused CUDA kernel that computes conditional position, opacity, and rotation in one pass, minimizing memory bandwidth and intermediate allocations.
 
 \subsection{CUDA Implementation}
 
-We implement the full conditional slicing operation as a custom CUDA kernel (\texttt{slice\_gaussian\_full}) that fuses position, opacity, and rotation computations in a single pass:
+We implement the full conditional slicing operation as a custom CUDA kernel (\texttt{slice\_gaussian\_full}) that fuses position, opacity, and rotation computations in a single pass, as shown in Algorithm~\ref{alg:slice}.
 
-\begin{enumerate}
-\item \textbf{Load parameters:} Per-Gaussian $\mu_p$, $\mu_q$, $\mathbf{V}_{pq}$, Cholesky factor $\mathbf{L}$, base rotation $\mathbf{q}_{\text{base}}$, rotation delta $\mathbf{q}_{\Delta}$, rotation precision $\ell_t^{\text{rot}}$
-\item \textbf{Compute deviation:} $\boldsymbol{\delta} = \text{query} - \mu_q$
-\item \textbf{Build precision matrix:} Reconstruct lower triangular $\mathbf{L}$ from stored parameters, applying $\exp(\cdot)$ to diagonal elements
-\item \textbf{Compute $\mathbf{L}^\top\boldsymbol{\delta}$:} Triangular matrix-vector multiply
-\item \textbf{Compute opacity scale:} $\alpha_{\text{scale}} = \exp(-\lambda \cdot \|\mathbf{L}^\top\boldsymbol{\delta}\|^2)$
-\item \textbf{Compute $\mathbf{L}(\mathbf{L}^\top\boldsymbol{\delta})$:} Second triangular matrix-vector multiply to get $\mathbf{V}_{qq}^{-1}\boldsymbol{\delta}$
-\item \textbf{Compute conditional position:} $\mu_{\text{cond}} = \mu_p + \mathbf{V}_{pq} \cdot (\mathbf{V}_{qq}^{-1}\boldsymbol{\delta})$
-\item \textbf{Compute rotation (if $C=4$):} Time attention $\alpha_{\text{rot}}$, SLERP interpolation, quaternion composition
-\end{enumerate}
+\begin{algorithm}[h]
+\caption{Conditional Gaussian Slicing}
+\label{alg:slice}
+\begin{algorithmic}[1]
+\Require Per-Gaussian parameters: $\mu_p$, $\mu_q$, $\mathbf{V}_{pq}$, Cholesky $\mathbf{L}$, $\mathbf{q}_{\text{base}}$, $\mathbf{q}_{\Delta}$, $\ell_t^{\text{rot}}$
+\Require Query point: $\text{query}$ (view direction, or view+time for 7DGS)
+\State $\boldsymbol{\delta} \gets \text{query} - \mu_q$ \Comment{Compute deviation}
+\State Reconstruct $\mathbf{L}$ with $\exp(\cdot)$ on diagonal \Comment{Build precision}
+\State $\mathbf{z} \gets \mathbf{L}^\top \boldsymbol{\delta}$ \Comment{Triangular multiply}
+\State $\alpha_{\text{scale}} \gets \exp(-\lambda \cdot \|\mathbf{z}\|^2)$ \Comment{Opacity scale}
+\State $\mathbf{y} \gets \mathbf{L} \mathbf{z}$ \Comment{Get $\mathbf{V}_{qq}^{-1}\boldsymbol{\delta}$}
+\State $\mu_{\text{cond}} \gets \mu_p + \mathbf{V}_{pq} \cdot \mathbf{y}$ \Comment{Conditional position}
+\If{$C = 4$} \Comment{Dynamic scene}
+    \State $\alpha_{\text{rot}} \gets \exp(-(\ell_t^{\text{rot}})^2 (t - \mu_t)^2)$
+    \State $\mathbf{q}_{\text{cond}} \gets \mathbf{q}_{\text{base}} \otimes \text{SLERP}(\mathbf{I}, \mathbf{q}_{\Delta}, 1 - \alpha_{\text{rot}})$
+\EndIf
+\State \Return $\mu_{\text{cond}}$, $\alpha_{\text{scale}}$, $\mathbf{q}_{\text{cond}}$
+\end{algorithmic}
+\end{algorithm}
 
 The kernel is templated on dimension $C$ (3 or 4) with compile-time loop unrolling for optimal performance. All matrix operations use registers rather than shared memory, as the small matrix sizes ($3\times3$ or $4\times4$) fit entirely in per-thread registers. This fused design minimizes global memory bandwidth by avoiding intermediate tensor allocations and enables efficient parallelization across millions of Gaussians.
 
 \section{Experiments}
 
-We evaluate our disentangled direct parameterization approach on the NeRF Synthetic dataset~\cite{mildenhall2020nerf}, comparing three configurations:
-\begin{itemize}
-    \item \textbf{N-DGS}: Full N-DGS formulation with joint position and opacity conditioning
-    \item \textbf{Opacity-Only}: Our approach with only opacity conditioning (no position shift)
-    \item \textbf{Opacity+Pos}: Our approach with both opacity and position conditioning
-\end{itemize}
+We evaluate our disentangled direct parameterization approach on the NeRF Synthetic dataset~\cite{mildenhall2020nerf}, comparing three configurations: (1) \textbf{N-DGS}: full N-DGS formulation with joint position and opacity conditioning, (2) \textbf{Opacity-Only}: our approach with only opacity conditioning (no position shift), and (3) \textbf{Opacity+Pos}: our approach with both opacity and position conditioning.
+
+Proper initialization is critical for stable training. We initialize the view mean $\mu_d$ as random unit vectors (with time in $[0, 1]$ for 7DGS), the direction $\mathbf{u}$ from $\mathcal{N}(0, 0.01^2)$ and normalize during forward pass, the scale $\gamma = 0$ giving $\sigma(0) = 0.5$ for moderate displacement, the Cholesky factor $\mathbf{L}$ with diagonal elements $\log(2.0)$ and off-diagonal elements 0, the rotation delta $\mathbf{q}_{\Delta}$ as identity with small noise on imaginary components, and the rotation precision $\ell_t^{\text{rot}} = \log(\sqrt{2})$ for moderate time sensitivity.
 
 Table~\ref{tab:nerf_synthetic} shows quantitative results at 30K iterations. All methods achieve comparable rendering quality, with our approaches matching or exceeding N-DGS performance while using the more efficient direct Cholesky parameterization.
 
@@ -359,9 +348,7 @@ Key observations:
 
 We presented \modelname{}, a disentangled direct parameterization approach for efficient dynamic Gaussian splatting. Our key insight is that the full $(3+C) \times (3+C)$ joint covariance matrix used in N-DGS is unnecessarily complex---the conditioning effects (position shift, opacity modulation, rotation) can be \textbf{disentangled} into independent modules, each with its own efficient parameterization.
 
-By separating these components, we eliminate the need for costly matrix inversions entirely. Position and opacity conditioning share a direct Cholesky precision factor $\mathbf{L}$, while rotation conditioning operates as an independent module using quaternion SLERP. This modular design enables efficient computation through simple matrix-vector multiplications, guarantees numerical stability through exponential activation on diagonal elements, and provides independent control over each conditioning effect.
-
-\modelname{} makes training of large-scale dynamic and view-dependent Gaussian splatting models more tractable, opening new possibilities for real-time applications and interactive experiences.
+By separating these components, we eliminate the need for matrix inversions. Position and opacity conditioning share a direct Cholesky precision factor $\mathbf{L}$, while rotation conditioning operates as an independent module using quaternion SLERP. This modular design enables computation through simple matrix-vector multiplications, guarantees numerical stability through exponential activation on diagonal elements, and provides independent control over each conditioning effect.
 
 % References section
 \bibliographystyle{plainnat} % Using plainnat style for compatibility with numbers option if used
