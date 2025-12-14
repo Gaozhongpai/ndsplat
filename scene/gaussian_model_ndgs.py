@@ -1442,11 +1442,8 @@ class GaussianModel:
             # which is directly compatible with diff_gaussian_rasterization
             m_cond, cov3D_precomp, pdf_cond = self.slice_gaussian(cond_params, c_dim=3, lambda_opc=lambda_opc)
 
-        # Compute opacity with conditional probability and learnable lambda_opc scaling
-        if self.learnable_lambda_opc:
-            opacity = self.get_opacity * pdf_cond * self.get_lambda_opc
-        else:
-            opacity = self.get_opacity * pdf_cond
+        # Compute opacity with conditional probability
+        opacity = self.get_opacity * pdf_cond
 
         # Set up rasterization
         tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)
@@ -1558,10 +1555,7 @@ class GaussianModel:
         m_cond, cov3D_precomp, pdf_cond = self.slice_gaussian(cond_params, c_dim=3, lambda_opc=lambda_opc)
 
         # Compute opacity with conditional probability
-        if self.learnable_lambda_opc:
-            opacity = self.get_opacity * pdf_cond * self.get_lambda_opc
-        else:
-            opacity = self.get_opacity * pdf_cond
+        opacity = self.get_opacity * pdf_cond
 
         # Set up rasterization
         tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)

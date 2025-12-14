@@ -295,16 +295,16 @@ Table~\ref{tab:nerf_synthetic} shows quantitative results at 30K iterations. All
 & \multicolumn{3}{c|}{\textbf{N-DGS}} & \multicolumn{3}{c|}{\textbf{Opacity-Only}} & \multicolumn{3}{c}{\textbf{Opacity+Pos}} \\
 Scene & PSNR$\uparrow$ & SSIM$\uparrow$ & LPIPS$\downarrow$ & PSNR$\uparrow$ & SSIM$\uparrow$ & LPIPS$\downarrow$ & PSNR$\uparrow$ & SSIM$\uparrow$ & LPIPS$\downarrow$ \\
 \midrule
-\texttt{Chair} & 35.83 & 0.987 & 0.013 & \textbf{36.02} & \textbf{0.987} & 0.013 & 36.00 & 0.987 & \textbf{0.013} \\
+\texttt{Chair} & 35.83 & 0.987 & 0.013 & \textbf{36.02} & 0.987 & 0.013 & 36.00 & 0.987 & 0.013 \\
 \texttt{Drums} & \textbf{26.90} & \textbf{0.957} & \textbf{0.035} & 26.78 & 0.956 & 0.036 & 26.76 & 0.956 & 0.036 \\
 \texttt{Ficus} & 34.11 & 0.985 & 0.013 & \textbf{35.14} & \textbf{0.988} & \textbf{0.011} & 34.57 & 0.986 & 0.012 \\
-\texttt{Hotdog} & 38.00 & \textbf{0.985} & 0.021 & 37.94 & 0.985 & 0.022 & \textbf{38.02} & 0.985 & \textbf{0.021} \\
-Lego & \textbf{35.51} & \textbf{0.981} & \textbf{0.018} & 35.27 & 0.980 & 0.019 & 35.03 & 0.980 & 0.020 \\
-\texttt{Materials} & 31.58 & 0.971 & 0.028 & 30.74 & 0.966 & 0.032 & \textbf{31.72} & \textbf{0.972} & \textbf{0.028} \\
-\texttt{Mic} & 35.35 & 0.991 & 0.006 & 35.64 & 0.992 & 0.006 & \textbf{35.90} & \textbf{0.992} & \textbf{0.006} \\
+\texttt{Hotdog} & 38.00 & 0.985 & 0.021 & 37.94 & 0.985 & 0.022 & \textbf{38.02} & 0.985 & 0.021 \\
+\texttt{Lego} & \textbf{35.51} & \textbf{0.981} & \textbf{0.018} & 35.27 & 0.980 & 0.019 & 35.03 & 0.980 & 0.020 \\
+\texttt{Materials} & 31.58 & 0.971 & 0.028 & 30.74 & 0.966 & 0.032 & \textbf{31.72} & \textbf{0.972} & 0.028 \\
+\texttt{Mic} & 35.35 & 0.991 & 0.006 & 35.64 & \textbf{0.992} & 0.006 & \textbf{35.90} & \textbf{0.992} & 0.006 \\
 \texttt{Ship} & \textbf{30.98} & \textbf{0.906} & \textbf{0.107} & 30.96 & 0.906 & 0.115 & 30.80 & 0.905 & 0.110 \\
 \midrule
-\textbf{\texttt{Mean}} & 33.53 & 0.970 & \textbf{0.030} & 33.56 & 0.970 & 0.032 & \textbf{33.60} & \textbf{0.970} & 0.031 \\
+\textbf{\texttt{Mean}} & 33.53 & 0.970 & \textbf{0.030} & 33.56 & 0.970 & 0.032 & \textbf{33.60} & 0.970 & 0.031 \\
 \bottomrule
 \end{tabular}%
 }
@@ -335,6 +335,55 @@ Scene & \#Gauss (K) & Time (min) & FPS & \#Gauss (K) & Time (min) & FPS & \#Gaus
 }
 \end{table}
 
+We additionally evaluate on the 6DGS-PBR dataset, which contains challenging view-dependent effects including subsurface scattering and complex reflections. Tables~\ref{tab:6dgs_pbr} and~\ref{tab:6dgs_pbr_efficiency} show the results.
+
+\begin{table}[h]
+\centering
+\caption{Quantitative comparison on 6DGS-PBR dataset at 30K iterations. Best results in \textbf{bold}.}
+\label{tab:6dgs_pbr}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l|ccc|ccc|ccc}
+\toprule
+& \multicolumn{3}{c|}{\textbf{N-DGS}} & \multicolumn{3}{c|}{\textbf{Opacity-Only}} & \multicolumn{3}{c}{\textbf{Opacity+Pos}} \\
+Scene & PSNR$\uparrow$ & SSIM$\uparrow$ & LPIPS$\downarrow$ & PSNR$\uparrow$ & SSIM$\uparrow$ & LPIPS$\downarrow$ & PSNR$\uparrow$ & SSIM$\uparrow$ & LPIPS$\downarrow$ \\
+\midrule
+\texttt{bunny\_cloud} & 34.18 & 0.990 & 0.056 & 43.33 & \textbf{0.993} & 0.042 & \textbf{43.60} & \textbf{0.993} & \textbf{0.040} \\
+\texttt{cloud} & \textbf{44.11} & \textbf{0.993} & \textbf{0.042} & 43.36 & 0.992 & 0.048 & 43.41 & 0.992 & 0.046 \\
+\texttt{dragon} & 35.27 & 0.924 & \textbf{0.042} & 33.53 & 0.894 & 0.054 & \textbf{36.07} & \textbf{0.939} & \textbf{0.042} \\
+\texttt{explosion} & \textbf{39.12} & \textbf{0.985} & \textbf{0.034} & 37.93 & 0.983 & 0.041 & 38.91 & \textbf{0.985} & 0.039 \\
+\texttt{rvr\_x} & 34.39 & 0.970 & 0.047 & 31.56 & 0.955 & 0.068 & \textbf{34.60} & 0.970 & 0.047 \\
+\texttt{smoke} & 39.19 & 0.989 & \textbf{0.043} & 37.88 & 0.988 & 0.051 & \textbf{39.49} & \textbf{0.990} & 0.047 \\
+\texttt{suzanne} & 26.98 & 0.929 & \textbf{0.104} & 26.71 & 0.927 & 0.111 & \textbf{27.13} & \textbf{0.930} & 0.106 \\
+\midrule
+\textbf{\texttt{Mean}} & 36.18 & 0.969 & 0.053 & 36.33 & 0.962 & 0.059 & \textbf{37.60} & \textbf{0.971} & \textbf{0.052} \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{Efficiency comparison on 6DGS-PBR dataset.}
+\label{tab:6dgs_pbr_efficiency}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l|rrr|rrr|rrr}
+\toprule
+& \multicolumn{3}{c|}{\textbf{N-DGS}} & \multicolumn{3}{c|}{\textbf{Opacity-Only}} & \multicolumn{3}{c}{\textbf{Opacity+Pos}} \\
+Scene & \#Gauss (K) & Time (min) & FPS & \#Gauss (K) & Time (min) & FPS & \#Gauss (K) & Time (min) & FPS \\
+\midrule
+\texttt{bunny\_cloud} & 77 & \textbf{36.81} & 533 & \textbf{63} & 42.10 & \textbf{679} & \textbf{63} & 46.71 & 621 \\
+\texttt{cloud} & \textbf{50} & 42.90 & 584 & 63 & \textbf{37.03} & \textbf{697} & 61 & 41.54 & 627 \\
+\texttt{dragon} & \textbf{125} & \textbf{12.78} & 679 & 131 & 14.56 & \textbf{784} & 141 & 13.42 & 712 \\
+\texttt{explosion} & \textbf{49} & \textbf{23.11} & \textbf{814} & 72 & 29.39 & 809 & 73 & 30.15 & 738 \\
+\texttt{rvr\_x} & 301 & 8.12 & 498 & \textbf{220} & \textbf{6.08} & \textbf{817} & 318 & 7.51 & 670 \\
+\texttt{smoke} & \textbf{52} & \textbf{47.09} & 572 & 72 & 55.47 & \textbf{575} & 74 & 58.03 & 538 \\
+\texttt{suzanne} & 245 & 31.48 & 422 & \textbf{223} & \textbf{28.04} & \textbf{579} & 233 & 30.38 & 519 \\
+\midrule
+\textbf{\texttt{Mean}} & 128 & \textbf{28.90} & 586 & \textbf{121} & 30.38 & \textbf{706} & 138 & 32.53 & 632 \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
 
 Key observations:
 \begin{itemize}

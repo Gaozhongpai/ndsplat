@@ -1030,10 +1030,8 @@ class GaussianModelColor:
         color_cond = torch.clamp(color_cond, 0.0, 1.0)
 
         # Compute final opacity
-        if self.learnable_lambda_opc:
-            opacity = self.get_opacity * opacity_scale * self.get_lambda_opc
-        else:
-            opacity = self.get_opacity * opacity_scale
+        # Note: lambda_opc is already applied inside the exponential in slice_color_gaussian
+        opacity = self.get_opacity * opacity_scale
 
         # Set up rasterization
         tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)
