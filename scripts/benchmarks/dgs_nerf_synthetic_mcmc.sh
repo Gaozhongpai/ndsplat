@@ -1,0 +1,135 @@
+#!/bin/bash
+
+# Benchmark different DGS modes with MCMC densification on NeRF synthetic datasets
+#
+# Modes:
+# | Mode         | Output Dir                     | Description                            |
+# |--------------|--------------------------------|----------------------------------------|
+# | opacity_only | output/mcmc/opacity_only/...   | Opacity conditioning only (no position)|
+# | opacity_pos  | output/mcmc/opacity_pos/...    | Opacity + Position conditioning        |
+# | ndgs         | output/mcmc/ndgs/...           | N-DGS with full Cholesky precision     |
+#
+# MCMC Parameters:
+# - densification_strategy: mcmc
+# - mcmc_cap_max: Maximum Gaussians (default 300k)
+# - noise_lr: Noise learning rate for spatial perturbation (default 1.0)
+# - opacity_reg: Opacity regularization weight (default 0.01)
+# - scale_reg: Scale regularization weight (default 0.01)
+#
+# Note: Rotation conditioning is only available for dynamic scenes (C=4 with time)
+# Note: Scale is NOT view-dependent (use get_scaling directly)
+
+shopt -s dotglob
+
+base_dir="/code/dataset/nerf_synthetic/"
+
+# MCMC parameters
+MCMC_CAP_MAX=300000
+NOISE_LR=1.0
+OPACITY_REG=0.01
+SCALE_REG=0.01
+
+# Function to run experiment for a given mode and output directory
+run_experiment() {
+    local mode=$1
+    local output_dir=$2
+    local dir=$3
+    local extra_args=$4
+
+    # Skip if results already exist
+    if [ -f "$output_dir/results.json" ]; then
+        echo "Skipping (results.json exists)"
+        return
+    fi
+
+    # Train with MCMC densification
+    python train.py -s "$dir" \
+        --model_path "$output_dir" \
+        --mode "$mode" \
+        --densification_strategy mcmc \
+        --mcmc_cap_max $MCMC_CAP_MAX \
+        --noise_lr $NOISE_LR \
+        --opacity_reg $OPACITY_REG \
+        --scale_reg $SCALE_REG \
+        $extra_args \
+        --eval \
+        -w
+
+    # Render at multiple iterations (including best)
+    for iter in 7000 30000 best; do
+        python render.py -m "$output_dir" \
+            --skip_train \
+            --iteration ${iter} \
+            $extra_args
+    done
+
+    # Compute metrics
+    python metrics.py -m "$output_dir"
+}
+
+
+# ============================================
+# 3. NDGS mode with MCMC (full Cholesky precision)
+# ============================================
+echo "=============================================="
+echo "Running NDGS mode benchmarks (MCMC)"
+echo "=============================================="
+
+for dir in "$base_dir"*/; do
+    if [ -d "$dir" ]; then
+        clean_dir="${dir%/}"
+        scene_name=$(basename "$clean_dir")
+        if [[ "$scene_name" == "README.txt" ]] || [[ "$scene_name" == *.zip ]]; then
+            continue
+        fi
+
+        output_dir="output/mcmc/ndgs/nerf_synthetic/${scene_name}"
+        echo "Processing ${scene_name} with mode ndgs (MCMC)..."
+        run_experiment "ndgs" "$output_dir" "$dir" "--use_rot_scale_l_triangle True"
+    fi
+done
+
+
+# ============================================
+# 1. opacity_only mode with MCMC (no position shift)
+# ============================================
+echo "=============================================="
+echo "Running opacity_only mode benchmarks (MCMC)"
+echo "=============================================="
+
+for dir in "$base_dir"*/; do
+    if [ -d "$dir" ]; then
+        clean_dir="${dir%/}"
+        scene_name=$(basename "$clean_dir")
+        if [[ "$scene_name" == "README.txt" ]] || [[ "$scene_name" == *.zip ]]; then
+            continue
+        fi
+
+        output_dir="output/mcmc/opacity_only/nerf_synthetic/${scene_name}"
+        echo "Processing ${scene_name} with mode opacity_only (MCMC)..."
+        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos False"
+    fi
+done
+
+# ============================================
+# 2. opacity_pos mode with MCMC (opacity + position)
+# ============================================
+echo "=============================================="
+echo "Running opacity_pos mode benchmarks (MCMC)"
+echo "=============================================="
+
+for dir in "$base_dir"*/; do
+    if [ -d "$dir" ]; then
+        clean_dir="${dir%/}"
+        scene_name=$(basename "$clean_dir")
+        if [[ "$scene_name" == "README.txt" ]] || [[ "$scene_name" == *.zip ]]; then
+            continue
+        fi
+
+        output_dir="output/mcmc/opacity_pos/nerf_synthetic/${scene_name}"
+        echo "Processing ${scene_name} with mode opacity_pos (MCMC)..."
+        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True"
+    fi
+done
+
+echo "MCMC Benchmark completed!"

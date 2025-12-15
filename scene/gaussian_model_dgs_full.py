@@ -949,8 +949,11 @@ class GaussianModel:
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
         self._mean_view = optimizable_tensors["mean_view"]
-        if self.input_dim == 7:
+        if "mean_time" in optimizable_tensors:
             self._mean_time = optimizable_tensors["mean_time"]
+        else:
+            # For 6DGS (input_dim=6), mean_time is not in optimizer, prune manually
+            self._mean_time = self._mean_time[valid_points_mask]
         self._L_22_inv = optimizable_tensors["L_22_inv"]
         if self.use_view_dependent_pos:
             self._v_12_direction = optimizable_tensors["v_12_direction"]
@@ -998,10 +1001,9 @@ class GaussianModel:
             "scaling": new_scaling,
             "rotation": new_rotation,
             "mean_view": new_mean_view,
+            "mean_time": new_mean_time,  # Always include (empty [N, 0] for 6DGS)
             "L_22_inv": new_L_22_inv,
         }
-        if self.input_dim == 7:
-            d["mean_time"] = new_mean_time
         if self.use_view_dependent_pos:
             d["v_12_direction"] = new_v_12_direction
             d["v_12_scale"] = new_v_12_scale
@@ -1019,8 +1021,11 @@ class GaussianModel:
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
         self._mean_view = optimizable_tensors["mean_view"]
-        if self.input_dim == 7:
+        if "mean_time" in optimizable_tensors:
             self._mean_time = optimizable_tensors["mean_time"]
+        else:
+            # For 6DGS (input_dim=6), mean_time is not in optimizer, concatenate manually
+            self._mean_time = torch.cat([self._mean_time, new_mean_time], dim=0)
         self._L_22_inv = optimizable_tensors["L_22_inv"]
         if self.use_view_dependent_pos:
             self._v_12_direction = optimizable_tensors["v_12_direction"]
@@ -1155,7 +1160,7 @@ class GaussianModel:
             'scaling': self._scaling[idxs],
             'rotation': self._rotation[idxs],
             'mean_view': self._mean_view[idxs],
-            'mean_time': self._mean_time[idxs] if self.input_dim == 7 else None,
+            'mean_time': self._mean_time[idxs],  # Always index, even if empty [N, 0] for 6DGS
             'L_22_inv': self._L_22_inv[idxs],
             'opacity': new_opacity,
         }
@@ -1226,7 +1231,8 @@ class GaussianModel:
         self._scaling.index_copy_(0, dead_indices, params['scaling'])
         self._rotation.index_copy_(0, dead_indices, params['rotation'])
         self._mean_view.index_copy_(0, dead_indices, params['mean_view'])
-        if self.input_dim == 7:
+        # Always copy mean_time (even if empty [N, 0] for 6DGS)
+        if self._mean_time.numel() > 0:
             self._mean_time.index_copy_(0, dead_indices, params['mean_time'])
         self._L_22_inv.index_copy_(0, dead_indices, params['L_22_inv'])
         self._opacity.index_copy_(0, dead_indices, params['opacity'])
@@ -1313,10 +1319,9 @@ class GaussianModel:
             "scaling": self._scaling,
             "rotation": self._rotation,
             "mean_view": self._mean_view,
+            "mean_time": self._mean_time,  # Always include (empty [N, 0] for 6DGS)
             "L_22_inv": self._L_22_inv,
         }
-        if self.input_dim == 7:
-            tensors_dict["mean_time"] = self._mean_time
         if self.use_view_dependent_pos:
             tensors_dict["v_12_direction"] = self._v_12_direction
             tensors_dict["v_12_scale"] = self._v_12_scale
@@ -1366,7 +1371,7 @@ class GaussianModel:
         self._rotation = optimizable_tensors["rotation"]
         self._mean_view = optimizable_tensors["mean_view"]
         self._L_22_inv = optimizable_tensors["L_22_inv"]
-        if self.input_dim == 7:
+        if "mean_time" in optimizable_tensors:
             self._mean_time = optimizable_tensors["mean_time"]
         if self.use_view_dependent_pos:
             self._v_12_direction = optimizable_tensors["v_12_direction"]

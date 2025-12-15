@@ -241,8 +241,13 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
             if opt.densification_strategy == "mcmc":
                 if opt.densify_from_iter < iteration < opt.mcmc_densify_until_iter:
                     loss += opt.opacity_reg * torch.abs(gaussians.get_opacity).mean()
-                    # Scale regularization on first 3 components (spatial scales)
-                    if hasattr(gaussians, 'get_scaling'):
+                    # Scale regularization: use get_scale (raw scale params) for efficiency
+                    # Note: get_scaling in NDGS is expensive (requires SVD), so use get_scale instead
+                    if hasattr(gaussians, 'get_scale'):
+                        # NDGS/UBS: use raw scale parameters (first 3 for spatial)
+                        loss += opt.scale_reg * torch.abs(gaussians.get_scale[:, :3]).mean()
+                    elif hasattr(gaussians, 'get_scaling'):
+                        # DGS-full/3DGS: use standard get_scaling
                         loss += opt.scale_reg * torch.abs(gaussians.get_scaling[:, :3]).mean()
 
             # Normalize by number of views (matching 7DGS-ICCV behavior)
@@ -354,9 +359,6 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
 
                                 # Add noise to positions
                                 gaussians._xyz.data.add_(noise)
-
-                            # Clear CUDA cache after MCMC operations
-                            torch.cuda.empty_cache()
                     else:
                         print(f"\nWarning: MCMC densification requested but model {mode} does not support it. Falling back to standard densification.")
                         # Fallback to standard densification

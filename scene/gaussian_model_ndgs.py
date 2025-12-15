@@ -888,8 +888,11 @@ class GaussianModel:
         self._features_dc = optimizable_tensors["f_dc"]
         self._features_rest = optimizable_tensors["f_rest"]
         self._mean_view = optimizable_tensors["mean_view"]
-        if self.input_dim == 7:
+        if "mean_time" in optimizable_tensors:
             self._mean_time = optimizable_tensors["mean_time"]
+        else:
+            # For 6DGS (input_dim=6), mean_time is not in optimizer, prune manually
+            self._mean_time = self._mean_time[valid_points_mask]
         self._opacity = optimizable_tensors["opacity"]
         self._lambda_opc = optimizable_tensors["lambda_opc"]
         # Update covariance tensors (unified naming)
@@ -942,21 +945,23 @@ class GaussianModel:
             "f_dc": new_features_dc,
             "f_rest": new_features_rest,
             "mean_view": new_mean_view,
+            "mean_time": new_mean_time,  # Always include (empty [N, 0] for 6DGS)
             "opacity": new_opacities,
             "lambda_opc": new_lambda_opc,
             "scale": new_scale,
             "l_triangle": new_l_triangle,
             }
-        if self.input_dim == 7:
-            d["mean_time"] = new_mean_time
 
         optimizable_tensors = self.cat_tensors_to_optimizer(d)
         self._xyz = optimizable_tensors["xyz"]
         self._features_dc = optimizable_tensors["f_dc"]
         self._features_rest = optimizable_tensors["f_rest"]
         self._mean_view = optimizable_tensors["mean_view"]
-        if self.input_dim == 7:
+        if "mean_time" in optimizable_tensors:
             self._mean_time = optimizable_tensors["mean_time"]
+        else:
+            # For 6DGS (input_dim=6), mean_time is not in optimizer, concatenate manually
+            self._mean_time = torch.cat([self._mean_time, new_mean_time], dim=0)
         self._opacity = optimizable_tensors["opacity"]
         self._lambda_opc = optimizable_tensors["lambda_opc"]
         # Update covariance tensors (unified naming)
@@ -1343,7 +1348,7 @@ class GaussianModel:
             self._features_dc[idxs],
             self._features_rest[idxs],
             self._mean_view[idxs],
-            self._mean_time[idxs] if self.input_dim == 7 else None,
+            self._mean_time[idxs],  # Always index, even if empty [N, 0] for 6DGS
             new_opacity,
             self._lambda_opc[idxs],
             self._scale[idxs],
@@ -1411,7 +1416,8 @@ class GaussianModel:
         self._features_dc.index_copy_(0, dead_indices, relocated_features_dc)
         self._features_rest.index_copy_(0, dead_indices, relocated_features_rest)
         self._mean_view.index_copy_(0, dead_indices, relocated_mean_view)
-        if self.input_dim == 7:
+        # Always copy mean_time (even if empty [N, 0] for 6DGS)
+        if self._mean_time.numel() > 0:
             self._mean_time.index_copy_(0, dead_indices, relocated_mean_time)
         self._opacity.index_copy_(0, dead_indices, relocated_opacity)
         self._lambda_opc.index_copy_(0, dead_indices, relocated_lambda_opc)
@@ -1491,17 +1497,18 @@ class GaussianModel:
             "f_dc": self._features_dc,
             "f_rest": self._features_rest,
             "mean_view": self._mean_view,
+            "mean_time": self._mean_time,  # Always include (empty [N, 0] for 6DGS)
             "opacity": self._opacity,
             "lambda_opc": self._lambda_opc,
             "scale": self._scale,
             "l_triangle": self._l_triangle,
         }
-        if self.input_dim == 7:
-            tensors_dict["mean_time"] = self._mean_time
 
         optimizable_tensors = {}
         for group in self.optimizer.param_groups:
             if group["name"] == "color_net":
+                continue
+            if group["name"] not in tensors_dict:
                 continue
             assert len(group["params"]) == 1
             tensor = tensors_dict[group["name"]]
@@ -1535,7 +1542,7 @@ class GaussianModel:
         self._features_dc = optimizable_tensors["f_dc"]
         self._features_rest = optimizable_tensors["f_rest"]
         self._mean_view = optimizable_tensors["mean_view"]
-        if self.input_dim == 7:
+        if "mean_time" in optimizable_tensors:
             self._mean_time = optimizable_tensors["mean_time"]
         self._opacity = optimizable_tensors["opacity"]
         self._lambda_opc = optimizable_tensors["lambda_opc"]
