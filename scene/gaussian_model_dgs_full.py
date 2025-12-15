@@ -150,7 +150,8 @@ class GaussianModel:
         self.beta_activation = lambda x: 4.0 * torch.exp(x)
 
     def __init__(self, sh_degree: int, input_dim: int = 6, use_beta: bool = False,
-                 use_view_dependent_pos: bool = True, use_time_dependent_rotation: bool = True):
+                 use_view_dependent_pos: bool = True, use_time_dependent_rotation: bool = True,
+                 zero_view_time_cross_terms: bool = False):
         """
         Initialize Full DGS with view-dependent position, time-dependent rotation, and opacity.
 
@@ -160,6 +161,8 @@ class GaussianModel:
             use_beta: Whether to use spatial beta parameter (default: False)
             use_view_dependent_pos: Enable view-dependent position shift (default: True)
             use_time_dependent_rotation: Enable time-dependent rotation (only effective when input_dim=7)
+            zero_view_time_cross_terms: If True, zero out view-time cross-terms to enforce block-diagonal
+                                        structure (only effective when input_dim=7). Default: False.
         """
         self.active_sh_degree = 0
         self.max_sh_degree = sh_degree
@@ -168,6 +171,7 @@ class GaussianModel:
         self.use_view_dependent_pos = use_view_dependent_pos
         # Rotation conditioning only makes sense with time dimension
         self.use_time_dependent_rotation = use_time_dependent_rotation and (input_dim == 7)
+        self.zero_view_time_cross_terms = zero_view_time_cross_terms
         self.cond_dim = input_dim - 3  # C = 3 for view-only, 4 for view+time
 
         # Standard 3DGS parameters
@@ -359,12 +363,27 @@ class GaussianModel:
     @property
     def get_L_22_inv(self):
         """
-        Get L_22_inv with block-diagonal structure enforced for input_dim=7.
+        Get L_22_inv, optionally with block-diagonal structure enforced for input_dim=7.
 
-        For input_dim=7 (C=4), zeros out the view-time cross terms (indices 6, 7, 8)
-        to ensure V_22^{-1} = L @ L^T is block-diagonal between view (3x3) and time (1x1).
+        For input_dim=7 (C=4), if zero_view_time_cross_terms is True, zeros out the
+        view-time cross terms (indices 6, 7, 8) to ensure V_22^{-1} = L @ L^T is
+        block-diagonal between view (3x3) and time (1x1).
+
+        L_22_inv index layout for 4x4 precision matrix (lower triangular, row-major):
+
+              vx   vy   vz    t
+         vx    0
+         vy    1    2
+         vz    3    4    5
+          t    6    7    8    9
+               ^^^^^^^^^^^
+               VIEW-TIME cross-terms (zeroed for block-diagonal)
+
+        This makes V_22^{-1} = L @ L^T block-diagonal:
+        V_22^{-1} = [Σ_view^{-1} (3x3),       0          ]
+                    [        0,         σ_time^{-1} (1x1)]
         """
-        if self.input_dim == 7:
+        if self.input_dim == 7 and self.zero_view_time_cross_terms:
             # Clone to avoid modifying the parameter
             L_22_inv = self._L_22_inv.clone()
             # Zero out cross terms: l_30, l_31, l_32 at indices 6, 7, 8
@@ -566,8 +585,8 @@ class GaussianModel:
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
 
-        # Register gradient hook to zero out view-time cross terms for input_dim=7
-        if self.input_dim == 7:
+        # Optionally register gradient hook to zero out view-time cross terms for input_dim=7
+        if self.input_dim == 7 and self.zero_view_time_cross_terms:
             def zero_cross_term_grad(grad):
                 # Zero out indices 6, 7, 8 (l_30, l_31, l_32) to enforce block-diagonal
                 grad[:, 6:9] = 0.0

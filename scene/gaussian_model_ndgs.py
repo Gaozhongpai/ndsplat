@@ -149,7 +149,7 @@ class GaussianModel:
 
 
     def __init__(self, sh_degree : int, input_dim: int = 6, use_rot_scale_l_triangle: bool = False,
-                 learnable_lambda_opc: bool = False):
+                 learnable_lambda_opc: bool = False, zero_view_time_cross_terms: bool = False):
         """
         Initialize GaussianModel with flexible covariance parametrization.
 
@@ -159,12 +159,15 @@ class GaussianModel:
             use_rot_scale_l_triangle: If True, use rotation-scale-l_triangle parametrization (UBS style).
                                       If False, use direct diagonal-l_triangle parametrization (NDGS style).
             learnable_lambda_opc: If True, make lambda_opc a learnable parameter per Gaussian.
+            zero_view_time_cross_terms: If True, zero out view-time cross-terms to enforce block-diagonal
+                                        structure (only effective when input_dim=7). Default: False.
         """
         self.active_sh_degree = 0
         self.max_sh_degree = sh_degree
         self.input_dim = input_dim  # 6 for 6DGS, 7 for 7DGS (with time)
         self.use_rot_scale_l_triangle = use_rot_scale_l_triangle
         self.learnable_lambda_opc = learnable_lambda_opc
+        self.zero_view_time_cross_terms = zero_view_time_cross_terms
 
         self._xyz = torch.empty(0)
         self._features_dc = torch.empty(0)  # Single SH
@@ -314,8 +317,8 @@ class GaussianModel:
         """
         l_triangle = self.l_triangle_activation(self._l_triangle)
 
-        # For 7DGS, zero out view-time cross-terms to make conditioning block-diagonal
-        if self.input_dim == 7:
+        # For 7DGS, optionally zero out view-time cross-terms to make conditioning block-diagonal
+        if self.input_dim == 7 and self.zero_view_time_cross_terms:
             # Zero out indices 18-20 (time cross-terms with vx, vy, vz only)
             l_triangle = l_triangle.clone()
             l_triangle[:, 18:21] = 0.0
@@ -559,8 +562,8 @@ class GaussianModel:
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
-        # Register gradient hook to zero out view-time cross-terms for input_dim=7
-        if self.input_dim == 7:
+        # Optionally register gradient hook to zero out view-time cross-terms for input_dim=7
+        if self.input_dim == 7 and self.zero_view_time_cross_terms:
             def zero_view_time_cross_term_grad(grad):
                 # Zero out indices 18-20 (time cross-terms with vx, vy, vz only)
                 # to enforce block-diagonal structure between view and time
