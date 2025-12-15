@@ -272,8 +272,8 @@ class GaussianModel:
         """
         Get activated l_triangle parameters (works for both parametrizations).
 
-        For input_dim=7, zeros out the time cross-terms (indices 15-20) to enforce
-        block-diagonal structure between spatial+view (6x6) and time (1x1).
+        For input_dim=7, zeros out the view-time cross-terms (indices 18-20) to enforce
+        block-diagonal structure between view (3x3) and time (1x1) within the conditioning block.
 
         L_triangle index layout for 7x7 covariance matrix (lower triangular, excluding diagonal):
 
@@ -284,19 +284,21 @@ class GaussianModel:
          vx    3    4    5    -
          vy    6    7    8    9    -
          vz   10   11   12   13   14    -
-          t   15   16   17   18   19   20    -   <-- TIME cross-terms (zeroed for block-diagonal)
+          t   15   16   17   18   19   20    -
+                          ^^^^^^^^^^^
+                          VIEW-TIME cross-terms (zeroed for block-diagonal)
 
-        This makes the covariance block-diagonal:
-        Σ = [Σ_spatial_view (6x6),    0        ]
-            [      0,              σ_time (1x1)]
+        This makes the view-time conditioning block-diagonal:
+        Σ_cond = [Σ_view (3x3),    0        ]
+                 [      0,      σ_time (1x1)]
         """
         l_triangle = self.l_triangle_activation(self._l_triangle)
 
-        # For 7DGS, zero out time cross-terms to make covariance block-diagonal
+        # For 7DGS, zero out view-time cross-terms to make conditioning block-diagonal
         if self.input_dim == 7:
-            # Zero out indices 15-20 (time row cross-terms with x, y, z, vx, vy, vz)
+            # Zero out indices 18-20 (time cross-terms with vx, vy, vz only)
             l_triangle = l_triangle.clone()
-            l_triangle[:, 15:21] = 0.0
+            l_triangle[:, 18:21] = 0.0
 
         return l_triangle
 
@@ -535,14 +537,14 @@ class GaussianModel:
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
-        # Register gradient hook to zero out time cross-terms for input_dim=7
+        # Register gradient hook to zero out view-time cross-terms for input_dim=7
         if self.input_dim == 7:
-            def zero_time_cross_term_grad(grad):
-                # Zero out indices 15-20 (time cross-terms with x, y, z, vx, vy, vz)
-                # to enforce block-diagonal covariance structure
-                grad[:, 15:21] = 0.0
+            def zero_view_time_cross_term_grad(grad):
+                # Zero out indices 18-20 (time cross-terms with vx, vy, vz only)
+                # to enforce block-diagonal structure between view and time
+                grad[:, 18:21] = 0.0
                 return grad
-            self._l_triangle.register_hook(zero_time_cross_term_grad)
+            self._l_triangle.register_hook(zero_view_time_cross_term_grad)
 
         l = [
             {'params': [self._xyz], 'lr': training_args.position_lr_init * self.spatial_lr_scale, "name": "xyz"},

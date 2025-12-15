@@ -106,7 +106,7 @@ United Imaging Intelligence, Boston, MA
 \maketitle
 
 \begin{abstract}
-Gaussian Splatting has emerged as a leading technique for novel view synthesis, with extensions like 6DGS and 7DGS enabling view-dependent effects and dynamic scenes through high-dimensional covariance matrices. However, these formulations require per-Gaussian matrix inversions in every forward pass. We propose \modelname{}, which eliminates this overhead through \textbf{disentangled direct parameterization}. Our key insight is that the full joint covariance matrix is not necessary: we disentangle conditional Gaussian slicing into three independent components: position conditioning (view/time-dependent displacement), opacity conditioning (attention-based modulation), and rotation conditioning (time-dependent orientation for dynamic scenes). Position and opacity share a Cholesky precision factor $\mathbf{L}$ for efficient Mahalanobis distance computation without matrix inversion, while rotation uses quaternion SLERP controlled by temporal attention. This disentanglement eliminates full covariance modeling while maintaining expressiveness, delivering 15\% faster training and 26\% higher rendering throughput.
+Gaussian Splatting has emerged as a leading technique for novel view synthesis, with extensions like 6DGS and 7DGS enabling view-dependent effects and dynamic scenes through high-dimensional covariance matrices. However, these formulations require per-Gaussian matrix inversions in every forward pass. We propose \modelname{}, which eliminates this overhead through \textbf{disentangled direct parameterization}. Our key insight is that the full joint covariance matrix is not necessary: we disentangle conditional Gaussian slicing into three independent components: position conditioning (view/time-dependent displacement), opacity conditioning (attention-based modulation), and rotation conditioning (time-dependent orientation for dynamic scenes). Position and opacity share a Cholesky precision factor $\mathbf{L}$ for efficient Mahalanobis distance computation without matrix inversion, while rotation uses quaternion SLERP controlled by temporal attention. For 7DGS, we further separate view and time by using a block-diagonal precision matrix with zero cross-terms, enabling independent control of spatial and temporal effects. This disentanglement eliminates full covariance modeling while maintaining expressiveness, delivering 15\% faster training and 26\% higher rendering throughput.
 \end{abstract}
 
 \section{Introduction}
@@ -124,7 +124,7 @@ Our key insight is that the full $(3+C) \times (3+C)$ joint covariance matrix us
 \begin{enumerate}
 \item \textbf{Position Conditioning:} We directly parameterize a displacement matrix $\mathbf{V}_{pq}$ and a shared Cholesky precision factor $\mathbf{L}$. Position shift is computed as $\mu_p + \mathbf{V}_{pq} \cdot \mathbf{L}\mathbf{L}^\top \cdot \boldsymbol{\delta}$, requiring only matrix-vector multiplications. The displacement uses bounded parameterization where magnitude scales with Gaussian size, providing implicit regularization.
 
-\item \textbf{Opacity Conditioning:} Opacity modulation reuses the same Cholesky factor $\mathbf{L}$ to compute $\exp(-\lambda \|\mathbf{L}^\top\boldsymbol{\delta}\|^2)$---equivalent to the Mahalanobis distance but without matrix inversion. Diagonal elements use $\exp(\cdot)$ activation to ensure positive definiteness.
+\item \textbf{Opacity Conditioning:} Opacity modulation reuses the same Cholesky factor $\mathbf{L}$ to compute $\exp(-\lambda \|\mathbf{L}^\top\boldsymbol{\delta}\|^2)$---equivalent to the Mahalanobis distance but without matrix inversion. Diagonal elements use $\exp(\cdot)$ activation to ensure positive definiteness. For 7DGS, we further separate view and time by using a block-diagonal precision matrix with zero cross-terms, allowing independent control of view-dependent and time-dependent opacity.
 
 \item \textbf{Rotation Conditioning:} For dynamic scenes ($C=4$), rotation is handled by a completely separate module using quaternion SLERP controlled by time-based attention. This decouples rotational dynamics from view-dependent effects, reflecting the physical intuition that object rotation varies with time but not viewing angle.
 \end{enumerate}
@@ -200,6 +200,15 @@ Our approach reformulates conditional Gaussian slicing into three \textbf{disent
 \end{align}
 where $\mathbf{V}_{pq} \in \mathbb{R}^{3 \times C}$ is the displacement matrix, $\mathbf{L} \in \mathbb{R}^{C \times C}$ is the Cholesky factor of the precision matrix, $\lambda$ is a scaling factor (default 0.35), and $\alpha_{\text{rot}} = \exp(-(t - \mu_t)^2 \cdot \exp(\ell_t^{\text{rot}})^2)$ is the time-based attention weight.
 
+For 7DGS ($C=4$), we further \textbf{separate view and time} by using a block-diagonal precision matrix with zero cross-terms:
+\begin{equation}
+\mathbf{V}_{qq}^{-1} = \mathbf{L}\mathbf{L}^\top = \begin{pmatrix}
+\mathbf{\Sigma}_v^{-1} & \mathbf{0} \\
+\mathbf{0} & \sigma_t^{-1}
+\end{pmatrix},
+\end{equation}
+where $\mathbf{\Sigma}_v^{-1} \in \mathbb{R}^{3 \times 3}$ is the view precision and $\sigma_t^{-1} \in \mathbb{R}$ is the time precision. This separation eliminates coupling between spatial view directions and temporal dynamics, reflecting the physical intuition that view-dependent effects and temporal changes are independent phenomena.
+
 \begin{table}[t!]
 \centering
 \caption{Disentangled conditioning in \modelname{} vs. entangled covariance in N-DGS. Each component in \modelname{} is parameterized independently, eliminating the need for full covariance modeling.}
@@ -240,6 +249,12 @@ In N-DGS, opacity is modulated as $\alpha_{\text{cond}} = \alpha \cdot \exp(-\la
 
 Our formulation computes $\mathbf{L}^\top \boldsymbol{\delta}$ followed by $\|\cdot\|_2^2$, requiring only $O(C^2)$ operations (triangular matrix-vector multiply) and is highly parallelizable on GPUs. By parameterizing the Cholesky factor directly with exponential activation on the diagonal, we guarantee that $\mathbf{V}_{qq}^{-1} = \mathbf{L}\mathbf{L}^\top$ is always symmetric positive definite, eliminating numerical instabilities from ill-conditioned covariance matrices.
 
+For 7DGS, the block-diagonal structure enables \textbf{separated view and time opacity}. With $\boldsymbol{\delta} = (\boldsymbol{\delta}_v, \delta_t)^\top$ where $\boldsymbol{\delta}_v \in \mathbb{R}^3$ is the view deviation and $\delta_t \in \mathbb{R}$ is the time deviation, the opacity factors as:
+\begin{equation}
+\alpha_{\text{cond}} = \alpha \cdot \exp\left(-\frac{\lambda}{2}\left(\boldsymbol{\delta}_v^\top \mathbf{\Sigma}_v^{-1} \boldsymbol{\delta}_v + \delta_t^2 \sigma_t^{-1}\right)\right).
+\end{equation}
+This factorization allows view-dependent and time-dependent opacity to be controlled independently, with view precision $\mathbf{\Sigma}_v^{-1}$ parameterized by a $3 \times 3$ Cholesky factor (6 parameters) and time precision $\sigma_t^{-1}$ by a single scalar, for a total of 7 parameters instead of 10 for a full $4 \times 4$ precision matrix.
+
 \subsection{Rotation Conditioning}
 
 The original 6DGS does not support rotation conditioning. In 7DGS, rotation is handled implicitly through the Adaptive Gaussian Refinement (AGR) module using MLPs: $\hat{l} = l + \phi_l(f)$, coupling rotation with all covariance parameters.
@@ -249,7 +264,9 @@ For dynamic scenes ($C=4$), we introduce an independent rotation module. Unlike 
 
 \subsection{Computational Analysis}
 
-Our direct Cholesky parameterization replaces $O(C^3)$ matrix inversions with $O(C^2)$ triangular matrix-vector multiplications. For small $C$, the asymptotic difference is minor, but the simpler operation avoids pivoting and numerical checks required for matrix inversion. Parameterizing the Cholesky factor directly with exponential activation on the diagonal guarantees that $\mathbf{V}_{qq}^{-1} = \mathbf{L}\mathbf{L}^\top$ is always symmetric positive definite, avoiding potential numerical issues from ill-conditioned covariance matrices. Additionally, this formulation enables a single fused CUDA kernel that computes conditional position, opacity, and rotation in one pass, minimizing memory bandwidth and intermediate allocations.
+Our direct Cholesky parameterization replaces $O(C^3)$ matrix inversions with $O(C^2)$ triangular matrix-vector multiplications. For small $C$, the asymptotic difference is minor, but the simpler operation avoids pivoting and numerical checks required for matrix inversion. Parameterizing the Cholesky factor directly with exponential activation on the diagonal guarantees that $\mathbf{V}_{qq}^{-1} = \mathbf{L}\mathbf{L}^\top$ is always symmetric positive definite, avoiding potential numerical issues from ill-conditioned covariance matrices.
+
+For 7DGS, the separated view/time architecture provides additional benefits. By using a block-diagonal precision matrix with zero cross-terms, we reduce the parameter count from 10 (full $4 \times 4$ Cholesky) to 7 (6 for view + 1 for time), a 30\% reduction. This separation also enables independent optimization of view-dependent and time-dependent effects, improving training stability. Additionally, this formulation enables a single fused CUDA kernel that computes conditional position, opacity, and rotation in one pass, minimizing memory bandwidth and intermediate allocations.
 
 \subsection{CUDA Implementation}
 
