@@ -15,13 +15,14 @@ from gsplat import slice_gaussian_ndgs
 from gsplat.cuda._torch_impl import _slice_gaussian_ndgs
 
 
-def test_slice_gaussian_ndgs_gradients(N=1000, C=3, seed=42):
+def test_slice_gaussian_ndgs_gradients(N=1000, C=3, zero_view_time_cross_terms=True, seed=42):
     """
     Compare CUDA kernel gradients against PyTorch autograd gradients.
 
     Args:
         N: Number of Gaussians
         C: Conditioning dimension (3 for view direction)
+        zero_view_time_cross_terms: Whether to zero out view-time cross-terms for opacity (only when C=4)
         seed: Random seed for reproducibility
     """
     torch.manual_seed(seed)
@@ -31,7 +32,7 @@ def test_slice_gaussian_ndgs_gradients(N=1000, C=3, seed=42):
     print("=" * 70)
     print("slice_gaussian_ndgs Gradient Verification Test")
     print("=" * 70)
-    print(f"N={N}, C={C}, D={D}")
+    print(f"N={N}, C={C}, D={D}, zero_view_time_cross_terms={zero_view_time_cross_terms}")
     print()
 
     # Create test inputs
@@ -62,7 +63,7 @@ def test_slice_gaussian_ndgs_gradients(N=1000, C=3, seed=42):
 
     # Forward pass with PyTorch
     m_cond_pt, cov3D_pt, scale_pt = _slice_gaussian_ndgs(
-        m_1_pt, m_2_pt, query, covars_pt, lambda_opc
+        m_1_pt, m_2_pt, query, covars_pt, lambda_opc, zero_view_time_cross_terms
     )
 
     # Create random upstream gradients
@@ -93,7 +94,7 @@ def test_slice_gaussian_ndgs_gradients(N=1000, C=3, seed=42):
 
     # Forward pass with CUDA kernel
     m_cond_cuda, cov3D_cuda, scale_cuda = slice_gaussian_ndgs(
-        m_1_cuda, m_2_cuda, query, covars_cuda, lambda_opc
+        m_1_cuda, m_2_cuda, query, covars_cuda, lambda_opc, zero_view_time_cross_terms
     )
 
     # Backward pass with same upstream gradients
@@ -171,7 +172,7 @@ def test_slice_gaussian_ndgs_gradients(N=1000, C=3, seed=42):
     return results
 
 
-def test_forward_output_match(N=100, C=3, seed=42):
+def test_forward_output_match(N=100, C=3, zero_view_time_cross_terms=True, seed=42):
     """
     Verify that CUDA and PyTorch forward passes produce identical outputs.
     """
@@ -183,6 +184,7 @@ def test_forward_output_match(N=100, C=3, seed=42):
     print("=" * 70)
     print("Forward Pass Output Comparison")
     print("=" * 70)
+    print(f"N={N}, C={C}, D={D}, zero_view_time_cross_terms={zero_view_time_cross_terms}")
 
     # Create test inputs
     m_1 = torch.randn(N, 3, device=device)
@@ -198,10 +200,10 @@ def test_forward_output_match(N=100, C=3, seed=42):
     lambda_opc = 0.35
 
     # PyTorch forward
-    m_cond_pt, cov3D_pt, scale_pt = _slice_gaussian_ndgs(m_1, m_2, query, covars, lambda_opc)
+    m_cond_pt, cov3D_pt, scale_pt = _slice_gaussian_ndgs(m_1, m_2, query, covars, lambda_opc, zero_view_time_cross_terms)
 
     # CUDA forward
-    m_cond_cuda, cov3D_cuda, scale_cuda = slice_gaussian_ndgs(m_1, m_2, query, covars, lambda_opc)
+    m_cond_cuda, cov3D_cuda, scale_cuda = slice_gaussian_ndgs(m_1, m_2, query, covars, lambda_opc, zero_view_time_cross_terms)
 
     # Compare outputs
     print(f"\nm_cond difference: max={torch.abs(m_cond_pt - m_cond_cuda).max():.8f}")
@@ -223,12 +225,27 @@ def test_forward_output_match(N=100, C=3, seed=42):
 
 
 if __name__ == "__main__":
-    # Run forward output comparison
-    test_forward_output_match(N=100, C=3)
+    # Run forward output comparison with C=3 (zero_view_time_cross_terms has no effect for C=3)
+    test_forward_output_match(N=100, C=3, zero_view_time_cross_terms=True)
 
-    # Run main gradient check
-    results = test_slice_gaussian_ndgs_gradients(N=1000, C=3)
+    # Run forward output comparison with C=4 and zero_view_time_cross_terms=True
+    test_forward_output_match(N=100, C=4, zero_view_time_cross_terms=True)
+
+    # Run forward output comparison with C=4 and zero_view_time_cross_terms=False
+    test_forward_output_match(N=100, C=4, zero_view_time_cross_terms=False)
+
+    # Run main gradient check with C=3
+    print("\n")
+    results_c3 = test_slice_gaussian_ndgs_gradients(N=1000, C=3, zero_view_time_cross_terms=True)
+
+    # Run gradient check with C=4 and zero_view_time_cross_terms=True
+    print("\n")
+    results_c4_zero = test_slice_gaussian_ndgs_gradients(N=1000, C=4, zero_view_time_cross_terms=True)
+
+    # Run gradient check with C=4 and zero_view_time_cross_terms=False
+    print("\n")
+    results_c4_full = test_slice_gaussian_ndgs_gradients(N=1000, C=4, zero_view_time_cross_terms=False)
 
     print("\n" + "=" * 70)
-    print("Test complete!")
+    print("All tests complete!")
     print("=" * 70)

@@ -74,6 +74,10 @@ class GaussianModel:
 
         self.rotation_activation = torch.nn.functional.normalize
 
+        # Time activation: sigmoid maps internal parameter to [0, 1]
+        self.time_act = lambda x: torch.sigmoid(x)
+        self.time_act_inv = lambda x: inverse_sigmoid(torch.clip(x, min=1e-6, max=1.0 - 1e-6))
+
     def slice_gaussian(self, q, c_dim=3, lambda_opc=0.35):
         """
         Perform conditional Gaussian slicing for N-DGS.
@@ -99,7 +103,7 @@ class GaussianModel:
 
         # Build m_2 from separate parameters
         if self.input_dim == 7:
-            m_2 = torch.cat([view_normalized, self._mean_time], dim=-1)  # [N, 4]
+            m_2 = torch.cat([view_normalized, self.get_mean_time], dim=-1)  # [N, 4]
         else:
             m_2 = view_normalized  # [N, 3]
 
@@ -264,7 +268,7 @@ class GaussianModel:
     def get_mean(self):
         """Get full mean [xyz, view, time] where view is direction and time is for 7DGS."""
         if self.input_dim == 7:
-            return torch.cat([self._xyz, self._mean_view, self._mean_time], dim=-1)
+            return torch.cat([self._xyz, self._mean_view, self.get_mean_time], dim=-1)
         else:
             return torch.cat([self._xyz, self._mean_view], dim=-1)
 
@@ -275,8 +279,8 @@ class GaussianModel:
 
     @property
     def get_mean_time(self):
-        """Get time mean [N, 1] (only valid for input_dim=7)."""
-        return self._mean_time
+        """Get activated time mean [N, 1] (only valid for input_dim=7)."""
+        return self.time_act(self._mean_time)
 
     @property
     def get_rotation(self):
@@ -507,9 +511,10 @@ class GaussianModel:
         dir = torch.randn((init_n_gs, 3), device=device)
         mean_view = (dir / dir.norm(dim=1, keepdim=True)).float().cuda()  # [N, 3]
 
-        # Initialize time mean [N, 1] for 7DGS
+        # Initialize time mean [N, 1] for 7DGS (in inverse-sigmoid space)
         if self.input_dim == 7:
-            mean_time = torch.empty(init_n_gs, 1, device=device).uniform_(0.0, 1.0)
+            raw_time = torch.empty(init_n_gs, 1, device=device).uniform_(0.0, 1.0)
+            mean_time = self.time_act_inv(raw_time)
         else:
             mean_time = torch.empty(init_n_gs, 0, device=device)  # Empty for 6DGS
 
@@ -796,7 +801,7 @@ class GaussianModel:
         # Normalize view direction for consistency
         view_normalized = self._mean_view / self._mean_view.norm(dim=1, keepdim=True)
         if self.input_dim == 7:
-            self.direction = torch.cat([view_normalized, self._mean_time], dim=-1)  # [N, 4]
+            self.direction = torch.cat([view_normalized, self.get_mean_time], dim=-1)  # [N, 4]
         else:
             self.direction = view_normalized  # [N, 3]
 

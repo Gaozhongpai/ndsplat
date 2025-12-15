@@ -149,6 +149,10 @@ class GaussianModel:
         # Beta activation: same as UBS - 4.0 * exp(beta)
         self.beta_activation = lambda x: 4.0 * torch.exp(x)
 
+        # Time activation: sigmoid maps internal parameter to [0, 1]
+        self.time_act = lambda x: torch.sigmoid(x)
+        self.time_act_inv = lambda x: inverse_sigmoid(torch.clip(x, min=1e-6, max=1.0 - 1e-6))
+
     def __init__(self, sh_degree: int, input_dim: int = 6, use_beta: bool = False,
                  use_view_dependent_pos: bool = True, use_time_dependent_rotation: bool = True,
                  zero_view_time_cross_terms: bool = False):
@@ -302,7 +306,7 @@ class GaussianModel:
         """Get conditioning mean [N, C]: normalized view direction concatenated with time (if input_dim=7)."""
         mean_view_normalized = self._mean_view / (self._mean_view.norm(dim=1, keepdim=True) + 1e-8)
         if self.input_dim == 7:
-            return torch.cat([mean_view_normalized, self._mean_time], dim=1)
+            return torch.cat([mean_view_normalized, self.get_mean_time], dim=1)
         return mean_view_normalized
 
     @property
@@ -312,8 +316,8 @@ class GaussianModel:
 
     @property
     def get_mean_time(self):
-        """Get time mean [N, 1] (only valid for input_dim=7)."""
-        return self._mean_time
+        """Get activated time mean [N, 1] (only valid for input_dim=7)."""
+        return self.time_act(self._mean_time)
 
     @property
     def get_features(self):
@@ -504,9 +508,10 @@ class GaussianModel:
         mean_view = torch.randn((num_gaussians, 3), device=device)
         mean_view = (mean_view / mean_view.norm(dim=1, keepdim=True)).float()
 
-        # Time mean [N, 1] (only for input_dim=7)
+        # Time mean [N, 1] (only for input_dim=7, in inverse-sigmoid space)
         if self.input_dim == 7:
-            mean_time = torch.empty(num_gaussians, 1, device=device).uniform_(0.0, 1.0)
+            raw_time = torch.empty(num_gaussians, 1, device=device).uniform_(0.0, 1.0)
+            mean_time = self.time_act_inv(raw_time)
         else:
             mean_time = torch.empty(num_gaussians, 0, device=device)
 
