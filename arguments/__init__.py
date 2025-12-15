@@ -32,6 +32,7 @@ class ParamGroup:
     EXPLICIT_BOOL_PARAMS = {
         'use_view_dependent_pos',
         'use_view_dependent_rotation',
+        'use_rot_scale_l_triangle',
     }
 
     def __init__(self, parser: ArgumentParser, name : str, fill_none = False):
