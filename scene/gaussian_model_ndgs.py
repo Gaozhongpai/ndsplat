@@ -461,17 +461,29 @@ class GaussianModel:
         Returns:
             Spatial covariance matrix [N, 3, 3]
         """
-        v = self.get_pc_v
+        if self.use_rot_scale_l_triangle:
+            # Efficient path: use CUDA kernel with spatial_block=True (matches UBS)
+            return rot_scale_l_triangle_to_covar(
+                self.get_rotation,
+                self.get_scale,
+                self.get_l_triangle,
+                self.rest_i,
+                self.rest_j,
+                spatial_block=True,
+            )
+        else:
+            # Fallback: compute from full ND covariance
+            v = self.get_pc_v
 
-        # Slice the ND covariance matrix
-        v_11 = v[:, :3, :3]
-        v_12 = v[:, :3, 3:]
-        v_21 = v[:, 3:, :3]
-        v_22 = v[:, 3:, 3:]
+            # Slice the ND covariance matrix
+            v_11 = v[:, :3, :3]
+            v_12 = v[:, :3, 3:]
+            v_21 = v[:, 3:, :3]
+            v_22 = v[:, 3:, 3:]
 
-        # Compute conditional covariance (3x3 spatial block)
-        v_cond = v_11 - torch.bmm(v_12, torch.linalg.inv(v_22).bmm(v_21))
-        return v_cond
+            # Compute conditional covariance (3x3 spatial block)
+            v_cond = v_11 - torch.bmm(v_12, torch.linalg.inv(v_22).bmm(v_21))
+            return v_cond
 
     def oneupSHdegree(self):
         if self.active_sh_degree < self.max_sh_degree:

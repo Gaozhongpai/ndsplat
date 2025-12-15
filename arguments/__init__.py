@@ -139,7 +139,9 @@ class OptimizationParams(ParamGroup):
         self.mcmc_densify_until_iter = 25_000  # MCMC densifies longer than standard (25k vs 15k)
         self.mcmc_add_rate = 0.25  # Rate of adding new Gaussians (fraction per refinement)
         self.mcmc_remove_rate = 0.1  # Rate of removing Gaussians (fraction per refinement)
-        self.noise_lr = 100.0  # Noise learning rate for MCMC spatial perturbation (higher = more noise)
+        self.noise_lr = 1.0  # Noise learning rate for MCMC spatial perturbation (matching UBS)
+        self.opacity_reg = 0.01  # Opacity regularization weight for MCMC
+        self.scale_reg = 0.01  # Scale regularization weight for MCMC
 
         # FastGS-specific parameters (only used when densification_strategy="fastgs")
         # Adapted from FastGS (arXiv:2511.04283) for multi-view consistent densification

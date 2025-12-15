@@ -204,7 +204,7 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
 
         iter_start.record()
 
-        gaussians.update_learning_rate(iteration)
+        xyz_lr = gaussians.update_learning_rate(iteration)
 
         # Every 1000 its we increase the levels of SH up to a maximum degree
         if iteration % 1000 == 0:
@@ -235,6 +235,15 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
             gt_image = viewpoint_cam.original_image  # Already on CUDA, no need for .cuda()
             Ll1 = l1_loss(image, gt_image)
             loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
+
+            # MCMC regularization: add opacity and scale regularization during densification phase
+            # This matches UBS behavior and helps prevent degenerate solutions
+            if opt.densification_strategy == "mcmc":
+                if opt.densify_from_iter < iteration < opt.mcmc_densify_until_iter:
+                    loss += opt.opacity_reg * torch.abs(gaussians.get_opacity).mean()
+                    # Scale regularization on first 3 components (spatial scales)
+                    if hasattr(gaussians, 'get_scaling'):
+                        loss += opt.scale_reg * torch.abs(gaussians.get_scaling[:, :3]).mean()
 
             # Normalize by number of views (matching 7DGS-ICCV behavior)
             loss = loss / pipe.mv
@@ -317,17 +326,14 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
                     # Only apply MCMC strategy if model supports it (NDGS/UBS have relocate_gs and add_new_gs methods)
                     if hasattr(gaussians, 'relocate_gs') and hasattr(gaussians, 'add_new_gs'):
                         if iteration % opt.mcmc_refine_interval == 0:
-                            # Relocate dead Gaussians based on opacity
-                            dead_mask = gaussians.get_opacity.squeeze() < 0.005
+                            # Relocate dead Gaussians based on opacity (matching UBS: <= 0.005)
+                            dead_mask = (gaussians.get_opacity.squeeze() <= 0.005)
                             gaussians.relocate_gs(dead_mask=dead_mask)
 
                             # Add new Gaussians up to cap_max
                             num_added = gaussians.add_new_gs(cap_max=opt.mcmc_cap_max)
                             if num_added > 0 and iteration % (opt.mcmc_refine_interval * 10) == 0:
                                 print(f"\n[ITER {iteration}] MCMC: Added {num_added} Gaussians, Total: {gaussians.get_xyz.shape[0]}")
-
-                            # Clear CUDA cache after MCMC operations
-                            torch.cuda.empty_cache()
 
                             # Add covariance-weighted noise to Gaussian positions (UBS-style MCMC enhancement)
                             # This helps break symmetry and encourages exploration after MCMC operations
@@ -340,7 +346,7 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
                                     torch.randn_like(gaussians._xyz)  # [N, 3] random Gaussian noise
                                     * torch.pow(1 - gaussians.get_opacity, 100)  # Weight by (1-opacity)^100
                                     * opt.noise_lr  # Scale by noise_lr hyperparameter
-                                    * gaussians.update_learning_rate(iteration)  # Scale by current xyz learning rate
+                                    * xyz_lr  # Scale by current xyz learning rate (cached from update_learning_rate)
                                 )
 
                                 # Transform noise by spatial covariance to align with Gaussian shape
@@ -348,6 +354,9 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
 
                                 # Add noise to positions
                                 gaussians._xyz.data.add_(noise)
+
+                            # Clear CUDA cache after MCMC operations
+                            torch.cuda.empty_cache()
                     else:
                         print(f"\nWarning: MCMC densification requested but model {mode} does not support it. Falling back to standard densification.")
                         # Fallback to standard densification
