@@ -153,7 +153,8 @@ class GaussianModel:
 
 
     def __init__(self, sh_degree : int, input_dim: int = 6, use_rot_scale_l_triangle: bool = False,
-                 learnable_lambda_opc: bool = False, zero_view_time_cross_terms: bool = False):
+                 learnable_lambda_opc: bool = False, zero_view_time_cross_terms: bool = False,
+                 time_duration: list = [0.0, 1.0]):
         """
         Initialize GaussianModel with flexible covariance parametrization.
 
@@ -165,6 +166,7 @@ class GaussianModel:
             learnable_lambda_opc: If True, make lambda_opc a learnable parameter per Gaussian.
             zero_view_time_cross_terms: If True, zero out view-time cross-terms to enforce block-diagonal
                                         structure (only effective when input_dim=7). Default: False.
+            time_duration: [min, max] time range for 7DGS (default: [0.0, 1.0]).
         """
         self.active_sh_degree = 0
         self.max_sh_degree = sh_degree
@@ -172,6 +174,7 @@ class GaussianModel:
         self.use_rot_scale_l_triangle = use_rot_scale_l_triangle
         self.learnable_lambda_opc = learnable_lambda_opc
         self.zero_view_time_cross_terms = zero_view_time_cross_terms
+        self.time_duration = time_duration  # Time range for 7DGS
 
         self._xyz = torch.empty(0)
         self._features_dc = torch.empty(0)  # Single SH
@@ -512,9 +515,17 @@ class GaussianModel:
         mean_view = (dir / dir.norm(dim=1, keepdim=True)).float().cuda()  # [N, 3]
 
         # Initialize time mean [N, 1] for 7DGS (in inverse-sigmoid space)
+        # Match 7dgs-iccv: use pcd.time if available, otherwise random in scaled time_duration range
         if self.input_dim == 7:
-            raw_time = torch.empty(init_n_gs, 1, device=device).uniform_(0.0, 1.0)
-            mean_time = self.time_act_inv(raw_time)
+            pcd_time = getattr(pcd, 'time', None)
+            if pcd_time is None:
+                # Random times scaled to time_duration range, then mapped to [0, 1] via sigmoid
+                fused_times = (torch.rand(init_n_gs, 1, device=device) * 1.2 - 0.1) * (self.time_duration[1] - self.time_duration[0]) + self.time_duration[0]
+            else:
+                fused_times = torch.from_numpy(np.asarray(pcd_time)).cuda().float()
+                if fused_times.dim() == 1:
+                    fused_times = fused_times.unsqueeze(-1)
+            mean_time = self.time_act_inv(fused_times)
         else:
             mean_time = torch.empty(init_n_gs, 0, device=device)  # Empty for 6DGS
 
@@ -534,18 +545,33 @@ class GaussianModel:
         dist2 = (knn(fused_point_cloud)[:, 1:] ** 2).mean(dim=-1)
         scales_spatial = self.scale_inverse_activation(torch.sqrt(dist2))[..., None].repeat(1, 3)
 
-        # Non-spatial scales (remaining dimensions): small random values
+        # Non-spatial scales: match 7dgs-iccv initialization
+        # - Direction scales (3): constant 1.0
+        # - Time scale (1): sqrt(duration/10) for 7DGS
         if self.gs_dim > 3:
-            scales_rest = self.scale_inverse_activation(
-                torch.normal(1, 1e-5, size=(init_n_gs, self.gs_dim - 3), device=device)
-            )
-            scales = torch.cat([scales_spatial, scales_rest], dim=1)
+            if self.input_dim == 7:
+                # 7DGS: direction (3) + time (1)
+                scales_direction = self.scale_inverse_activation(
+                    torch.ones(init_n_gs, 3, device=device)
+                )
+                # Time scale = sqrt(duration/10)
+                dist_t = (self.time_duration[1] - self.time_duration[0]) / 10
+                scales_time = self.scale_inverse_activation(
+                    torch.ones(init_n_gs, 1, device=device) * math.sqrt(dist_t)
+                )
+                scales = torch.cat([scales_spatial, scales_direction, scales_time], dim=1)
+            else:
+                # 6DGS: direction (3) only
+                scales_direction = self.scale_inverse_activation(
+                    torch.ones(init_n_gs, self.gs_dim - 3, device=device)
+                )
+                scales = torch.cat([scales_spatial, scales_direction], dim=1)
         else:
             scales = scales_spatial
 
-        # L_triangle: [N, gs_dim*(gs_dim-1)//2] initialized to small noise
+        # L_triangle: [N, gs_dim*(gs_dim-1)//2] initialized to zeros (match 7dgs-iccv)
         l_triangles = self.l_triangle_inverse_activation(
-            torch.normal(0, 1e-5, size=(init_n_gs, self.gs_dim*(self.gs_dim-1)//2), device=device)
+            torch.zeros(init_n_gs, self.gs_dim*(self.gs_dim-1)//2, device=device)
         )
 
         self._scale = nn.Parameter(scales.requires_grad_(True))
@@ -1550,7 +1576,7 @@ class GaussianModel:
         if self.learnable_lambda_opc:
             lambda_opc = self.get_lambda_opc.squeeze(-1)  # [N]
         else:
-            lambda_opc = 0.25 if self.input_dim == 7 else 0.35
+            lambda_opc = 0.125 if self.input_dim == 7 else 0.35
 
         is_test = False  # This is because masking precompute takes longer
         if is_test:
@@ -1671,7 +1697,7 @@ class GaussianModel:
         if self.learnable_lambda_opc:
             lambda_opc = self.get_lambda_opc.squeeze(-1)
         else:
-            lambda_opc = 0.25 if self.input_dim == 7 else 0.35
+            lambda_opc = 0.125 if self.input_dim == 7 else 0.35
 
         # Training mode: compute conditional slicing
         shs = self.get_features

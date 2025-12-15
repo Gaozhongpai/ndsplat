@@ -155,7 +155,7 @@ class GaussianModel:
 
     def __init__(self, sh_degree: int, input_dim: int = 6, use_beta: bool = False,
                  use_view_dependent_pos: bool = True, use_time_dependent_rotation: bool = True,
-                 zero_view_time_cross_terms: bool = False):
+                 zero_view_time_cross_terms: bool = False, time_duration: list = [0.0, 1.0]):
         """
         Initialize Full DGS with view-dependent position, time-dependent rotation, and opacity.
 
@@ -167,6 +167,7 @@ class GaussianModel:
             use_time_dependent_rotation: Enable time-dependent rotation (only effective when input_dim=7)
             zero_view_time_cross_terms: If True, zero out view-time cross-terms to enforce block-diagonal
                                         structure (only effective when input_dim=7). Default: False.
+            time_duration: [min, max] time range for 7DGS (default: [0.0, 1.0]).
         """
         self.active_sh_degree = 0
         self.max_sh_degree = sh_degree
@@ -176,6 +177,7 @@ class GaussianModel:
         # Rotation conditioning only makes sense with time dimension
         self.use_time_dependent_rotation = use_time_dependent_rotation and (input_dim == 7)
         self.zero_view_time_cross_terms = zero_view_time_cross_terms
+        self.time_duration = time_duration  # Time range for 7DGS
         self.cond_dim = input_dim - 3  # C = 3 for view-only, 4 for view+time
 
         # Standard 3DGS parameters
@@ -446,7 +448,7 @@ class GaussianModel:
 
         Args:
             query: Query direction [N, C] where C=3 (view) or 4 (view+time)
-            lambda_opc: Opacity scaling factor (default: 0.25 for input_dim=7, 0.35 for input_dim=6)
+            lambda_opc: Opacity scaling factor (default: 0.125 for input_dim=7, 0.35 for input_dim=6)
 
         Returns:
             x_cond: Conditional 3D position [N, 3]
@@ -455,7 +457,7 @@ class GaussianModel:
         """
         # Set default lambda_opc based on input_dim
         if lambda_opc is None:
-            lambda_opc = 0.25 if self.input_dim == 7 else 0.35
+            lambda_opc = 0.125 if self.input_dim == 7 else 0.35
 
         # Use slice_gaussian_full CUDA kernel
         # Use get_L_22_inv to enforce block-diagonal structure (zero view-time cross terms)
@@ -509,9 +511,17 @@ class GaussianModel:
         mean_view = (mean_view / mean_view.norm(dim=1, keepdim=True)).float()
 
         # Time mean [N, 1] (only for input_dim=7, in inverse-sigmoid space)
+        # Match 7dgs-iccv: use pcd.time if available, otherwise random in scaled time_duration range
         if self.input_dim == 7:
-            raw_time = torch.empty(num_gaussians, 1, device=device).uniform_(0.0, 1.0)
-            mean_time = self.time_act_inv(raw_time)
+            pcd_time = getattr(pcd, 'time', None)
+            if pcd_time is None:
+                # Random times scaled to time_duration range, then mapped to [0, 1] via sigmoid
+                fused_times = (torch.rand(num_gaussians, 1, device=device) * 1.2 - 0.1) * (self.time_duration[1] - self.time_duration[0]) + self.time_duration[0]
+            else:
+                fused_times = torch.from_numpy(np.asarray(pcd_time)).cuda().float()
+                if fused_times.dim() == 1:
+                    fused_times = fused_times.unsqueeze(-1)
+            mean_time = self.time_act_inv(fused_times)
         else:
             mean_time = torch.empty(num_gaussians, 0, device=device)
 
@@ -524,8 +534,7 @@ class GaussianModel:
             v_12_scale = torch.empty(0, device=device)
 
         # L_22_inv: [N, C*(C+1)/2] Cholesky of V_22^{-1} (precision)
-        # Diagonal uses exp() activation, so initialize with log(2.0) ≈ 0.693
-        # This gives diagonal=2.0 after exp, so V_22^{-1} has diagonal ~4.0
+        # Diagonal uses exp() activation, so initialize with log(scale)
         # Storage format: [l_00, l_10, l_11, l_20, l_21, l_22, ...] (row-major lower triangular)
         #
         # For input_dim=7 (C=4), we want BLOCK-DIAGONAL structure (no view-time cross terms):
@@ -537,9 +546,19 @@ class GaussianModel:
         n_L_22_inv = C * (C + 1) // 2
         L_22_inv = torch.zeros(num_gaussians, n_L_22_inv, device=device)
         # Diagonal positions: 0 (i=0), 2 (i=1), 5 (i=2), 9 (i=3)
+        # Match 7dgs-iccv: view directions use 1.0, time uses sqrt(duration/10)
         for i in range(C):
             diag_idx = i * (i + 1) // 2 + i
-            L_22_inv[:, diag_idx] = math.log(2.0)
+            if self.input_dim == 7 and i == C - 1:
+                # Time precision: L_22_inv is the Cholesky of precision (V_22^{-1} = L @ L^T)
+                # Covariance scale in 7dgs: sqrt(duration/10)
+                # Precision = 1/variance = 1/(sqrt(duration/10))^2 = 10/duration
+                # L_diag for precision Cholesky: sqrt(precision) = sqrt(10/duration) = 1/sqrt(duration/10)
+                dist_t = (self.time_duration[1] - self.time_duration[0]) / 10
+                L_22_inv[:, diag_idx] = math.log(1.0 / math.sqrt(dist_t))
+            else:
+                # View direction precision: 1.0 (variance=1, precision=1)
+                L_22_inv[:, diag_idx] = math.log(1.0)  # log(1.0) = 0
 
         # Time-dependent rotation conditioning (only when input_dim=7)
         # Uses only time dimension (index 3) for rotation attention
