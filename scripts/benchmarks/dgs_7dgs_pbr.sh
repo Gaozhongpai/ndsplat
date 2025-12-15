@@ -36,6 +36,7 @@ run_experiment() {
         --mode "$mode" \
         --mv 4 \
         --input_dim 7 \
+        --resolution 2 \
         $extra_args \
         --eval
 
@@ -45,12 +46,34 @@ run_experiment() {
             --skip_train \
             --iteration ${iter} \
             --input_dim 7 \
+            --resolution 2 \
             $extra_args
     done
 
     # Compute metrics
     python metrics.py -m "$output_dir"
 }
+
+
+# ============================================
+# 4. NDGS mode (full Cholesky precision)
+# ============================================
+echo "=============================================="
+echo "Running NDGS mode benchmarks"
+echo "=============================================="
+
+for dir in "$base_dir"*/; do
+    if [ -d "$dir" ]; then
+        scene_name=$(basename "${dir%/}")
+        if [[ "$scene_name" == *.zip ]]; then
+            continue
+        fi
+
+        output_dir="output/ndgs/7dgs_pbr/${scene_name}"
+        echo "Processing ${scene_name} with mode ndgs..."
+        run_experiment "ndgs" "$output_dir" "$dir" ""
+    fi
+done
 
 # ============================================
 # 1. opacity_only mode (no position shift)
@@ -109,26 +132,6 @@ for dir in "$base_dir"*/; do
         output_dir="output/opacity_pos_rot/7dgs_pbr/${scene_name}"
         echo "Processing ${scene_name} with mode opacity_pos_rot..."
         run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --use_view_dependent_rot True"
-    fi
-done
-
-# ============================================
-# 4. NDGS mode (full Cholesky precision)
-# ============================================
-echo "=============================================="
-echo "Running NDGS mode benchmarks"
-echo "=============================================="
-
-for dir in "$base_dir"*/; do
-    if [ -d "$dir" ]; then
-        scene_name=$(basename "${dir%/}")
-        if [[ "$scene_name" == *.zip ]]; then
-            continue
-        fi
-
-        output_dir="output/ndgs/7dgs_pbr/${scene_name}"
-        echo "Processing ${scene_name} with mode ndgs..."
-        run_experiment "ndgs" "$output_dir" "$dir" ""
     fi
 done
 

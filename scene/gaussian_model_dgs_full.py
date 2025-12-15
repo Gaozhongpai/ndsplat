@@ -112,21 +112,28 @@ def quaternion_slerp(q0, q1, t):
 
 class GaussianModel:
     """
-    Full DGS with view-dependent position, time-dependent rotation, and opacity.
+    Full DGS with SEPARATED view/time for opacity (position shift unchanged).
 
-    Uses full Cholesky parameterization (like dgs.py) for better opacity performance:
-    - _L_22_inv: [N, C*(C+1)/2] Cholesky of V_22^{-1} (precision matrix)
+    Key change: Separate view and time precision for opacity computation
+    - For input_dim=6: Uses _L_22_inv [N, 6] only (backward compatible)
+    - For input_dim=7: Uses _L_22_inv [N, 6] for view + _L_22_inv_diag_opac [N, 1] for time
 
-    Mathematical formulation:
-    - V_22^{-1} = L_22_inv @ L_22_inv^T (precision from Cholesky, no matrix inversion!)
-    - x_cond = x + v_12 @ V_22^{-1} @ (v - μ_v)  (position shift)
-    - attention = exp(-λ * (v - μ_v)^T @ V_22^{-1} @ (v - μ_v))  (opacity scale)
-    - q_cond = q_base ⊗ slerp(I, q_delta, 1 - attention_time)  (rotation, only for time when input_dim=7)
+    Mathematical formulation (input_dim=7):
 
-    Physical interpretation:
-    - attention ≈ 1 (canonical view): use base params unchanged
-    - attention ≈ 0 (oblique view): apply full position shift and reduce opacity
-    - Rotation only varies with time (not view direction) when input_dim=7
+    Position (UNCHANGED - uses unified v_12):
+    - x_cond = x_base + v_12 @ V_view_inv @ (query - μ)
+    - v_12: [N, 3*C] where C=4 for input_dim=7
+
+    Opacity (SEPARATED view/time):
+    - attention = exp(0.5 * (log_f_view + log_f_time))
+    - log_f_view = -λ * (view - μ_view)^T @ V_view_inv @ (view - μ_view)
+    - log_f_time = -λ * (time - μ_time)^2 * prec_time
+    - V_view_inv from _L_22_inv [N, 6] (3x3 Cholesky)
+    - prec_time from _L_22_inv_diag_opac [N, 1]
+
+    Rotation (unchanged):
+    - q_cond = q_base ⊗ slerp(I, q_delta, 1 - attention_time)
+    - Uses L_22_inv_diag_rot for time-based rotation attention
     """
 
     def setup_functions(self):
@@ -179,17 +186,24 @@ class GaussianModel:
         self._opacity = torch.empty(0)
         self._label = torch.empty(0)
 
-        # === Position + Opacity conditioning (full Cholesky like dgs.py) ===
+        # === Position + Opacity conditioning ===
         # View direction mean (learned "canonical" view direction per Gaussian)
         self._view_mean = torch.empty(0)  # [N, C] where C=3 or 4 (with time)
 
-        # Bounded v_12 parameterization for position shift
+        # Bounded v_12 parameterization for position shift (UNCHANGED)
         self._v_12_direction = torch.empty(0)  # [N, 3*C] - will be normalized
         self._v_12_scale = torch.empty(0)  # [N, 1] - sigmoid gives [0,1]
 
-        # L_22_inv: [N, C*(C+1)/2] Cholesky of V_22^{-1} (precision matrix)
-        # Uses full Cholesky (not diagonal) for better opacity performance
+        # === Opacity Precision (SEPARATED view/time) ===
+        # L_22_inv: [N, 6] Cholesky of 3x3 VIEW-only precision matrix
+        # Changed from [N, C*(C+1)/2] to [N, 6] to separate view and time
+        # Format: [l_00, l_10, l_11, l_20, l_21, l_22] (lower triangular)
+        # For input_dim=6: this is the only precision matrix (backward compatible)
+        # For input_dim=7: this is view-only, time uses _L_22_inv_diag_opac
         self._L_22_inv = torch.empty(0)
+
+        # Time-only opacity precision (scalar, only when input_dim=7)
+        self._L_22_inv_diag_opac = torch.empty(0)  # [N, 1] for time opacity
 
         # === Time-dependent Rotation conditioning (only when input_dim=7) ===
         # Only uses the time dimension (index 3) for rotation attention
@@ -231,6 +245,7 @@ class GaussianModel:
             self._L_22_inv,
             self._L_22_inv_diag_rot if self.use_time_dependent_rotation else None,
             self._rotation_delta if self.use_time_dependent_rotation else None,
+            self._L_22_inv_diag_opac if self.input_dim == 7 else None,
             self._beta if self.use_beta else None,
             self._opacity,
             self.max_radii2D,
@@ -254,6 +269,7 @@ class GaussianModel:
          self._L_22_inv,
          _L_22_inv_diag_rot,
          _rotation_delta,
+         _L_22_inv_diag_opac,
          _beta,
          self._opacity,
          self.max_radii2D,
@@ -271,6 +287,9 @@ class GaussianModel:
                 self._L_22_inv_diag_rot = _L_22_inv_diag_rot
             if _rotation_delta is not None:
                 self._rotation_delta = _rotation_delta
+        if self.input_dim == 7:
+            if _L_22_inv_diag_opac is not None:
+                self._L_22_inv_diag_opac = _L_22_inv_diag_opac
         if self.use_beta and _beta is not None:
             self._beta = _beta
         self.training_setup(training_args)
@@ -381,17 +400,12 @@ class GaussianModel:
 
     def slice_gaussian_full_method(self, query, lambda_opc=0.35):
         """
-        Perform conditional Gaussian slicing for position, rotation, and opacity.
+        Perform conditional Gaussian slicing with SEPARATED view/time using CUDA-accelerated kernel.
 
-        Uses the CUDA-accelerated slice_gaussian_full function that handles:
-        - Position + Opacity: full Cholesky L_22_inv parameterization
-        - Rotation: time-only conditioning when input_dim=7
-
-        Given query view direction (+ optional time), compute:
-        - Conditional position: x_cond = x + v_12 @ V_22^{-1} @ (v - μ_v)
-        - Opacity scale: attention = exp(-λ * (v - μ_v)^T @ V_22^{-1} @ (v - μ_v))
-        - Conditional rotation: q_cond = q_base ⊗ slerp(I, q_delta, 1 - attention_time)
-          (only for time dimension when input_dim=7)
+        Uses the optimized gsplat.slice_gaussian_full function which:
+        - Builds block-diagonal V_22_inv with separated view/time
+        - Computes position shift, opacity scale, and rotation in a single fused kernel
+        - Time is at index 3 (LAST), view at indices 0-2 (FIRST)
 
         Args:
             query: Query direction [N, C] where C=3 (view) or 4 (view+time)
@@ -402,17 +416,26 @@ class GaussianModel:
             rotation_cond: Conditional rotation quaternion [N, 4]
             opacity_scale: View-dependent opacity scaling [N, 1]
         """
-        # Use slice_gaussian_full CUDA kernel
+        # Get parameters
+        v_12 = self.get_v_12 if self.use_view_dependent_pos else None  # [N, 3*C] or None
+        L_22_inv_diag_opac = self._L_22_inv_diag_opac if self.input_dim == 7 else None  # [N, 1] or None
+
+        # Rotation parameters (time-only when C=4)
+        rotation_delta = self.get_rotation_delta if self.use_time_dependent_rotation else None
+        L_22_inv_diag_rot = self._L_22_inv_diag_rot if self.use_time_dependent_rotation else None
+
+        # Call CUDA-accelerated fused kernel
         x_cond, rotation_cond, opacity_scale = slice_gaussian_full(
-            xyz=self._xyz,                   # [N, 3]
-            view_mean=self.get_view_mean,    # [N, C]
-            query=query,                     # [N, C]
-            v_12=self.get_v_12 if self.use_view_dependent_pos else None,  # [N, 3*C] or None
-            L_22_inv=self._L_22_inv,         # [N, C*(C+1)/2] full Cholesky
-            rotation=self.get_rotation,      # [N, 4]
-            rotation_delta=self.get_rotation_delta if self.use_time_dependent_rotation else None,  # [N, 4] or None
-            L_22_inv_diag_rot=self._L_22_inv_diag_rot if self.use_time_dependent_rotation else None,  # [N, 1] or None
-            lambda_opc=lambda_opc,
+            xyz=self._xyz,                      # [N, 3] base position
+            view_mean=self.get_view_mean,       # [N, C] canonical view/time mean
+            query=query,                        # [N, C] query view/time
+            v_12=v_12,                          # [N, 3*C] or None
+            L_22_inv=self._L_22_inv,            # [N, 6] VIEW-only 3x3 Cholesky
+            L_22_inv_diag_opac=L_22_inv_diag_opac,  # [N, 1] TIME-only opacity precision
+            rotation=self.get_rotation,         # [N, 4] base rotation
+            rotation_delta=rotation_delta,      # [N, 4] or None
+            L_22_inv_diag_rot=L_22_inv_diag_rot,  # [N, 1] or None
+            lambda_opc=lambda_opc,              # float
         )
 
         return x_cond, rotation_cond, opacity_scale
@@ -464,16 +487,23 @@ class GaussianModel:
             v_12_direction = torch.empty(0, device=device)
             v_12_scale = torch.empty(0, device=device)
 
-        # L_22_inv: [N, C*(C+1)/2] Cholesky of V_22^{-1} (precision)
+        # L_22_inv: [N, 6] Cholesky of 3x3 VIEW-only precision matrix
+        # Changed to always be 3x3 (view-only), regardless of input_dim
         # Diagonal uses exp() activation, so initialize with log(2.0) ≈ 0.693
         # This gives diagonal=2.0 after exp, so V_22^{-1} has diagonal ~4.0
-        # Storage format: [l_00, l_10, l_11, l_20, l_21, l_22, ...] (row-major lower triangular)
-        n_L_22_inv = C * (C + 1) // 2
+        # Storage format: [l_00, l_10, l_11, l_20, l_21, l_22] (row-major lower triangular)
+        n_L_22_inv = 6  # Always 3x3 Cholesky = 3*(3+1)/2 = 6
         L_22_inv = torch.zeros(num_gaussians, n_L_22_inv, device=device)
-        # Diagonal positions: 0 (i=0), 2 (i=1), 5 (i=2), 9 (i=3)
-        for i in range(C):
-            diag_idx = i * (i + 1) // 2 + i
-            L_22_inv[:, diag_idx] = math.log(2.0)
+        # Diagonal positions for 3x3: 0 (i=0), 2 (i=1), 5 (i=2)
+        L_22_inv[:, 0] = math.log(2.0)  # l_00
+        L_22_inv[:, 2] = math.log(2.0)  # l_11
+        L_22_inv[:, 5] = math.log(2.0)  # l_22
+
+        # Time-only opacity precision (only when input_dim=7)
+        if self.input_dim == 7:
+            L_22_inv_diag_opac = torch.full((num_gaussians, 1), math.log(2.0), device=device)
+        else:
+            L_22_inv_diag_opac = torch.empty(0, device=device)
 
         # Time-dependent rotation conditioning (only when input_dim=7)
         # Uses only time dimension (index 3) for rotation attention
@@ -513,6 +543,8 @@ class GaussianModel:
         if self.use_time_dependent_rotation:
             self._L_22_inv_diag_rot = nn.Parameter(L_22_inv_diag_rot.requires_grad_(True))
             self._rotation_delta = nn.Parameter(rotation_delta.requires_grad_(True))
+        if self.input_dim == 7:
+            self._L_22_inv_diag_opac = nn.Parameter(L_22_inv_diag_opac.requires_grad_(True))
         if self.use_beta:
             self._beta = nn.Parameter(betas.requires_grad_(True))
 
@@ -543,6 +575,10 @@ class GaussianModel:
         if self.use_time_dependent_rotation:
             l.append({'params': [self._L_22_inv_diag_rot], 'lr': training_args.rotation_lr, "name": "L_22_inv_diag_rot"})
             l.append({'params': [self._rotation_delta], 'lr': training_args.rotation_lr, "name": "rotation_delta"})
+
+        # Add time-dependent opacity precision for 7D Gaussians
+        if self.input_dim == 7:
+            l.append({'params': [self._L_22_inv_diag_opac], 'lr': training_args.rotation_lr, "name": "L_22_inv_diag_opac"})
 
         # Add beta if enabled
         if self.use_beta:
@@ -589,6 +625,9 @@ class GaussianModel:
                 l.append('L_22_inv_diag_rot_{}'.format(i))
             for i in range(self._rotation_delta.shape[1]):
                 l.append('rotation_delta_{}'.format(i))
+        if self.input_dim == 7:
+            for i in range(self._L_22_inv_diag_opac.shape[1]):
+                l.append('L_22_inv_diag_opac_{}'.format(i))
         if self.use_beta:
             for i in range(self._beta.shape[1]):
                 l.append('beta_{}'.format(i))
@@ -622,6 +661,9 @@ class GaussianModel:
             rotation_delta = self._rotation_delta.detach().cpu().numpy()
             attrs_list.append(L_22_inv_diag_rot)
             attrs_list.append(rotation_delta)
+        if self.input_dim == 7:
+            L_22_inv_diag_opac = self._L_22_inv_diag_opac.detach().cpu().numpy()
+            attrs_list.append(L_22_inv_diag_opac)
         if self.use_beta:
             betas = self._beta.detach().cpu().numpy()
             attrs_list.append(betas)
@@ -714,6 +756,14 @@ class GaussianModel:
             for idx, attr_name in enumerate(rot_delta_names):
                 rotation_delta[:, idx] = np.asarray(plydata.elements[0][attr_name])
 
+        # Load time-dependent opacity precision for 7D Gaussians
+        if self.input_dim == 7:
+            L_22_opac_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("L_22_inv_diag_opac_")]
+            L_22_opac_names = sorted(L_22_opac_names, key=lambda x: int(x.split('_')[-1]))
+            L_22_inv_diag_opac = np.zeros((xyz.shape[0], len(L_22_opac_names)))
+            for idx, attr_name in enumerate(L_22_opac_names):
+                L_22_inv_diag_opac[:, idx] = np.asarray(plydata.elements[0][attr_name])
+
         # Load beta if enabled
         if self.use_beta:
             beta_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("beta_")]
@@ -737,6 +787,8 @@ class GaussianModel:
         if self.use_time_dependent_rotation:
             self._L_22_inv_diag_rot = nn.Parameter(torch.tensor(L_22_inv_diag_rot, dtype=torch.float, device="cuda").requires_grad_(True))
             self._rotation_delta = nn.Parameter(torch.tensor(rotation_delta, dtype=torch.float, device="cuda").requires_grad_(True))
+        if self.input_dim == 7:
+            self._L_22_inv_diag_opac = nn.Parameter(torch.tensor(L_22_inv_diag_opac, dtype=torch.float, device="cuda").requires_grad_(True))
         if self.use_beta:
             self._beta = nn.Parameter(torch.tensor(betas, dtype=torch.float, device="cuda").requires_grad_(True))
 
@@ -793,6 +845,8 @@ class GaussianModel:
         if self.use_time_dependent_rotation:
             self._L_22_inv_diag_rot = optimizable_tensors["L_22_inv_diag_rot"]
             self._rotation_delta = optimizable_tensors["rotation_delta"]
+        if self.input_dim == 7:
+            self._L_22_inv_diag_opac = optimizable_tensors["L_22_inv_diag_opac"]
         if self.use_beta:
             self._beta = optimizable_tensors["beta"]
 
@@ -824,7 +878,8 @@ class GaussianModel:
     def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities,
                               new_scaling, new_rotation, new_view_mean,
                               new_L_22_inv, new_v_12_direction=None, new_v_12_scale=None,
-                              new_L_22_inv_diag_rot=None, new_rotation_delta=None, new_beta=None):
+                              new_L_22_inv_diag_rot=None, new_rotation_delta=None,
+                              new_L_22_inv_diag_opac=None, new_beta=None):
         d = {
             "xyz": new_xyz,
             "f_dc": new_features_dc,
@@ -841,6 +896,8 @@ class GaussianModel:
         if self.use_time_dependent_rotation:
             d["L_22_inv_diag_rot"] = new_L_22_inv_diag_rot
             d["rotation_delta"] = new_rotation_delta
+        if self.input_dim == 7:
+            d["L_22_inv_diag_opac"] = new_L_22_inv_diag_opac
         if self.use_beta:
             d["beta"] = new_beta
 
@@ -859,6 +916,8 @@ class GaussianModel:
         if self.use_time_dependent_rotation:
             self._L_22_inv_diag_rot = optimizable_tensors["L_22_inv_diag_rot"]
             self._rotation_delta = optimizable_tensors["rotation_delta"]
+        if self.input_dim == 7:
+            self._L_22_inv_diag_opac = optimizable_tensors["L_22_inv_diag_opac"]
         if self.use_beta:
             self._beta = optimizable_tensors["beta"]
 
@@ -893,13 +952,14 @@ class GaussianModel:
         new_v_12_scale = self._v_12_scale[selected_pts_mask].repeat(N, 1) if self.use_view_dependent_pos else None
         new_L_22_inv_diag_rot = self._L_22_inv_diag_rot[selected_pts_mask].repeat(N, 1) if self.use_time_dependent_rotation else None
         new_rotation_delta = self._rotation_delta[selected_pts_mask].repeat(N, 1) if self.use_time_dependent_rotation else None
+        new_L_22_inv_diag_opac = self._L_22_inv_diag_opac[selected_pts_mask].repeat(N, 1) if self.input_dim == 7 else None
         new_beta = self._beta[selected_pts_mask].repeat(N, 1) if self.use_beta else None
 
         self.densification_postfix(
             new_xyz, new_features_dc, new_features_rest, new_opacity,
             new_scaling, new_rotation, new_view_mean, new_L_22_inv,
             new_v_12_direction, new_v_12_scale,
-            new_L_22_inv_diag_rot, new_rotation_delta, new_beta
+            new_L_22_inv_diag_rot, new_rotation_delta, new_L_22_inv_diag_opac, new_beta
         )
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
@@ -925,13 +985,14 @@ class GaussianModel:
         new_v_12_scale = self._v_12_scale[selected_pts_mask] if self.use_view_dependent_pos else None
         new_L_22_inv_diag_rot = self._L_22_inv_diag_rot[selected_pts_mask] if self.use_time_dependent_rotation else None
         new_rotation_delta = self._rotation_delta[selected_pts_mask] if self.use_time_dependent_rotation else None
+        new_L_22_inv_diag_opac = self._L_22_inv_diag_opac[selected_pts_mask] if self.input_dim == 7 else None
         new_beta = self._beta[selected_pts_mask] if self.use_beta else None
 
         self.densification_postfix(
             new_xyz, new_features_dc, new_features_rest, new_opacities,
             new_scaling, new_rotation, new_view_mean, new_L_22_inv,
             new_v_12_direction, new_v_12_scale,
-            new_L_22_inv_diag_rot, new_rotation_delta, new_beta
+            new_L_22_inv_diag_rot, new_rotation_delta, new_L_22_inv_diag_opac, new_beta
         )
 
     def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size, iteration):

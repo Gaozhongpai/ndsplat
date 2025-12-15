@@ -48,13 +48,20 @@ def test_slice_gaussian_full_gradients(N=1000, C=3, use_pos=True, use_rot=True, 
     view_mean.requires_grad_(True)
     query = F.normalize(torch.randn(N, C, device=device), dim=-1)
 
-    # Position conditioning (full Cholesky)
-    n_L = C * (C + 1) // 2
+    # Position conditioning with separated view/time
     if use_pos:
         v_12 = torch.randn(N, 3 * C, device=device, requires_grad=True) * 0.1
     else:
         v_12 = None
-    L_22_inv = torch.randn(N, n_L, device=device, requires_grad=True) * 0.5
+
+    # L_22_inv: VIEW-only 3x3 Cholesky (always 6 params regardless of C)
+    L_22_inv = torch.randn(N, 6, device=device, requires_grad=True) * 0.5
+
+    # L_22_inv_diag_opac: TIME-only scalar (only for C=4)
+    if C == 4:
+        L_22_inv_diag_opac = torch.randn(N, 1, device=device, requires_grad=True) * 0.5
+    else:
+        L_22_inv_diag_opac = None
 
     # Rotation conditioning (time-only when C=4)
     rotation = F.normalize(torch.randn(N, 4, device=device), dim=-1)
@@ -77,6 +84,7 @@ def test_slice_gaussian_full_gradients(N=1000, C=3, use_pos=True, use_rot=True, 
     view_mean_pt = view_mean.detach().clone().requires_grad_(True)
     v_12_pt = v_12.detach().clone().requires_grad_(True) if v_12 is not None else None
     L_22_inv_pt = L_22_inv.detach().clone().requires_grad_(True)
+    L_22_inv_diag_opac_pt = L_22_inv_diag_opac.detach().clone().requires_grad_(True) if L_22_inv_diag_opac is not None else None
     rotation_pt = rotation.detach().clone().requires_grad_(True)
     rotation_delta_pt = rotation_delta.detach().clone().requires_grad_(True) if rotation_delta is not None else None
     L_22_inv_diag_rot_pt = L_22_inv_diag_rot.detach().clone().requires_grad_(True) if L_22_inv_diag_rot is not None else None
@@ -84,7 +92,7 @@ def test_slice_gaussian_full_gradients(N=1000, C=3, use_pos=True, use_rot=True, 
     # Forward pass with PyTorch
     x_cond_pt, rotation_cond_pt, attention_pt = _slice_gaussian_full(
         xyz_pt, view_mean_pt, query,
-        v_12_pt, L_22_inv_pt,
+        v_12_pt, L_22_inv_pt, L_22_inv_diag_opac_pt,
         rotation_pt, rotation_delta_pt, L_22_inv_diag_rot_pt,
         lambda_opc
     )
@@ -111,6 +119,8 @@ def test_slice_gaussian_full_gradients(N=1000, C=3, use_pos=True, use_rot=True, 
     }
     if v_12_pt is not None:
         pt_grads['v_12'] = v_12_pt.grad.clone()
+    if L_22_inv_diag_opac_pt is not None:
+        pt_grads['L_22_inv_diag_opac'] = L_22_inv_diag_opac_pt.grad.clone()
     if rotation_delta_pt is not None:
         pt_grads['rotation_delta'] = rotation_delta_pt.grad.clone()
     if L_22_inv_diag_rot_pt is not None:
@@ -124,6 +134,7 @@ def test_slice_gaussian_full_gradients(N=1000, C=3, use_pos=True, use_rot=True, 
     view_mean_cuda = view_mean.detach().clone().requires_grad_(True)
     v_12_cuda = v_12.detach().clone().requires_grad_(True) if v_12 is not None else None
     L_22_inv_cuda = L_22_inv.detach().clone().requires_grad_(True)
+    L_22_inv_diag_opac_cuda = L_22_inv_diag_opac.detach().clone().requires_grad_(True) if L_22_inv_diag_opac is not None else None
     rotation_cuda = rotation.detach().clone().requires_grad_(True)
     rotation_delta_cuda = rotation_delta.detach().clone().requires_grad_(True) if rotation_delta is not None else None
     L_22_inv_diag_rot_cuda = L_22_inv_diag_rot.detach().clone().requires_grad_(True) if L_22_inv_diag_rot is not None else None
@@ -131,7 +142,7 @@ def test_slice_gaussian_full_gradients(N=1000, C=3, use_pos=True, use_rot=True, 
     # Forward pass with CUDA kernel
     x_cond_cuda, rotation_cond_cuda, attention_cuda = slice_gaussian_full(
         xyz_cuda, view_mean_cuda, query,
-        v_12_cuda, L_22_inv_cuda,
+        v_12_cuda, L_22_inv_cuda, L_22_inv_diag_opac_cuda,
         rotation_cuda, rotation_delta_cuda, L_22_inv_diag_rot_cuda,
         lambda_opc
     )
@@ -153,6 +164,8 @@ def test_slice_gaussian_full_gradients(N=1000, C=3, use_pos=True, use_rot=True, 
     }
     if v_12_cuda is not None:
         cuda_grads['v_12'] = v_12_cuda.grad.clone()
+    if L_22_inv_diag_opac_cuda is not None:
+        cuda_grads['L_22_inv_diag_opac'] = L_22_inv_diag_opac_cuda.grad.clone()
     if rotation_delta_cuda is not None:
         cuda_grads['rotation_delta'] = rotation_delta_cuda.grad.clone()
     if L_22_inv_diag_rot_cuda is not None:
@@ -198,7 +211,9 @@ def test_slice_gaussian_full_gradients(N=1000, C=3, use_pos=True, use_rot=True, 
     results['xyz'] = compare_grads("xyz (position)", pt_grads['xyz'], cuda_grads['xyz'])
     if 'v_12' in pt_grads:
         results['v_12'] = compare_grads("v_12 (position-view covariance)", pt_grads['v_12'], cuda_grads['v_12'])
-    results['L_22_inv'] = compare_grads("L_22_inv (full Cholesky precision)", pt_grads['L_22_inv'], cuda_grads['L_22_inv'])
+    results['L_22_inv'] = compare_grads("L_22_inv (VIEW-only 3x3 Cholesky)", pt_grads['L_22_inv'], cuda_grads['L_22_inv'])
+    if 'L_22_inv_diag_opac' in pt_grads:
+        results['L_22_inv_diag_opac'] = compare_grads("L_22_inv_diag_opac (TIME-only precision)", pt_grads['L_22_inv_diag_opac'], cuda_grads['L_22_inv_diag_opac'])
 
     # Rotation gradients
     print("\n--- ROTATION GRADIENTS ---")
@@ -259,9 +274,10 @@ def test_forward_output_match(N=100, C=3, use_pos=True, use_rot=False, seed=42):
     view_mean = F.normalize(torch.randn(N, C, device=device), dim=-1)
     query = F.normalize(torch.randn(N, C, device=device), dim=-1)
 
-    n_L = C * (C + 1) // 2
+    # Separated view/time parameters
     v_12 = torch.randn(N, 3 * C, device=device) * 0.1 if use_pos else None
-    L_22_inv = torch.randn(N, n_L, device=device) * 0.5
+    L_22_inv = torch.randn(N, 6, device=device) * 0.5  # VIEW-only 3x3 Cholesky
+    L_22_inv_diag_opac = torch.randn(N, 1, device=device) * 0.5 if C == 4 else None  # TIME-only
 
     rotation = F.normalize(torch.randn(N, 4, device=device), dim=-1)
     rotation_delta = F.normalize(torch.randn(N, 4, device=device), dim=-1) if use_rot else None
@@ -272,7 +288,7 @@ def test_forward_output_match(N=100, C=3, use_pos=True, use_rot=False, seed=42):
     # PyTorch forward
     x_cond_pt, rotation_cond_pt, attention_pt = _slice_gaussian_full(
         xyz, view_mean, query,
-        v_12, L_22_inv,
+        v_12, L_22_inv, L_22_inv_diag_opac,
         rotation, rotation_delta, L_22_inv_diag_rot,
         lambda_opc
     )
@@ -280,7 +296,7 @@ def test_forward_output_match(N=100, C=3, use_pos=True, use_rot=False, seed=42):
     # CUDA forward
     x_cond_cuda, rotation_cond_cuda, attention_cuda = slice_gaussian_full(
         xyz, view_mean, query,
-        v_12, L_22_inv,
+        v_12, L_22_inv, L_22_inv_diag_opac,
         rotation, rotation_delta, L_22_inv_diag_rot,
         lambda_opc
     )
@@ -370,9 +386,9 @@ def test_rotation_at_different_t_values():
         query[:, 3] = 0.5 + time_offset  # offset from canonical
 
         # Other parameters
-        n_L = C * (C + 1) // 2
         v_12 = torch.randn(N, 3 * C, device=device, requires_grad=True) * 0.1
-        L_22_inv = torch.zeros(N, n_L, device=device, requires_grad=True)  # identity precision
+        L_22_inv = torch.zeros(N, 6, device=device, requires_grad=True)  # VIEW-only identity
+        L_22_inv_diag_opac = torch.zeros(N, 1, device=device, requires_grad=True)  # TIME-only identity (exp(0)^2 = 1)
 
         rotation = F.normalize(torch.randn(N, 4, device=device), dim=-1)
         rotation.requires_grad_(True)
@@ -388,7 +404,7 @@ def test_rotation_at_different_t_values():
 
         x_cond_pt, rotation_cond_pt, attention_pt = _slice_gaussian_full(
             xyz.detach(), view_mean.detach(), query,
-            v_12.detach(), L_22_inv.detach(),
+            v_12.detach(), L_22_inv.detach(), L_22_inv_diag_opac.detach(),
             rotation_pt, rotation_delta_pt, L_22_inv_diag_rot.detach(),
             lambda_opc
         )
@@ -403,7 +419,7 @@ def test_rotation_at_different_t_values():
 
         x_cond_cuda, rotation_cond_cuda, attention_cuda = slice_gaussian_full(
             xyz.detach(), view_mean.detach(), query,
-            v_12.detach(), L_22_inv.detach(),
+            v_12.detach(), L_22_inv.detach(), L_22_inv_diag_opac.detach(),
             rotation_cuda, rotation_delta_cuda, L_22_inv_diag_rot.detach(),
             lambda_opc
         )

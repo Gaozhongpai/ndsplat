@@ -77,7 +77,7 @@ class ModelParams(ParamGroup):
         self.eval = False
         self.mode = "dgs"  # Options: "ddgs", "3dgs", "ubs", "ndgs", "ndgs-2sh", "ndgs-color", "dgs", "dgs-color"
         self.input_dim = 6  # Gaussian dimension: 6 for 6DGS/UBS, 7 for 7DGS (with time)
-        self.use_rot_scale_l_triangle = True  # If True: use rotation-scale-l_triangle (UBS-style), If False: use diagonal-l_triangle (NDGS-style)
+        self.use_rot_scale_l_triangle = False  # If True: use rotation-scale-l_triangle (UBS-style), If False: use diagonal-l_triangle (NDGS-style)
         self.learnable_lambda_opc = False  # If True: make lambda_opc a learnable parameter per Gaussian
         self.use_jpeg_compression = False  # If True: use JPEG compression for images to save GPU memory (slower but memory-efficient)
         # DGS view-dependent flags (only used when mode="dgs")

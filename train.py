@@ -211,6 +211,11 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
             gaussians.oneupSHdegree()
 
         total_loss = 0
+        # Track visibility across multi-view batch for gradient averaging
+        batch_visibility_filters = []
+        batch_radii = []
+        batch_viewspace_tensors = []  # Store viewspace tensors from each view
+
         for _ in range(pipe.mv):
             # Pick a random Camera
             if not viewpoint_stack:
@@ -230,12 +235,44 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
             gt_image = viewpoint_cam.original_image  # Already on CUDA, no need for .cuda()
             Ll1 = l1_loss(image, gt_image)
             loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
+
+            # Normalize by number of views (matching 7DGS-ICCV behavior)
+            loss = loss / pipe.mv
             total_loss = total_loss + loss
+
+            # Store visibility and viewspace information for gradient averaging
+            batch_visibility_filters.append(visibility_filter)
+            batch_radii.append(radii)
+            batch_viewspace_tensors.append(viewspace_point_tensor)
+
         total_loss.backward()
 
         iter_end.record()
 
         with torch.no_grad():
+            # Use the last view's data as baseline
+            viewspace_point_tensor = batch_viewspace_tensors[-1]
+            visibility_filter = batch_visibility_filters[-1]
+            radii = batch_radii[-1]
+
+            # Multi-view: aggregate and apply visibility-weighted averaging
+            if pipe.mv > 1:
+                # Aggregate visibility and radii
+                visibility_count = torch.stack(batch_visibility_filters, dim=1).sum(dim=1)
+                visibility_filter = visibility_count > 0
+                radii = torch.stack(batch_radii, dim=1).max(dim=1)[0]
+
+                # Aggregate viewspace gradient norms from all views
+                batch_point_grad_norms = []
+                for vs_tensor in batch_viewspace_tensors:
+                    if vs_tensor.grad is not None:
+                        batch_point_grad_norms.append(torch.norm(vs_tensor.grad[:, :2], dim=-1))
+
+                # Sum norms and apply visibility weighting
+                aggregated_grad_norms = torch.stack(batch_point_grad_norms, dim=1).sum(dim=1)
+                aggregated_grad_norms[visibility_filter] *= pipe.mv / visibility_count[visibility_filter]
+                viewspace_point_tensor.grad[:, :2] = aggregated_grad_norms.unsqueeze(-1)
+
             # Progress bar
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
             if iteration % 10 == 0:
