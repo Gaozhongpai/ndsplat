@@ -181,7 +181,8 @@ class GaussianModel:
 
         # === Position + Opacity conditioning (full Cholesky like dgs.py) ===
         # View direction mean (learned "canonical" view direction per Gaussian)
-        self._view_mean = torch.empty(0)  # [N, C] where C=3 or 4 (with time)
+        self._mean_view = torch.empty(0)  # [N, 3] view direction
+        self._mean_time = torch.empty(0)  # [N, 1] time mean (only for input_dim=7)
 
         # Bounded v_12 parameterization for position shift
         self._v_12_direction = torch.empty(0)  # [N, 3*C] - will be normalized
@@ -225,7 +226,8 @@ class GaussianModel:
             self._features_rest,
             self._scaling,
             self._rotation,
-            self._view_mean,
+            self._mean_view,
+            self._mean_time,
             self._v_12_direction if self.use_view_dependent_pos else None,
             self._v_12_scale if self.use_view_dependent_pos else None,
             self._L_22_inv,
@@ -248,7 +250,8 @@ class GaussianModel:
          self._features_rest,
          self._scaling,
          self._rotation,
-         self._view_mean,
+         self._mean_view,
+         self._mean_time,
          _v_12_direction,
          _v_12_scale,
          self._L_22_inv,
@@ -291,13 +294,22 @@ class GaussianModel:
         return self._xyz
 
     @property
-    def get_view_mean(self):
-        """Get normalized view mean direction."""
-        view_dir = self._view_mean[:, :3]
-        view_dir_normalized = view_dir / (view_dir.norm(dim=1, keepdim=True) + 1e-8)
-        if self._view_mean.shape[1] > 3:
-            return torch.cat([view_dir_normalized, self._view_mean[:, 3:]], dim=1)
-        return view_dir_normalized
+    def get_cond_mean(self):
+        """Get conditioning mean [N, C]: normalized view direction concatenated with time (if input_dim=7)."""
+        mean_view_normalized = self._mean_view / (self._mean_view.norm(dim=1, keepdim=True) + 1e-8)
+        if self.input_dim == 7:
+            return torch.cat([mean_view_normalized, self._mean_time], dim=1)
+        return mean_view_normalized
+
+    @property
+    def get_mean_view(self):
+        """Get view direction [N, 3]."""
+        return self._mean_view
+
+    @property
+    def get_mean_time(self):
+        """Get time mean [N, 1] (only valid for input_dim=7)."""
+        return self._mean_time
 
     @property
     def get_features(self):
@@ -426,7 +438,7 @@ class GaussianModel:
         # Use get_L_22_inv to enforce block-diagonal structure (zero view-time cross terms)
         x_cond, rotation_cond, opacity_scale = slice_gaussian_full(
             xyz=self._xyz,                   # [N, 3]
-            view_mean=self.get_view_mean,    # [N, C]
+            view_mean=self.get_cond_mean,    # [N, C]
             query=query,                     # [N, C]
             v_12=self.get_v_12 if self.use_view_dependent_pos else None,  # [N, 3*C] or None
             L_22_inv=self.get_L_22_inv,      # [N, C*(C+1)/2] full Cholesky (block-diagonal for C=4)
@@ -469,13 +481,15 @@ class GaussianModel:
         rots = torch.zeros((fused_point_cloud.shape[0], 4), device=device)
         rots[:, 0] = 1
 
-        # View direction mean: random unit vectors
-        view_dir = torch.randn((num_gaussians, 3), device=device)
-        view_mean = (view_dir / view_dir.norm(dim=1, keepdim=True)).float()
+        # View direction mean: random unit vectors [N, 3]
+        mean_view = torch.randn((num_gaussians, 3), device=device)
+        mean_view = (mean_view / mean_view.norm(dim=1, keepdim=True)).float()
 
+        # Time mean [N, 1] (only for input_dim=7)
         if self.input_dim == 7:
             mean_time = torch.empty(num_gaussians, 1, device=device).uniform_(0.0, 1.0)
-            view_mean = torch.cat([view_mean, mean_time], dim=-1)
+        else:
+            mean_time = torch.empty(num_gaussians, 0, device=device)
 
         # Position shift parameters
         if self.use_view_dependent_pos:
@@ -531,7 +545,8 @@ class GaussianModel:
         self._features_rest = nn.Parameter(features[:, :, 1:].transpose(1, 2).contiguous().requires_grad_(True))
         self._scaling = nn.Parameter(scales.requires_grad_(True))
         self._rotation = nn.Parameter(rots.requires_grad_(True))
-        self._view_mean = nn.Parameter(view_mean.requires_grad_(True))
+        self._mean_view = nn.Parameter(mean_view.requires_grad_(True))
+        self._mean_time = nn.Parameter(mean_time.requires_grad_(self.input_dim == 7))
         self._L_22_inv = nn.Parameter(L_22_inv.requires_grad_(True))
         self._opacity = nn.Parameter(opacities.requires_grad_(True))
 
@@ -566,9 +581,13 @@ class GaussianModel:
             {'params': [self._opacity], 'lr': training_args.opacity_lr, "name": "opacity"},
             {'params': [self._scaling], 'lr': training_args.scaling_lr, "name": "scaling"},
             {'params': [self._rotation], 'lr': training_args.rotation_lr, "name": "rotation"},
-            {'params': [self._view_mean], 'lr': training_args.feature_lr, "name": "view_mean"},
+            {'params': [self._mean_view], 'lr': training_args.feature_lr, "name": "mean_view"},
             {'params': [self._L_22_inv], 'lr': training_args.rotation_lr, "name": "L_22_inv"},
         ]
+
+        # Add mean_time only for input_dim=7
+        if self.input_dim == 7:
+            l.append({'params': [self._mean_time], 'lr': training_args.feature_lr, "name": "mean_time"})
 
         # Add view-dependent position parameters
         if self.use_view_dependent_pos:
@@ -611,8 +630,10 @@ class GaussianModel:
             l.append('scale_{}'.format(i))
         for i in range(self._rotation.shape[1]):
             l.append('rot_{}'.format(i))
-        for i in range(self._view_mean.shape[1]):
-            l.append('view_mean_{}'.format(i))
+        for i in range(self._mean_view.shape[1]):
+            l.append('mean_view_{}'.format(i))
+        for i in range(self._mean_time.shape[1]):
+            l.append('mean_time_{}'.format(i))
         for i in range(self._L_22_inv.shape[1]):
             l.append('L_22_inv_{}'.format(i))
         if self.use_view_dependent_pos:
@@ -639,14 +660,15 @@ class GaussianModel:
         opacities = self._opacity.detach().cpu().numpy()
         scale = self._scaling.detach().cpu().numpy()
         rotation = self._rotation.detach().cpu().numpy()
-        view_mean = self._view_mean.detach().cpu().numpy()
+        mean_view = self._mean_view.detach().cpu().numpy()
+        mean_time = self._mean_time.detach().cpu().numpy()
         L_22_inv = self._L_22_inv.detach().cpu().numpy()
 
         dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
 
         elements = np.empty(xyz.shape[0], dtype=dtype_full)
         attrs_list = [xyz, f_dc, f_rest, opacities, scale, rotation,
-                      view_mean, L_22_inv]
+                      mean_view, mean_time, L_22_inv]
 
         if self.use_view_dependent_pos:
             v_12_direction = self._v_12_direction.detach().cpu().numpy()
@@ -706,12 +728,38 @@ class GaussianModel:
         for idx, attr_name in enumerate(rot_names):
             rots[:, idx] = np.asarray(plydata.elements[0][attr_name])
 
-        # Load view mean (shared by all conditioning)
-        view_mean_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("view_mean_")]
-        view_mean_names = sorted(view_mean_names, key=lambda x: int(x.split('_')[-1]))
-        view_mean = np.zeros((xyz.shape[0], len(view_mean_names)))
-        for idx, attr_name in enumerate(view_mean_names):
-            view_mean[:, idx] = np.asarray(plydata.elements[0][attr_name])
+        # Load view direction [N, 3]
+        mean_view_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("mean_view_")]
+        if mean_view_names:
+            mean_view_names = sorted(mean_view_names, key=lambda x: int(x.split('_')[-1]))
+            mean_view = np.zeros((xyz.shape[0], len(mean_view_names)))
+            for idx, attr_name in enumerate(mean_view_names):
+                mean_view[:, idx] = np.asarray(plydata.elements[0][attr_name])
+        else:
+            # Backward compatibility: try old view_mean format
+            view_mean_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("view_mean_")]
+            view_mean_names = sorted(view_mean_names, key=lambda x: int(x.split('_')[-1]))
+            mean_view = np.zeros((xyz.shape[0], 3))
+            for idx in range(3):
+                mean_view[:, idx] = np.asarray(plydata.elements[0][view_mean_names[idx]])
+
+        # Load view time [N, 1] (only for input_dim=7)
+        mean_time_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("mean_time_")]
+        if mean_time_names:
+            mean_time_names = sorted(mean_time_names, key=lambda x: int(x.split('_')[-1]))
+            mean_time = np.zeros((xyz.shape[0], len(mean_time_names)))
+            for idx, attr_name in enumerate(mean_time_names):
+                mean_time[:, idx] = np.asarray(plydata.elements[0][attr_name])
+        elif self.input_dim == 7:
+            # Backward compatibility: try old view_mean format (index 3)
+            view_mean_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("view_mean_")]
+            if view_mean_names and len(view_mean_names) > 3:
+                view_mean_names = sorted(view_mean_names, key=lambda x: int(x.split('_')[-1]))
+                mean_time = np.asarray(plydata.elements[0][view_mean_names[3]])[..., np.newaxis]
+            else:
+                mean_time = np.zeros((xyz.shape[0], 1), dtype=np.float32)
+        else:
+            mean_time = np.zeros((xyz.shape[0], 0), dtype=np.float32)
 
         # Load position conditioning parameters if enabled
         if self.use_view_dependent_pos:
@@ -764,7 +812,8 @@ class GaussianModel:
         self._opacity = nn.Parameter(torch.tensor(opacities, dtype=torch.float, device="cuda").requires_grad_(True))
         self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True))
         self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
-        self._view_mean = nn.Parameter(torch.tensor(view_mean, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._mean_view = nn.Parameter(torch.tensor(mean_view, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._mean_time = nn.Parameter(torch.tensor(mean_time, dtype=torch.float, device="cuda").requires_grad_(self.input_dim == 7))
         self._L_22_inv = nn.Parameter(torch.tensor(L_22_inv, dtype=torch.float, device="cuda").requires_grad_(True))
 
         if self.use_view_dependent_pos:
@@ -821,7 +870,9 @@ class GaussianModel:
         self._opacity = optimizable_tensors["opacity"]
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
-        self._view_mean = optimizable_tensors["view_mean"]
+        self._mean_view = optimizable_tensors["mean_view"]
+        if self.input_dim == 7:
+            self._mean_time = optimizable_tensors["mean_time"]
         self._L_22_inv = optimizable_tensors["L_22_inv"]
         if self.use_view_dependent_pos:
             self._v_12_direction = optimizable_tensors["v_12_direction"]
@@ -858,7 +909,7 @@ class GaussianModel:
         return optimizable_tensors
 
     def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities,
-                              new_scaling, new_rotation, new_view_mean,
+                              new_scaling, new_rotation, new_mean_view, new_mean_time,
                               new_L_22_inv, new_v_12_direction=None, new_v_12_scale=None,
                               new_L_22_inv_diag_rot=None, new_rotation_delta=None, new_beta=None):
         d = {
@@ -868,9 +919,11 @@ class GaussianModel:
             "opacity": new_opacities,
             "scaling": new_scaling,
             "rotation": new_rotation,
-            "view_mean": new_view_mean,
+            "mean_view": new_mean_view,
             "L_22_inv": new_L_22_inv,
         }
+        if self.input_dim == 7:
+            d["mean_time"] = new_mean_time
         if self.use_view_dependent_pos:
             d["v_12_direction"] = new_v_12_direction
             d["v_12_scale"] = new_v_12_scale
@@ -887,7 +940,9 @@ class GaussianModel:
         self._opacity = optimizable_tensors["opacity"]
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
-        self._view_mean = optimizable_tensors["view_mean"]
+        self._mean_view = optimizable_tensors["mean_view"]
+        if self.input_dim == 7:
+            self._mean_time = optimizable_tensors["mean_time"]
         self._L_22_inv = optimizable_tensors["L_22_inv"]
         if self.use_view_dependent_pos:
             self._v_12_direction = optimizable_tensors["v_12_direction"]
@@ -923,7 +978,8 @@ class GaussianModel:
         new_features_dc = self._features_dc[selected_pts_mask].repeat(N, 1, 1)
         new_features_rest = self._features_rest[selected_pts_mask].repeat(N, 1, 1)
         new_opacity = self._opacity[selected_pts_mask].repeat(N, 1)
-        new_view_mean = self._view_mean[selected_pts_mask].repeat(N, 1)
+        new_mean_view = self._mean_view[selected_pts_mask].repeat(N, 1)
+        new_mean_time = self._mean_time[selected_pts_mask].repeat(N, 1) if self.input_dim == 7 else self._mean_time[selected_pts_mask].repeat(N, 1)
         new_L_22_inv = self._L_22_inv[selected_pts_mask].repeat(N, 1)
         new_v_12_direction = self._v_12_direction[selected_pts_mask].repeat(N, 1) if self.use_view_dependent_pos else None
         new_v_12_scale = self._v_12_scale[selected_pts_mask].repeat(N, 1) if self.use_view_dependent_pos else None
@@ -933,7 +989,7 @@ class GaussianModel:
 
         self.densification_postfix(
             new_xyz, new_features_dc, new_features_rest, new_opacity,
-            new_scaling, new_rotation, new_view_mean, new_L_22_inv,
+            new_scaling, new_rotation, new_mean_view, new_mean_time, new_L_22_inv,
             new_v_12_direction, new_v_12_scale,
             new_L_22_inv_diag_rot, new_rotation_delta, new_beta
         )
@@ -955,7 +1011,8 @@ class GaussianModel:
         new_opacities = self._opacity[selected_pts_mask]
         new_scaling = self._scaling[selected_pts_mask]
         new_rotation = self._rotation[selected_pts_mask]
-        new_view_mean = self._view_mean[selected_pts_mask]
+        new_mean_view = self._mean_view[selected_pts_mask]
+        new_mean_time = self._mean_time[selected_pts_mask]
         new_L_22_inv = self._L_22_inv[selected_pts_mask]
         new_v_12_direction = self._v_12_direction[selected_pts_mask] if self.use_view_dependent_pos else None
         new_v_12_scale = self._v_12_scale[selected_pts_mask] if self.use_view_dependent_pos else None
@@ -965,7 +1022,7 @@ class GaussianModel:
 
         self.densification_postfix(
             new_xyz, new_features_dc, new_features_rest, new_opacities,
-            new_scaling, new_rotation, new_view_mean, new_L_22_inv,
+            new_scaling, new_rotation, new_mean_view, new_mean_time, new_L_22_inv,
             new_v_12_direction, new_v_12_scale,
             new_L_22_inv_diag_rot, new_rotation_delta, new_beta
         )
@@ -1008,19 +1065,19 @@ class GaussianModel:
 
         # Compute view direction for conditional slicing
         dir_pp = (self.get_xyz - viewpoint_camera.camera_center.repeat(self._xyz.shape[0], 1))
-        view_dir = dir_pp / dir_pp.norm(dim=1, keepdim=True)
+        mean_view = dir_pp / dir_pp.norm(dim=1, keepdim=True)
 
         # For 7DGS, append timestamp
         if self.input_dim == 7:
             timestamp = torch.full(
-                (view_dir.shape[0], 1),
+                (mean_view.shape[0], 1),
                 viewpoint_camera.timestamp if hasattr(viewpoint_camera, 'timestamp') else 0.0,
-                device=view_dir.device,
-                dtype=view_dir.dtype,
+                device=mean_view.device,
+                dtype=mean_view.dtype,
             )
-            cond_params = torch.cat([view_dir, timestamp], dim=-1)
+            cond_params = torch.cat([mean_view, timestamp], dim=-1)
         else:
-            cond_params = view_dir
+            cond_params = mean_view
 
         # Get all conditional parameters using CUDA-accelerated fused kernel
         # (scale is NOT conditioned, use get_scaling directly)
@@ -1173,7 +1230,8 @@ class GaussianModel:
         _scaling_masked = self._scaling[mask]
         _rotation_masked = self._rotation[mask]
         _opacity_masked = self._opacity[mask]
-        _view_mean_masked = self._view_mean[mask]
+        _mean_view_masked = self._mean_view[mask]
+        _mean_time_masked = self._mean_time[mask]
         _L_22_inv_masked = self._L_22_inv[mask]
         if self.use_view_dependent_pos:
             _v_12_direction_masked = self._v_12_direction[mask]
@@ -1191,7 +1249,8 @@ class GaussianModel:
         orig_scaling, self._scaling = self._scaling, _scaling_masked
         orig_rotation, self._rotation = self._rotation, _rotation_masked
         orig_opacity, self._opacity = self._opacity, _opacity_masked
-        orig_view_mean, self._view_mean = self._view_mean, _view_mean_masked
+        orig_mean_view, self._mean_view = self._mean_view, _mean_view_masked
+        orig_mean_time, self._mean_time = self._mean_time, _mean_time_masked
         orig_L_22_inv, self._L_22_inv = self._L_22_inv, _L_22_inv_masked
         if self.use_view_dependent_pos:
             orig_v_12_direction, self._v_12_direction = self._v_12_direction, _v_12_direction_masked
@@ -1229,7 +1288,8 @@ class GaussianModel:
             self._scaling = orig_scaling
             self._rotation = orig_rotation
             self._opacity = orig_opacity
-            self._view_mean = orig_view_mean
+            self._mean_view = orig_mean_view
+            self._mean_time = orig_mean_time
             self._L_22_inv = orig_L_22_inv
             if self.use_view_dependent_pos:
                 self._v_12_direction = orig_v_12_direction
