@@ -18,6 +18,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torchvision.io import read_image, encode_jpeg, decode_jpeg
+from PIL import Image
 from tqdm import tqdm
 from utils.graphics_utils import fov2focal
 
@@ -102,10 +103,11 @@ def cameraList_from_camInfos(cam_infos, resolution_scale, args):
 
 def _load_image_tensor(image_path, resolution, white_background):
     """
-    Load an image from disk, optionally composite alpha, and resize using torch-native ops.
+    Load an image from disk, composite alpha, and resize using PIL to match 4DGS.
     """
     image = read_image(image_path).float() / 255.0  # [C, H, W]
 
+    # Alpha compositing (identical to 4DGS)
     alpha_mask = None
     if image.shape[0] == 4:
         alpha = image[3:4]
@@ -119,11 +121,18 @@ def _load_image_tensor(image_path, resolution, white_background):
     else:
         rgb = image
 
+    # Resize using PIL to match 4DGS PILtoTorch exactly
     if (resolution[0], resolution[1]) != (rgb.shape[2], rgb.shape[1]):
-        size_hw = (resolution[1], resolution[0])
-        rgb = F.interpolate(rgb.unsqueeze(0), size=size_hw, mode="bilinear", align_corners=False).squeeze(0)
+        rgb_np = (rgb.permute(1, 2, 0) * 255).byte().numpy()
+        pil_img = Image.fromarray(rgb_np)
+        pil_resized = pil_img.resize(resolution)
+        rgb = torch.from_numpy(np.array(pil_resized)).float().permute(2, 0, 1) / 255.0
+
         if alpha_mask is not None:
-            alpha_mask = F.interpolate(alpha_mask.unsqueeze(0), size=size_hw, mode="bilinear", align_corners=False).squeeze(0)
+            alpha_np = (alpha_mask.squeeze(0) * 255).byte().numpy()
+            pil_alpha = Image.fromarray(alpha_np, mode='L')
+            pil_alpha_resized = pil_alpha.resize(resolution)
+            alpha_mask = torch.from_numpy(np.array(pil_alpha_resized)).float().unsqueeze(0) / 255.0
 
     rgb = rgb.clamp(0.0, 1.0)
     return rgb, alpha_mask
