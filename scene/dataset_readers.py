@@ -260,7 +260,10 @@ def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
     print("Reading Training Transforms")
     train_cam_infos = readCamerasFromTransforms(path, "transforms_train.json", white_background, extension)
     print("Reading Test Transforms")
-    test_cam_infos = readCamerasFromTransforms(path, "transforms_test.json", white_background, extension)
+    # For D-NeRF lego scene, use transforms_val.json instead of transforms_test.json (same as 4DGS)
+    is_dnerf_lego = 'dnerf' in path.lower() and 'lego' in path.lower()
+    test_file = "transforms_val.json" if is_dnerf_lego else "transforms_test.json"
+    test_cam_infos = readCamerasFromTransforms(path, test_file, white_background, extension)
     
     if not eval:
         train_cam_infos.extend(test_cam_infos)
