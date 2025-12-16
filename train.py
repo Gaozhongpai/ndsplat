@@ -255,6 +255,17 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
                         # DGS-full/3DGS: use standard get_scaling
                         loss += opt.scale_reg * torch.abs(gaussians.get_scaling[:, :3]).mean()
 
+            # NDGS position shift regularization: constrain position shift to be within spatial scale
+            # This is essentially FREE since m_cond is already computed in forward pass
+            if "ndgs" in mode and opt.shift_reg > 0 and "m_cond" in render_pkg:
+                m_cond = render_pkg["m_cond"]
+                shift_magnitude = (m_cond - gaussians.get_xyz).norm(dim=-1)  # [N]
+                spatial_scale = gaussians.get_scale[:, :3].mean(dim=1)  # [N] mean of xyz scales
+                shift_ratio = shift_magnitude / (spatial_scale + 1e-6)
+                # Penalize shifts that exceed max_shift_ratio (default 1.0 = spatial scale)
+                shift_reg_loss = torch.nn.functional.relu(shift_ratio - opt.max_shift_ratio).mean()
+                loss += opt.shift_reg * shift_reg_loss
+
             # Normalize by number of views (matching 7DGS-ICCV behavior)
             loss = loss / pipe.mv
             total_loss = total_loss + loss

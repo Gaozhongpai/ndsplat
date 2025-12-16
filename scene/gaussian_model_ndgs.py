@@ -1815,6 +1815,7 @@ class GaussianModel:
             "viewspace_points": screenspace_points,
             "visibility_filter": radii > 0,
             "radii": radii,
+            "m_cond": m_cond,  # For position shift regularization
         }
 
     def render_tcgs_with_metric(self, viewpoint_camera, background=None, scaling_modifier=1.0,

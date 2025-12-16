@@ -11,12 +11,13 @@
 # Full DGS with view-dependent position, time-dependent rotation, and opacity
 #
 # Key features:
-# - Position shift: x_cond = x + v_12 @ V_22^{-1} @ (v - μ_v) (additive)
+# - Position shift: x_cond = x + v_12 @ (v - μ_v) (additive, INDEPENDENT of V_22^{-1})
 # - Rotation delta: q_cond = q_base ⊗ slerp(I, q_delta, 1 - attention_rot) (only for time dim when input_dim=7)
-# - Opacity scale: o_cond = o_base * attention (multiplicative)
+# - Opacity scale: o_cond = o_base * exp(-λ * (v - μ_v)^T @ V_22^{-1} @ (v - μ_v)) (multiplicative)
 #
-# Parameterization uses full Cholesky L_22_inv (like dgs.py) for better opacity:
-# - Position + Opacity: _view_mean, _v_12, _L_22_inv (full Cholesky of V_22^{-1})
+# Parameterization (position and opacity are DECOUPLED):
+# - Position: _view_mean, _v_12 (regression matrix, v_regr, independent of V_22^{-1})
+# - Opacity: _L_22_inv (full Cholesky of V_22^{-1}, ONLY affects opacity)
 # - Rotation (time-only): _L_22_inv_diag_rot for time attention when input_dim=7
 #
 # Mathematical justification:
@@ -114,18 +115,20 @@ class GaussianModel:
     """
     Full DGS with view-dependent position, time-dependent rotation, and opacity.
 
-    Uses full Cholesky parameterization (like dgs.py) for better opacity performance:
-    - _L_22_inv: [N, C*(C+1)/2] Cholesky of V_22^{-1} (precision matrix)
+    Position and opacity are DECOUPLED (v_12 is independent of V_22^{-1}):
+    - _v_12: [N, 3*C] position regression matrix (v_regr), independent of V_22^{-1}
+    - _L_22_inv: [N, C*(C+1)/2] Cholesky of V_22^{-1} (precision matrix, ONLY affects opacity)
 
     Mathematical formulation:
     - V_22^{-1} = L_22_inv @ L_22_inv^T (precision from Cholesky, no matrix inversion!)
-    - x_cond = x + v_12 @ V_22^{-1} @ (v - μ_v)  (position shift)
+    - x_cond = x + v_12 @ (v - μ_v)  (position shift, INDEPENDENT of V_22^{-1})
     - attention = exp(-λ * (v - μ_v)^T @ V_22^{-1} @ (v - μ_v))  (opacity scale)
     - q_cond = q_base ⊗ slerp(I, q_delta, 1 - attention_time)  (rotation, only for time when input_dim=7)
 
     Physical interpretation:
-    - attention ≈ 1 (canonical view): use base params unchanged
-    - attention ≈ 0 (oblique view): apply full position shift and reduce opacity
+    - attention ≈ 1 (canonical view): use base params unchanged, minimal opacity reduction
+    - attention ≈ 0 (oblique view): apply full position shift, strong opacity reduction
+    - Position shift and opacity modulation are learned independently
     - Rotation only varies with time (not view direction) when input_dim=7
     """
 
@@ -213,7 +216,7 @@ class GaussianModel:
         self._beta = torch.empty(0)
 
         # Hyperparameter for maximum position shift
-        self.max_pos_shift = 1.0
+        self.max_pos_shift = 2.0
 
         # Auxiliary tensors
         self.max_radii2D = torch.empty(0)
@@ -341,8 +344,19 @@ class GaussianModel:
     @property
     def get_v_12(self):
         """
-        Get effective v_12 (position-view covariance block) with bounded magnitude.
-        Same as dgs_diag.
+        Get effective v_12 (position-view regression matrix) with bounded magnitude.
+
+        NOTE: v_12 is actually v_regr (regression matrix) in the mathematical formulation.
+        After the decoupling change, position shift is computed as:
+            x_cond = x + v_12 @ (query - view_mean)
+
+        Previously it was:
+            x_cond = x + v_12 @ V_22_inv @ (query - view_mean)
+
+        So v_12 now directly acts as the regression matrix (v_regr), independent of V_22_inv.
+        This makes position conditioning completely separate from opacity conditioning.
+
+        Same parameterization as dgs_diag: direction (normalized) + magnitude (bounded by spatial scale).
         """
         if not self.use_view_dependent_pos:
             return None
@@ -454,18 +468,19 @@ class GaussianModel:
         Perform conditional Gaussian slicing for position, rotation, and opacity.
 
         Uses the CUDA-accelerated slice_gaussian_full function that handles:
-        - Position + Opacity: full Cholesky L_22_inv parameterization
+        - Position: v_12 regression (INDEPENDENT of V_22^{-1})
+        - Opacity: full Cholesky L_22_inv parameterization (ONLY affects opacity)
         - Rotation: time-only conditioning when input_dim=7
 
         Given query view direction (+ optional time), compute:
-        - Conditional position: x_cond = x + v_12 @ V_22^{-1} @ (v - μ_v)
+        - Conditional position: x_cond = x + v_12 @ (v - μ_v) [v_12 acts as v_regr, independent of V_22^{-1}]
         - Opacity scale: attention = exp(-λ * (v - μ_v)^T @ V_22^{-1} @ (v - μ_v))
         - Conditional rotation: q_cond = q_base ⊗ slerp(I, q_delta, 1 - attention_time)
           (only for time dimension when input_dim=7)
 
         Args:
             query: Query direction [N, C] where C=3 (view) or 4 (view+time)
-            lambda_opc: Opacity scaling factor (default: 0.125 for input_dim=7, 0.35 for input_dim=6)
+            lambda_opc: Opacity scaling factor (default: 0.35)
 
         Returns:
             x_cond: Conditional 3D position [N, 3]
@@ -474,8 +489,7 @@ class GaussianModel:
         """
         # Set default lambda_opc based on input_dim
         if lambda_opc is None:
-            lambda_opc = 0.125 if self.input_dim == 7 else 0.35
-
+            lambda_opc = 0.35
         # Use slice_gaussian_full CUDA kernel
         # Use get_L_22_inv to enforce block-diagonal structure (zero view-time cross terms)
         x_cond, rotation_cond, opacity_scale = slice_gaussian_full(
@@ -563,7 +577,9 @@ class GaussianModel:
         # Position shift parameters
         if self.use_view_dependent_pos:
             v_12_direction = torch.normal(0, 0.01, size=(num_gaussians, 3 * C), device=device)
-            v_12_scale = torch.zeros((num_gaussians, 1), device=device)
+            # Initialize scale to large negative value so sigmoid(scale) ≈ 0
+            # This ensures zero position shift initially for training stability
+            v_12_scale = torch.full((num_gaussians, 1), -2.0, device=device)
         else:
             v_12_direction = torch.empty(0, device=device)
             v_12_scale = torch.empty(0, device=device)
@@ -593,7 +609,7 @@ class GaussianModel:
                 L_22_inv[:, diag_idx] = math.log(1.0 / math.sqrt(dist_t))
             else:
                 # View direction precision: 1.0 (variance=1, precision=1)
-                L_22_inv[:, diag_idx] = math.log(1.0)  # log(1.0) = 0
+                L_22_inv[:, diag_idx] = math.log(2.0)  # log(1.0) = 0
 
         # Time-dependent rotation conditioning (only when input_dim=7)
         # Uses only time dimension (index 3) for rotation attention
