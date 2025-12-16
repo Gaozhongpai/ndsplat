@@ -106,7 +106,7 @@ United Imaging Intelligence, Boston, MA
 \maketitle
 
 \begin{abstract}
-Gaussian Splatting has emerged as a leading technique for novel view synthesis, with extensions like 6DGS and 7DGS enabling view-dependent effects and dynamic scenes through high-dimensional covariance matrices. However, these formulations require per-Gaussian matrix inversions in every forward pass. We propose \modelname{}, which eliminates this overhead through \textbf{disentangled direct parameterization}. Our key insight is that the full joint covariance matrix is not necessary: we disentangle conditional Gaussian slicing into three independent components: position conditioning (view/time-dependent displacement), opacity conditioning (attention-based modulation), and rotation conditioning (time-dependent orientation for dynamic scenes). Position and opacity share a Cholesky precision factor $\mathbf{L}$ for efficient Mahalanobis distance computation without matrix inversion, while rotation uses quaternion SLERP controlled by temporal attention. For 7DGS, we further separate view and time by using a block-diagonal precision matrix with zero cross-terms, enabling independent control of spatial and temporal effects. This disentanglement eliminates full covariance modeling while maintaining expressiveness, delivering 15\% faster training and 26\% higher rendering throughput.
+Gaussian Splatting has emerged as a leading technique for novel view synthesis, with extensions like 6DGS and 7DGS enabling view-dependent effects and dynamic scenes through high-dimensional covariance matrices. However, these formulations require per-Gaussian matrix inversions in every forward pass and couple position shifts with opacity modulation through a shared precision matrix. We propose \modelname{}, which eliminates this overhead through \textbf{disentangled direct parameterization}. Our key insight is that the full joint covariance matrix is not necessary: we disentangle conditional Gaussian slicing into three independent components. \textbf{Crucially, we decouple position from opacity}: position shifts use a direct displacement matrix $\mathbf{V}_{pq}$ independent of the precision matrix, while opacity modulation uses a Cholesky precision factor $\mathbf{L}$ for efficient Mahalanobis distance computation without matrix inversion. Rotation conditioning for dynamic scenes uses quaternion SLERP controlled by temporal attention. For 7DGS, we further separate view and time by using a block-diagonal precision matrix with zero cross-terms. This disentanglement eliminates full covariance modeling and position-opacity coupling while maintaining expressiveness, delivering 15\% faster training and 26\% higher rendering throughput.
 \end{abstract}
 
 \section{Introduction}
@@ -122,14 +122,14 @@ In this paper, we introduce \textbf{\modelname{}}, a lightweight framework that 
 Our key insight is that the full $(3+C) \times (3+C)$ joint covariance matrix used in N-DGS is unnecessarily complex. In full covariance models, all effects---position shift, opacity modulation, and covariance adjustment---are entangled through a single matrix that must be inverted. We observe that these effects can be \textbf{disentangled} into independent modules, each with its own efficient parameterization:
 
 \begin{enumerate}
-\item \textbf{Position Conditioning:} We directly parameterize a displacement matrix $\mathbf{V}_{pq}$ and a shared Cholesky precision factor $\mathbf{L}$. Position shift is computed as $\mu_p + \mathbf{V}_{pq} \cdot \mathbf{L}\mathbf{L}^\top \cdot \boldsymbol{\delta}$, requiring only matrix-vector multiplications. The displacement uses bounded parameterization where magnitude scales with Gaussian size, providing implicit regularization.
+\item \textbf{Position Conditioning:} We \textbf{decouple position from opacity} by directly parameterizing a displacement matrix $\mathbf{V}_{pq}$ that acts independently of the precision matrix. Position shift is computed as $\mu_p + \mathbf{V}_{pq} \cdot \boldsymbol{\delta}$, requiring only matrix-vector multiplication. The displacement uses bounded parameterization where magnitude scales with Gaussian size, providing implicit regularization while remaining completely independent of opacity constraints.
 
-\item \textbf{Opacity Conditioning:} Opacity modulation reuses the same Cholesky factor $\mathbf{L}$ to compute $\exp(-\lambda \|\mathbf{L}^\top\boldsymbol{\delta}\|^2)$---equivalent to the Mahalanobis distance but without matrix inversion. Diagonal elements use $\exp(\cdot)$ activation to ensure positive definiteness. For 7DGS, we further separate view and time by using a block-diagonal precision matrix with zero cross-terms, allowing independent control of view-dependent and time-dependent opacity.
+\item \textbf{Opacity Conditioning:} Opacity modulation uses a Cholesky precision factor $\mathbf{L}$ (independent of position) to compute $\exp(-\lambda \|\mathbf{L}^\top\boldsymbol{\delta}\|^2)$---equivalent to the Mahalanobis distance but without matrix inversion. Diagonal elements use $\exp(\cdot)$ activation to ensure positive definiteness. For 7DGS, we further separate view and time by using a block-diagonal precision matrix with zero cross-terms, allowing independent control of view-dependent and time-dependent opacity.
 
 \item \textbf{Rotation Conditioning:} For dynamic scenes ($C=4$), rotation is handled by a completely separate module using quaternion SLERP controlled by time-based attention. This decouples rotational dynamics from view-dependent effects, reflecting the physical intuition that object rotation varies with time but not viewing angle.
 \end{enumerate}
 
-This disentanglement is the core contribution of \modelname{}. By separating position, opacity, and rotation into independent modules, we eliminate the need for a full joint covariance matrix and its inversion. Each module can be optimized and understood independently, while the shared Cholesky factor $\mathbf{L}$ provides efficient computation for both position and opacity conditioning. Our formulation achieves improvements across three axes: simpler computation by replacing matrix inversion with triangular solves, numerical stability by construction through exponential activation on Cholesky diagonals, and modular design that enables independent control over each conditioning effect.
+This disentanglement is the core contribution of \modelname{}. By separating position, opacity, and rotation into independent modules, we eliminate the need for a full joint covariance matrix and its inversion. \textbf{Crucially, position and opacity are completely decoupled}: $\mathbf{V}_{pq}$ learns spatial displacements independently, while $\mathbf{L}$ controls only opacity modulation. Each module can be optimized and understood independently without interference. Our formulation achieves improvements across three axes: simpler computation by replacing matrix inversion with direct matrix-vector multiplications, numerical stability by construction through exponential activation on Cholesky diagonals, and modular design that enables independent control over each conditioning effect.
 
 \section{Related Work}
 \label{sec:related_work}
@@ -193,12 +193,12 @@ We propose \modelname{}, which \textbf{disentangles} these effects into three in
 
 Our approach reformulates conditional Gaussian slicing into three \textbf{disentangled} components. Given the deviation $\boldsymbol{\delta} = q - \mu_q$ from the canonical view/time:
 \begin{align}
-\mu_{\text{cond}} &= \mu_p + \mathbf{V}_{pq} \cdot \mathbf{L}\mathbf{L}^\top \cdot \boldsymbol{\delta} & &\text{(Position)} \\
+\mu_{\text{cond}} &= \mu_p + \mathbf{V}_{pq} \cdot \boldsymbol{\delta} & &\text{(Position)} \\
 \alpha_{\text{cond}} &= \alpha \cdot \exp\left(-\lambda \cdot \|\mathbf{L}^\top \boldsymbol{\delta}\|_2^2\right) & &\text{(Opacity)} \\
 \mathbf{q}_{\text{cond}} &= \mathbf{q}_{\text{base}} \otimes \text{SLERP}(\mathbf{I}, \mathbf{q}_{\Delta}, 1 - \alpha_{\text{rot}}) & &\text{(Rotation, 7DGS)} \\
 \Sigma_{\text{cond}} &= \Sigma_p & &\text{(Covariance)}
 \end{align}
-where $\mathbf{V}_{pq} \in \mathbb{R}^{3 \times C}$ is the displacement matrix, $\mathbf{L} \in \mathbb{R}^{C \times C}$ is the Cholesky factor of the precision matrix, $\lambda$ is a scaling factor (default 0.35), and $\alpha_{\text{rot}} = \exp(-(t - \mu_t)^2 \cdot \exp(\ell_t^{\text{rot}})^2)$ is the time-based attention weight.
+where $\mathbf{V}_{pq} \in \mathbb{R}^{3 \times C}$ is the displacement matrix (acting directly as the regression matrix, independent of precision), $\mathbf{L} \in \mathbb{R}^{C \times C}$ is the Cholesky factor of the precision matrix (used only for opacity), $\lambda$ is a scaling factor (default 0.35), and $\alpha_{\text{rot}} = \exp(-(t - \mu_t)^2 \cdot \exp(\ell_t^{\text{rot}})^2)$ is the time-based attention weight.
 
 For 7DGS ($C=4$), we further \textbf{separate view and time} by using a block-diagonal precision matrix with zero cross-terms:
 \begin{equation}
@@ -218,7 +218,7 @@ where $\mathbf{\Sigma}_v^{-1} \in \mathbb{R}^{3 \times 3}$ is the view precision
 \toprule
 \textbf{Aspect} & \textbf{Original N-DGS (entangled)} & \textbf{Ours (disentangled)} & \textbf{Benefit} \\
 \midrule
-Position & $\mu_p + \Sigma_{pq}\Sigma_{qq}^{-1}\boldsymbol{\delta}$ & $\mu_p + \mathbf{V}_{pq}\mathbf{L}\mathbf{L}^\top\boldsymbol{\delta}$ & Direct $\mathbf{V}_{pq}$ \\
+Position & $\mu_p + \Sigma_{pq}\Sigma_{qq}^{-1}\boldsymbol{\delta}$ & $\mu_p + \mathbf{V}_{pq}\boldsymbol{\delta}$ & Direct, uncoupled from $\mathbf{L}$ \\
 Opacity & $\alpha \cdot \exp(-\lambda\boldsymbol{\delta}^\top\Sigma_{qq}^{-1}\boldsymbol{\delta})$ & $\alpha \cdot \exp(-\lambda\|\mathbf{L}^\top\boldsymbol{\delta}\|^2)$ & Shared $\mathbf{L}$, no inversion \\
 Covariance & $\Sigma_{pp} - \Sigma_{pq}\Sigma_{qq}^{-1}\Sigma_{pq}^\top$ & $\Sigma_p$ (disentangled) & Shape independent \\
 Rotation & MLP residual (7DGS AGR) & $\mathbf{q}_{\text{base}} \otimes \text{SLERP}(\mathbf{I}, \mathbf{q}_{\Delta}, 1-\alpha_{\text{rot}})$ & Independent module \\
@@ -231,17 +231,19 @@ Table~\ref{tab:comparison_overview} compares our disentangled approach with the 
 
 \subsection{Position Conditioning}
 
-In N-DGS, position is computed as $\mu_{\text{cond}} = \mu_p + \Sigma_{pq}\Sigma_{qq}^{-1}(q-\mu_q)$, where $\Sigma_{pq}$ is derived from a joint Cholesky decomposition. Crucially, the displacement is implicitly bounded: since the full covariance matrix is parameterized via Cholesky decomposition $\Sigma = LL^\top$, we have
-\begin{equation}
-\Sigma_{pq} = L_p L_q^\top,
-\end{equation}
-where $L_p \in \mathbb{R}^{3 \times (3+C)}$ and $L_q \in \mathbb{R}^{C \times (3+C)}$ are submatrices of $L$. This couples $\Sigma_{pq}$ to the spatial covariance $\Sigma_{pp}$, ensuring that small Gaussians (small $\Sigma_{pp}$) produce small displacements.
+In N-DGS, position is computed as $\mu_{\text{cond}} = \mu_p + \Sigma_{pq}\Sigma_{qq}^{-1}(q-\mu_q)$, where $\Sigma_{pq}$ is derived from a joint Cholesky decomposition and $\Sigma_{qq}^{-1}$ is the precision matrix that also controls opacity. This coupling means position shifts and opacity modulation cannot be learned independently.
 
-We directly parameterize the precision matrix $\mathbf{V}_{qq}^{-1} = \mathbf{L}\mathbf{L}^\top$ via its Cholesky factor $\mathbf{L} \in \mathbb{R}^{C \times C}$, with diagonal elements using exponential activation $L_{ii} = \exp(\ell_{ii})$ to ensure positive definiteness. To preserve the bounded displacement property, we parameterize the displacement matrix $\mathbf{V}_{pq} \in \mathbb{R}^{3 \times C}$ as:
+We \textbf{decouple position from opacity} by directly parameterizing the position shift as:
 \begin{equation}
-\mathbf{V}_{pq} = \text{reshape}\left(\frac{\mathbf{u}}{\|\mathbf{u}\|_2}\right) \cdot \sigma(\gamma) \cdot \lambda_{\max} \cdot \bar{s},
+\mu_{\text{cond}} = \mu_p + \mathbf{V}_{pq} \cdot \boldsymbol{\delta},
 \end{equation}
-where $\mathbf{u} \in \mathbb{R}^{3C}$ is a learnable direction vector (normalized), $\sigma(\gamma) \in [0, 1]$ via sigmoid activation, $\lambda_{\max}$ is the maximum displacement factor (default: 1.0), and $\bar{s} = \frac{1}{3}(s_x + s_y + s_z)$ is the mean spatial scale. This explicit scaling by $\bar{s}$ mimics the implicit coupling in N-DGS: small Gaussians produce small displacements, while large Gaussians have proportionally larger displacement capacity.
+where $\mathbf{V}_{pq} \in \mathbb{R}^{3 \times C}$ acts directly as the regression matrix, \textbf{independent of the precision matrix} $\mathbf{L}$ used for opacity. This separation provides two key benefits: (1) position shifts can be learned without interference from opacity constraints, and (2) the precision matrix $\mathbf{L}$ can be optimized purely for opacity modulation without affecting spatial displacements.
+
+To preserve the bounded displacement property of N-DGS (where small Gaussians produce small displacements), we parameterize the displacement matrix as a scaled and normalized direction tensor. Let $\mathbf{u} \in \mathbb{R}^{3C}$ be a learnable direction vector. We construct $\mathbf{V}_{pq} \in \mathbb{R}^{3 \times C}$ by reshaping the normalized direction and scaling by the magnitude:
+\begin{equation}
+\mathbf{V}_{pq} = \text{reshape}\left(\frac{\mathbf{u}}{\|\mathbf{u}\|_2}\right) \cdot \sigma(\gamma) \cdot \bar{s},
+\end{equation}
+where $\mathbf{u} \in \mathbb{R}^{3C}$ is the learnable direction vector that is normalized and reshaped into a $3 \times C$ matrix, $\gamma \in \mathbb{R}$ is a learnable scalar magnitude parameter with $\sigma(\gamma) \in [0, 1]$ obtained via the sigmoid function, and $\bar{s} = \frac{1}{3}(s_x + s_y + s_z)$ denotes the mean spatial scale. This explicit scaling by $\bar{s}$ ensures that small Gaussians produce small displacements while large Gaussians have proportionally larger displacement capacity, mimicking the implicit coupling in N-DGS but without entangling position and opacity.
 
 \subsection{Opacity Conditioning}
 
@@ -279,11 +281,10 @@ We implement the full conditional slicing operation as a custom CUDA kernel (\te
 \Require Per-Gaussian parameters: $\mu_p$, $\mu_q$, $\mathbf{V}_{pq}$, Cholesky $\mathbf{L}$, $\mathbf{q}_{\text{base}}$, $\mathbf{q}_{\Delta}$, $\ell_t^{\text{rot}}$
 \Require Query point: $\text{query}$ (view direction, or view+time for 7DGS)
 \State $\boldsymbol{\delta} \gets \text{query} - \mu_q$ \Comment{Compute deviation}
-\State Reconstruct $\mathbf{L}$ with $\exp(\cdot)$ on diagonal \Comment{Build precision}
+\State Reconstruct $\mathbf{L}$ with $\exp(\cdot)$ on diagonal \Comment{Build precision (for opacity only)}
 \State $\mathbf{z} \gets \mathbf{L}^\top \boldsymbol{\delta}$ \Comment{Triangular multiply}
 \State $\alpha_{\text{scale}} \gets \exp(-\lambda \cdot \|\mathbf{z}\|^2)$ \Comment{Opacity scale}
-\State $\mathbf{y} \gets \mathbf{L} \mathbf{z}$ \Comment{Get $\mathbf{V}_{qq}^{-1}\boldsymbol{\delta}$}
-\State $\mu_{\text{cond}} \gets \mu_p + \mathbf{V}_{pq} \cdot \mathbf{y}$ \Comment{Conditional position}
+\State $\mu_{\text{cond}} \gets \mu_p + \mathbf{V}_{pq} \cdot \boldsymbol{\delta}$ \Comment{Position (independent of $\mathbf{L}$)}
 \If{$C = 4$} \Comment{Dynamic scene}
     \State $\alpha_{\text{rot}} \gets \exp(-(\ell_t^{\text{rot}})^2 (t - \mu_t)^2)$
     \State $\mathbf{q}_{\text{cond}} \gets \mathbf{q}_{\text{base}} \otimes \text{SLERP}(\mathbf{I}, \mathbf{q}_{\Delta}, 1 - \alpha_{\text{rot}})$
@@ -402,6 +403,65 @@ Scene & \#Gauss (K) & Time (min) & FPS & \#Gauss (K) & Time (min) & FPS & \#Gaus
 }
 \end{table}
 
+We further evaluate on the D-NeRF dataset~\cite{pumarola2020d} for dynamic scene reconstruction using 7DGS ($C=4$). We additionally test an \textbf{Opacity+Pos+Rot} configuration that includes rotation conditioning. Tables~\ref{tab:dnerf} and~\ref{tab:dnerf_efficiency} show the results.
+
+\begin{table}[h]
+\centering
+\caption{Quantitative comparison on D-NeRF dataset at 30K iterations. Best results in \textbf{bold}.}
+\label{tab:dnerf}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l|ccc|ccc|ccc|ccc}
+\toprule
+& \multicolumn{3}{c|}{\textbf{N-DGS}} & \multicolumn{3}{c|}{\textbf{Opacity-Only}} & \multicolumn{3}{c|}{\textbf{Opacity+Pos}} & \multicolumn{3}{c}{\textbf{Opacity+Pos+Rot}} \\
+Scene & PSNR$\uparrow$ & SSIM$\uparrow$ & LPIPS$\downarrow$ & PSNR$\uparrow$ & SSIM$\uparrow$ & LPIPS$\downarrow$ & PSNR$\uparrow$ & SSIM$\uparrow$ & LPIPS$\downarrow$ & PSNR$\uparrow$ & SSIM$\uparrow$ & LPIPS$\downarrow$ \\
+\midrule
+\texttt{bouncingballs} & \textbf{33.67} & \textbf{0.982} & \textbf{0.024} & 31.45 & 0.975 & 0.030 & 29.16 & 0.966 & 0.038 & 18.24 & 0.801 & 0.183 \\
+\texttt{hellwarrior} & 32.45 & 0.931 & 0.113 & \textbf{32.93} & \textbf{0.933} & \textbf{0.095} & 32.72 & 0.928 & 0.100 & 26.15 & 0.840 & 0.165 \\
+\texttt{hook} & 28.63 & 0.942 & 0.065 & 27.78 & 0.930 & 0.067 & \textbf{29.69} & \textbf{0.952} & \textbf{0.047} & 19.73 & 0.828 & 0.155 \\
+\texttt{jumpingjacks} & \textbf{30.31} & \textbf{0.964} & \textbf{0.045} & 27.90 & 0.949 & 0.059 & 27.52 & 0.949 & 0.057 & 17.24 & 0.777 & 0.231 \\
+\texttt{lego} & \textbf{27.58} & 0.930 & 0.068 & 26.88 & \textbf{0.936} & \textbf{0.057} & 26.24 & 0.924 & 0.071 & 18.97 & 0.873 & 0.120 \\
+\texttt{mutant} & 36.51 & 0.988 & 0.014 & 34.04 & 0.979 & 0.021 & \textbf{39.05} & \textbf{0.992} & \textbf{0.007} & 21.94 & 0.904 & 0.083 \\
+\texttt{standup} & 35.77 & 0.982 & 0.020 & 32.35 & 0.969 & 0.032 & \textbf{36.15} & \textbf{0.983} & \textbf{0.015} & 19.84 & 0.865 & 0.138 \\
+\texttt{trex} & \textbf{29.39} & \textbf{0.977} & \textbf{0.024} & 28.89 & 0.973 & 0.025 & 28.24 & 0.970 & 0.026 & 17.89 & 0.858 & 0.150 \\
+\midrule
+\textbf{\texttt{Mean}} & \textbf{31.79} & \textbf{0.962} & 0.047 & 30.28 & 0.956 & 0.048 & 31.10 & 0.958 & \textbf{0.045} & 20.00 & 0.843 & 0.153 \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{Efficiency comparison on D-NeRF dataset.}
+\label{tab:dnerf_efficiency}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l|rrr|rrr|rrr|rrr}
+\toprule
+& \multicolumn{3}{c|}{\textbf{N-DGS}} & \multicolumn{3}{c|}{\textbf{Opacity-Only}} & \multicolumn{3}{c|}{\textbf{Opacity+Pos}} & \multicolumn{3}{c}{\textbf{Opacity+Pos+Rot}} \\
+Scene & \#Gauss (K) & Time (s) & FPS & \#Gauss (K) & Time (s) & FPS & \#Gauss (K) & Time (s) & FPS & \#Gauss (K) & Time (s) & FPS \\
+\midrule
+\texttt{bouncingballs} & 170 & 1326 & 413 & \textbf{126} & \textbf{996} & \textbf{709} & 148 & 1089 & 623 & 90 & 1058 & 744 \\
+\texttt{hellwarrior} & \textbf{10} & \textbf{464} & \textbf{1209} & 17 & 433 & 1170 & 14 & 495 & 1011 & 14 & 549 & 953 \\
+\texttt{hook} & \textbf{26} & \textbf{521} & \textbf{1179} & 58 & 655 & 1038 & 83 & 961 & 794 & 73 & 974 & 806 \\
+\texttt{jumpingjacks} & \textbf{19} & \textbf{533} & \textbf{1183} & 31 & 644 & 1092 & 76 & 968 & 829 & 71 & 1044 & 803 \\
+\texttt{lego} & \textbf{97} & 1203 & 705 & 127 & \textbf{1026} & \textbf{756} & 74 & 1188 & 811 & 118 & 1209 & 675 \\
+\texttt{mutant} & \textbf{47} & \textbf{728} & \textbf{974} & 66 & 780 & 936 & 86 & 1006 & 745 & 83 & 1041 & 743 \\
+\texttt{standup} & \textbf{15} & \textbf{487} & 1134 & 27 & 537 & \textbf{1111} & 61 & 981 & 817 & 52 & 954 & 863 \\
+\texttt{trex} & \textbf{92} & \textbf{927} & 720 & 111 & 1096 & \textbf{791} & 137 & 1297 & 655 & 134 & 1372 & 671 \\
+\midrule
+\textbf{\texttt{Mean}} & \textbf{60} & \textbf{774} & 940 & 70 & 771 & \textbf{950} & 85 & 998 & 786 & 79 & 1025 & 782 \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+The D-NeRF results reveal important insights about rotation conditioning:
+\begin{itemize}
+    \item \textbf{Rotation Hurts Quality}: The Opacity+Pos+Rot configuration shows significant quality degradation (20.00 dB vs 31.79 dB for N-DGS), suggesting that making rotation view/time-dependent introduces optimization instability for dynamic scenes.
+    \item \textbf{Position Conditioning Trade-offs}: Opacity+Pos achieves the best LPIPS (0.045) and excels on certain scenes (mutant: 39.05 dB), but N-DGS maintains the best average PSNR and SSIM.
+    \item \textbf{Efficiency}: N-DGS achieves the smallest Gaussian counts (60K average) while Opacity-Only offers competitive training times.
+\end{itemize}
+
 Key observations:
 \begin{itemize}
     \item \textbf{Quality}: All three methods achieve similar rendering quality, demonstrating that our disentangled approach preserves the expressive power of N-DGS while using a more efficient parameterization.
@@ -414,7 +474,7 @@ Key observations:
 
 We presented \modelname{}, a disentangled direct parameterization approach for efficient dynamic Gaussian splatting. Our key insight is that the full $(3+C) \times (3+C)$ joint covariance matrix used in N-DGS is unnecessarily complex---the conditioning effects (position shift, opacity modulation, rotation) can be \textbf{disentangled} into independent modules, each with its own efficient parameterization.
 
-By separating these components, we eliminate the need for matrix inversions. Position and opacity conditioning share a direct Cholesky precision factor $\mathbf{L}$, while rotation conditioning operates as an independent module using quaternion SLERP. This modular design enables computation through simple matrix-vector multiplications, guarantees numerical stability through exponential activation on diagonal elements, and provides independent control over each conditioning effect.
+By separating these components, we eliminate the need for matrix inversions and position-opacity coupling. \textbf{Position shifts use a direct displacement matrix $\mathbf{V}_{pq}$ that is completely independent of the precision matrix}, while opacity modulation uses a Cholesky precision factor $\mathbf{L}$ exclusively for efficient Mahalanobis distance computation. Rotation conditioning operates as a separate module using quaternion SLERP. This modular design enables computation through simple matrix-vector multiplications, guarantees numerical stability through exponential activation on diagonal elements, and provides independent control over each conditioning effect without interference between position and opacity optimization.
 
 % References section
 \bibliographystyle{plainnat} % Using plainnat style for compatibility with numbers option if used

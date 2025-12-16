@@ -190,6 +190,11 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
     # Track best test PSNR for saving best checkpoint
     best_psnr_info = {'best_psnr': 0.0, 'best_iteration': 0}
 
+    # Patient-based training for lambda_opc (NDGS mode only, dynamic scenes with input_dim=7)
+    # Similar to 4D-GS opacity_scale training strategy
+    n_patient = 0
+    is_set_patient = False
+
     viewpoint_stack = None
     ema_loss_for_log = 0.0
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
@@ -296,7 +301,48 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
                 progress_bar.close()
 
             # Log and save
-            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render_wrapper, (pipe, background, mode), log_file, best_psnr_info)
+            n_patient_change = training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render_wrapper, (pipe, background, mode), log_file, best_psnr_info)
+
+            # Patient-based lambda_opc training (NDGS mode with learnable_lambda_opc)
+            # Now works for both 6D and 7D (removed input_dim==7 restriction)
+            if "ndgs" in mode and hasattr(gaussians, 'learnable_lambda_opc') and gaussians.learnable_lambda_opc:
+                if n_patient_change == -1:
+                    # Improvement detected - reset patience
+                    n_patient = 0
+                elif n_patient_change == 1:
+                    # No improvement - increment patience
+                    n_patient += 1
+                    if n_patient == 2 and not is_set_patient:
+                        is_set_patient = True
+                        # Only print and call if state actually changes (efficiency improvement)
+                        if gaussians.enable_lambda_opc_training(opt):
+                            print("\n" + "="*50)
+                            print("Start training lambda_opc (patience triggered)")
+                            print("="*50)
+
+                # Enable lambda_opc training at iteration 14900 (if not already enabled by patience)
+                if iteration == 14900:
+                    # Only print and call if state actually changes (efficiency improvement)
+                    if gaussians.enable_lambda_opc_training(opt):
+                        print("\n" + "="*50)
+                        print("Start training lambda_opc at iteration 14900")
+                        print("="*50)
+
+                # Disable lambda_opc training at iteration 28000 (similar to 4D-GS at 30k-2k)
+                if iteration == 28000:
+                    # Only print and call if state actually changes (efficiency improvement)
+                    if gaussians.disable_lambda_opc_training():
+                        print("\n" + "="*50)
+                        print("Disable lambda_opc training at iteration 28000")
+                        print("="*50)
+
+                # Monitor lambda_opc values after iteration 14900 (or if patient)
+                if (iteration > 14900 or is_set_patient) and iteration % 500 == 0:
+                    if hasattr(gaussians, '_lambda_opc'):
+                        print(f"Mean lambda_opc: {gaussians.get_lambda_opc.mean():.4f}")
+                        if gaussians.input_dim == 7:
+                            print(f"Mean lambda_opc_time: {gaussians.get_lambda_opc_time.mean():.4f}")
+
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 print("\nNumber Gaussian: {}".format(gaussians.get_xyz.shape[0]))
@@ -574,6 +620,8 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                     test_psnr_value = float(psnr_test)
 
         # Save best checkpoint if this is a new best test PSNR
+        # Also track patience for lambda_opc training (return n_patient for caller to track)
+        n_patient_increment = 0
         if best_psnr_info is not None and test_psnr_value is not None:
             if test_psnr_value > best_psnr_info['best_psnr']:
                 best_psnr_info['best_psnr'] = test_psnr_value
@@ -585,6 +633,11 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                 if log_file:
                     log_file.write(log_msg + "\n")
                     log_file.flush()
+                # Reset patience counter (improvement detected)
+                n_patient_increment = -1  # Signal to reset
+            else:
+                # No improvement - increment patience
+                n_patient_increment = 1
 
         # Log number of Gaussians
         num_gaussians = scene.gaussians.get_xyz.shape[0]
@@ -596,6 +649,8 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
             tb_writer.add_histogram("scene/opacity_histogram", scene.gaussians.get_opacity, iteration)
             tb_writer.add_scalar('total_points', num_gaussians, iteration)
         torch.cuda.empty_cache()
+
+        return n_patient_increment  # For patient-based lambda_opc training
 
 if __name__ == "__main__":
     # Set up command line argument parser

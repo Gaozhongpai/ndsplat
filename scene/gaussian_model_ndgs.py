@@ -78,7 +78,7 @@ class GaussianModel:
         self.time_act = lambda x: torch.sigmoid(x)
         self.time_act_inv = lambda x: inverse_sigmoid(torch.clip(x, min=1e-6, max=1.0 - 1e-6))
 
-    def slice_gaussian(self, q, c_dim=3, lambda_opc=0.35):
+    def slice_gaussian(self, q, c_dim=3, lambda_opc=None, lambda_opc_time=None):
         """
         Perform conditional Gaussian slicing for N-DGS.
         Given ND Gaussian with mean [m_1, m_2] and covariance v,
@@ -89,7 +89,10 @@ class GaussianModel:
         Args:
             q: Query direction (view direction + time for 7DGS) [N, C]
             c_dim: Conditional dimension (default 3 for spatial xyz)
-            lambda_opc: Opacity scaling factor (default 0.35)
+            lambda_opc: Opacity scaling factor for view direction. Tensor [N] or scalar.
+                       If None, uses self.get_lambda_opc (default behavior)
+            lambda_opc_time: Opacity scaling factor for time. Tensor [N], scalar, or None.
+                            If None, uses self.get_lambda_opc_time for 7DGS (default behavior)
 
         Returns:
             m_cond: Conditional mean (3D position) [N, 3]
@@ -116,24 +119,29 @@ class GaussianModel:
             m_2=m_2,
             query=q,
             covars=v,
-            lambda_opc=lambda_opc
+            lambda_opc=lambda_opc,
+            lambda_opc_time=lambda_opc_time,
+            zero_view_time_cross_terms=self.zero_view_time_cross_terms
         )
 
         return m_cond, cov3D_precomp, scale
 
-    def slice_gaussian_test(self, q, lambda_opc=0.35):
+    def slice_gaussian_test(self, q, lambda_opc=None, lambda_opc_time=None):
         """
         Optimized version of slice_gaussian for test/inference time.
         Uses precomputed self.v_22_inv and self.v_regr to avoid redundant computation.
         CUDA-accelerated for fast inference.
 
         Args:
-            q: Query direction (view direction)
-            lambda_opc: Opacity scaling factor (default 0.35)
+            q: Query direction (view direction + time for 7DGS) [N, C]
+            lambda_opc: Opacity scaling factor for view direction. Tensor [N] or scalar.
+                       If None, uses self.get_lambda_opc (default behavior)
+            lambda_opc_time: Opacity scaling factor for time. Tensor [N], scalar, or None.
+                            If None, uses self.get_lambda_opc_time for 7DGS (default behavior)
 
         Returns:
-            m_cond: Conditional mean (3D position)
-            scale: Opacity scaling factor based on direction influence
+            m_cond: Conditional mean (3D position) [N, 3]
+            scale: Opacity scaling factor based on direction influence [N, 1]
         """
         m_1 = self.get_xyz
         m_2 = self.direction
@@ -147,13 +155,15 @@ class GaussianModel:
             v_22_inv=v_22_inv,
             v_regr=v_regr,
             query=q,
-            lambda_opc=lambda_opc
+            lambda_opc=lambda_opc,
+            lambda_opc_time=lambda_opc_time,
+            zero_view_time_cross_terms=self.zero_view_time_cross_terms
         )
         return m_cond, scale
 
 
     def __init__(self, sh_degree : int, input_dim: int = 6, use_rot_scale_l_triangle: bool = False,
-                 learnable_lambda_opc: bool = False, zero_view_time_cross_terms: bool = False,
+                 learnable_lambda_opc: bool = True, zero_view_time_cross_terms: bool = False,
                  time_duration: list = [0.0, 1.0]):
         """
         Initialize GaussianModel with flexible covariance parametrization.
@@ -172,6 +182,9 @@ class GaussianModel:
         self.max_sh_degree = sh_degree
         self.input_dim = input_dim  # 6 for 6DGS, 7 for 7DGS (with time)
         self.use_rot_scale_l_triangle = use_rot_scale_l_triangle
+
+        # Track lambda_opc training state to avoid redundant enable/disable calls
+        self._lambda_opc_training_enabled = False
         self.learnable_lambda_opc = learnable_lambda_opc
         self.zero_view_time_cross_terms = zero_view_time_cross_terms
         self.time_duration = time_duration  # Time range for 7DGS
@@ -182,7 +195,8 @@ class GaussianModel:
         self._mean_view = torch.empty(0)  # View direction mean: [N, 3]
         self._mean_time = torch.empty(0)  # Time mean: [N, 1] (only for input_dim=7)
         self._opacity = torch.empty(0)
-        self._lambda_opc = torch.empty(0)  # Learnable opacity scaling parameter
+        self._lambda_opc = torch.empty(0)  # Learnable opacity scaling parameter (for view)
+        self._lambda_opc_time = torch.empty(0)  # Learnable opacity scaling parameter (for time, only for input_dim=7)
         self.max_radii2D = torch.empty(0)
         self.xyz_gradient_accum = torch.empty(0)
         self.xyz_gradient_accum_abs = torch.empty(0)  # FastGS: separate accumulator for split decisions
@@ -366,13 +380,25 @@ class GaussianModel:
 
     @property
     def get_lambda_opc(self):
-        """Get lambda_opc parameter (learnable or fixed)."""
+        """Get lambda_opc parameter for view (learnable or fixed)."""
         if self.learnable_lambda_opc:
             return self.opacity_activation(self._lambda_opc)
         else:
-            # Return fixed value of 0.35 for all Gaussians
+            # Return fixed value of 0.35
+            default_val = 0.35
+            return torch.ones_like(self._opacity) * default_val
+
+    @property
+    def get_lambda_opc_time(self):
+        """Get lambda_opc_time parameter for time (learnable or fixed, only for input_dim=7)."""
+        if self.input_dim != 7:
+            return None
+        if self.learnable_lambda_opc:
+            return self.opacity_activation(self._lambda_opc_time)
+        else:
+            # Return fixed value of 0.35 for time component
             return torch.ones_like(self._opacity) * 0.35
-    
+
     @property
     def get_scaling(self):
         v = self.get_pc_v
@@ -544,7 +570,16 @@ class GaussianModel:
         print("Number of points at initialisation : ", fused_point_cloud.shape[0])
 
         opacities = inverse_sigmoid(0.1 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda"))
-        lambda_opcs = inverse_sigmoid(0.35 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda"))
+
+        # Initialize lambda_opc for view (0.35)
+        default_lambda_val = 0.35
+        lambda_opcs = inverse_sigmoid(default_lambda_val * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda"))
+
+        # Initialize lambda_opc_time for time (only for 7DGS)
+        if self.input_dim == 7:
+            lambda_opcs_time = inverse_sigmoid(0.35 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda"))
+        else:
+            lambda_opcs_time = torch.empty((fused_point_cloud.shape[0], 0), dtype=torch.float, device="cuda")
 
         from sklearn.neighbors import NearestNeighbors
         def knn(x, K=4):
@@ -595,7 +630,12 @@ class GaussianModel:
         self._mean_view = nn.Parameter(mean_view.requires_grad_(True))
         self._mean_time = nn.Parameter(mean_time.requires_grad_(self.input_dim == 7))
         self._opacity = nn.Parameter(opacities.requires_grad_(True))
-        self._lambda_opc = nn.Parameter(lambda_opcs.requires_grad_(self.learnable_lambda_opc))
+        # lambda_opc parameters: initially non-trainable, enabled via patient-based training
+        # Similar to opacity_scale in 4D-GS: start frozen, enable after patience or iteration > 14900
+        self._lambda_opc = nn.Parameter(lambda_opcs)
+        self._lambda_opc.requires_grad_(False)  # Start frozen
+        self._lambda_opc_time = nn.Parameter(lambda_opcs_time)
+        self._lambda_opc_time.requires_grad_(False)  # Start frozen
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
     def training_setup(self, training_args):
@@ -633,12 +673,21 @@ class GaussianModel:
         l.append({'params': [self._scale], 'lr': scale_lr, "name": "scale"})
         l.append({'params': [self._l_triangle], 'lr': l_triangle_lr, "name": "l_triangle"})
 
-        # Add lambda_opc parameter (learnable or not)
+        # Add lambda_opc parameter
+        # Patient-based training: start with lr=0, will be updated dynamically during training
+        # For learnable mode: training starts after patience trigger or iteration > 14900
+        # For non-learnable mode: always lr=0
         if self.learnable_lambda_opc:
-            l.append({'params': [self._lambda_opc], 'lr': training_args.opacity_lr, "name": "lambda_opc"})
+            l.append({'params': [self._lambda_opc], 'lr': 0.0, "name": "lambda_opc"})  # Start frozen
         else:
-            # Still add to optimizer but with requires_grad=False for consistency
             l.append({'params': [self._lambda_opc], 'lr': 0.0, "name": "lambda_opc"})
+
+        # Add lambda_opc_time parameter (only for input_dim=7)
+        if self.input_dim == 7:
+            if self.learnable_lambda_opc:
+                l.append({'params': [self._lambda_opc_time], 'lr': 0.0, "name": "lambda_opc_time"})  # Start frozen
+            else:
+                l.append({'params': [self._lambda_opc_time], 'lr': 0.0, "name": "lambda_opc_time"})
 
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
         self.xyz_scheduler_args = get_expon_lr_func(lr_init=training_args.position_lr_init*self.spatial_lr_scale,
@@ -653,6 +702,69 @@ class GaussianModel:
                 lr = self.xyz_scheduler_args(iteration)
                 param_group['lr'] = lr
                 return lr
+
+    def enable_lambda_opc_training(self, training_args):
+        """
+        Enable training for lambda_opc parameters (patient-based training).
+        Similar to opacity_scale in 4D-GS: triggered after patience or iteration > 14900.
+        Only applies when learnable_lambda_opc=True.
+
+        Returns:
+            bool: True if state changed, False if already enabled
+        """
+        if not self.learnable_lambda_opc:
+            return False
+
+        # Check if already enabled to avoid redundant work
+        if self._lambda_opc_training_enabled:
+            return False
+
+        # Enable gradient computation
+        self._lambda_opc.requires_grad_(True)
+        if self.input_dim == 7:
+            self._lambda_opc_time.requires_grad_(True)
+
+        # Update optimizer learning rates
+        for param_group in self.optimizer.param_groups:
+            if param_group["name"] == "lambda_opc":
+                param_group['lr'] = training_args.opacity_lr
+            elif param_group["name"] == "lambda_opc_time" and self.input_dim == 7:
+                param_group['lr'] = training_args.opacity_lr
+
+        # Mark as enabled
+        self._lambda_opc_training_enabled = True
+        return True
+
+    def disable_lambda_opc_training(self):
+        """
+        Disable training for lambda_opc parameters.
+        Used during densification (before iteration 14900 and not patient).
+
+        Returns:
+            bool: True if state changed, False if already disabled
+        """
+        if not self.learnable_lambda_opc:
+            return False
+
+        # Check if already disabled to avoid redundant work
+        if not self._lambda_opc_training_enabled:
+            return False
+
+        # Disable gradient computation
+        self._lambda_opc.requires_grad_(False)
+        if self.input_dim == 7:
+            self._lambda_opc_time.requires_grad_(False)
+
+        # Set optimizer learning rates to 0
+        for param_group in self.optimizer.param_groups:
+            if param_group["name"] == "lambda_opc":
+                param_group['lr'] = 0.0
+            elif param_group["name"] == "lambda_opc_time":
+                param_group['lr'] = 0.0
+
+        # Mark as disabled
+        self._lambda_opc_training_enabled = False
+        return True
 
     def construct_list_of_attributes(self):
         l = ['x', 'y', 'z']
@@ -669,6 +781,9 @@ class GaussianModel:
             l.append('f_rest_{}'.format(i))
         l.append('opacity')
         l.append('lambda_opc')
+        # Add lambda_opc_time only for 7DGS
+        if self.input_dim == 7:
+            l.append('lambda_opc_time')
 
         # Use unified naming
         for i in range(self._scale.shape[1]):
@@ -695,6 +810,11 @@ class GaussianModel:
 
         # Build attributes list
         attr_list = [xyz, mean_view, mean_time, f_dc, f_rest, opacities, lambda_opcs]
+
+        # Add lambda_opc_time only for 7DGS
+        if self.input_dim == 7:
+            lambda_opcs_time = self._lambda_opc_time.detach().cpu().numpy()
+            attr_list.append(lambda_opcs_time)
 
         # Add covariance parameters (unified naming)
         scales = self._scale.detach().cpu().numpy()
@@ -772,8 +892,20 @@ class GaussianModel:
             lambda_opcs = np.asarray(plydata.elements[0]["lambda_opc"])[..., np.newaxis]
         except:
             # Default to 0.35 if not present in file
-            lambda_opcs = np.full((xyz.shape[0], 1), inverse_sigmoid(0.35), dtype=np.float32)
+            default_lambda = 0.35
+            lambda_opcs = np.full((xyz.shape[0], 1), inverse_sigmoid(default_lambda), dtype=np.float32)
         lambda_opcs = np.ascontiguousarray(lambda_opcs, dtype=np.float32)
+
+        # Load lambda_opc_time (only for 7DGS, with backward compatibility)
+        if self.input_dim == 7:
+            try:
+                lambda_opcs_time = np.asarray(plydata.elements[0]["lambda_opc_time"])[..., np.newaxis]
+            except:
+                # Default to 0.35 if not present in file
+                lambda_opcs_time = np.full((xyz.shape[0], 1), inverse_sigmoid(0.35), dtype=np.float32)
+            lambda_opcs_time = np.ascontiguousarray(lambda_opcs_time, dtype=np.float32)
+        else:
+            lambda_opcs_time = np.empty((xyz.shape[0], 0), dtype=np.float32)
 
         features_dc = np.zeros((xyz.shape[0], 3, 1))
         features_dc[:, 0, 0] = np.asarray(plydata.elements[0]["f_dc_0"])
@@ -817,6 +949,7 @@ class GaussianModel:
         self._features_rest = nn.Parameter(torch.tensor(features_extra, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
         self._opacity = nn.Parameter(torch.tensor(opacities, dtype=torch.float, device="cuda").requires_grad_(True))
         self._lambda_opc = nn.Parameter(torch.tensor(lambda_opcs, dtype=torch.float, device="cuda").requires_grad_(self.learnable_lambda_opc))
+        self._lambda_opc_time = nn.Parameter(torch.tensor(lambda_opcs_time, dtype=torch.float, device="cuda").requires_grad_(self.learnable_lambda_opc and self.input_dim == 7))
         self._mean_view = nn.Parameter(torch.tensor(mean_view, dtype=torch.float, device="cuda").requires_grad_(True))
         self._mean_time = nn.Parameter(torch.tensor(mean_time, dtype=torch.float, device="cuda").requires_grad_(self.input_dim == 7))
 
@@ -930,7 +1063,7 @@ class GaussianModel:
         return optimizable_tensors
 
     def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_mean_view, new_mean_time,
-                                    new_opacities, new_lambda_opc, new_scale, new_l_triangle):
+                                    new_opacities, new_lambda_opc, new_scale, new_l_triangle, new_lambda_opc_time=None):
         """
         Add new Gaussians to the model after densification.
 
@@ -938,6 +1071,7 @@ class GaussianModel:
             new_scale: New scale parameters (unified naming)
             new_l_triangle: New l_triangle parameters (unified naming)
             new_lambda_opc: New lambda_opc parameters
+            new_lambda_opc_time: New lambda_opc_time parameters (only for 7DGS)
             new_mean_view: New view direction mean parameters [N, 3]
             new_mean_time: New time mean parameters [N, 1] (for 7DGS) or [N, 0] (for 6DGS)
         """
@@ -952,6 +1086,10 @@ class GaussianModel:
             "l_triangle": new_l_triangle,
             }
 
+        # Add lambda_opc_time only for 7DGS
+        if self.input_dim == 7 and new_lambda_opc_time is not None:
+            d["lambda_opc_time"] = new_lambda_opc_time
+
         optimizable_tensors = self.cat_tensors_to_optimizer(d)
         self._xyz = optimizable_tensors["xyz"]
         self._features_dc = optimizable_tensors["f_dc"]
@@ -964,6 +1102,13 @@ class GaussianModel:
             self._mean_time = torch.cat([self._mean_time, new_mean_time], dim=0)
         self._opacity = optimizable_tensors["opacity"]
         self._lambda_opc = optimizable_tensors["lambda_opc"]
+        # Update lambda_opc_time for 7DGS
+        if self.input_dim == 7:
+            if "lambda_opc_time" in optimizable_tensors:
+                self._lambda_opc_time = optimizable_tensors["lambda_opc_time"]
+            else:
+                # Concatenate manually if not in optimizer
+                self._lambda_opc_time = torch.cat([self._lambda_opc_time, new_lambda_opc_time], dim=0)
         # Update covariance tensors (unified naming)
         self._scale = optimizable_tensors["scale"]
         self._l_triangle = optimizable_tensors["l_triangle"]
@@ -1043,13 +1188,14 @@ class GaussianModel:
         new_features_rest = self._features_rest[selected_pts_mask].repeat(N,1,1)
         new_opacity = self._opacity[selected_pts_mask].repeat(N,1)
         new_lambda_opc = self._lambda_opc[selected_pts_mask].repeat(N,1)
+        new_lambda_opc_time = self._lambda_opc_time[selected_pts_mask].repeat(N,1) if self.input_dim == 7 else None
         # Scale down for split (applies to all dimensions) - unified naming
         new_scale = self._scale[selected_pts_mask]
         new_scale = self.scale_inverse_activation(self.scale_activation(new_scale) * 0.8).repeat(N, 1)
         new_l_triangle = self._l_triangle[selected_pts_mask].repeat(N, 1)
 
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_mean_view, new_mean_time,
-                                   new_opacity, new_lambda_opc, new_scale, new_l_triangle)
+                                   new_opacity, new_lambda_opc, new_scale, new_l_triangle, new_lambda_opc_time)
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
@@ -1073,13 +1219,14 @@ class GaussianModel:
         new_mean_time = self._mean_time[selected_pts_mask]
         new_opacities = self._opacity[selected_pts_mask]
         new_lambda_opc = self._lambda_opc[selected_pts_mask]
+        new_lambda_opc_time = self._lambda_opc_time[selected_pts_mask] if self.input_dim == 7 else None
 
         # Clone covariance parameters - unified naming
         new_scale = self._scale[selected_pts_mask]
         new_l_triangle = self._l_triangle[selected_pts_mask]
 
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_mean_view, new_mean_time,
-                                   new_opacities, new_lambda_opc, new_scale, new_l_triangle)
+                                   new_opacities, new_lambda_opc, new_scale, new_l_triangle, new_lambda_opc_time)
 
     def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size, iteration):
         """Main densification and pruning routine."""
@@ -1131,12 +1278,13 @@ class GaussianModel:
         new_mean_time = self._mean_time[selected_pts_mask]
         new_opacities = self._opacity[selected_pts_mask]
         new_lambda_opc = self._lambda_opc[selected_pts_mask]
+        new_lambda_opc_time = self._lambda_opc_time[selected_pts_mask] if self.input_dim == 7 else None
         new_scale = self._scale[selected_pts_mask]
         new_l_triangle = self._l_triangle[selected_pts_mask]
 
         self.densification_postfix(
             new_xyz, new_features_dc, new_features_rest, new_mean_view, new_mean_time,
-            new_opacities, new_lambda_opc, new_scale, new_l_triangle
+            new_opacities, new_lambda_opc, new_scale, new_l_triangle, new_lambda_opc_time
         )
 
     def densify_and_split_fastgs(self, metric_mask, grad_filter, N=2):
@@ -1175,6 +1323,7 @@ class GaussianModel:
         new_features_rest = self._features_rest[selected_pts_mask].repeat(N, 1, 1)
         new_opacity = self._opacity[selected_pts_mask].repeat(N, 1)
         new_lambda_opc = self._lambda_opc[selected_pts_mask].repeat(N, 1)
+        new_lambda_opc_time = self._lambda_opc_time[selected_pts_mask].repeat(N, 1) if self.input_dim == 7 else None
 
         # Scale down for split (applies to all dimensions)
         new_scale = self._scale[selected_pts_mask]
@@ -1183,7 +1332,7 @@ class GaussianModel:
 
         self.densification_postfix(
             new_xyz, new_features_dc, new_features_rest, new_mean_view, new_mean_time,
-            new_opacity, new_lambda_opc, new_scale, new_l_triangle
+            new_opacity, new_lambda_opc, new_scale, new_l_triangle, new_lambda_opc_time
         )
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
@@ -1351,6 +1500,7 @@ class GaussianModel:
             self._mean_time[idxs],  # Always index, even if empty [N, 0] for 6DGS
             new_opacity,
             self._lambda_opc[idxs],
+            self._lambda_opc_time[idxs] if self.input_dim == 7 else None,
             self._scale[idxs],
             self._l_triangle[idxs],
         )
@@ -1407,6 +1557,7 @@ class GaussianModel:
             relocated_mean_time,
             relocated_opacity,
             relocated_lambda_opc,
+            relocated_lambda_opc_time,
             relocated_scale,
             relocated_l_triangle,
         ) = self._update_params(reinit_idx, ratio=ratio)
@@ -1421,6 +1572,8 @@ class GaussianModel:
             self._mean_time.index_copy_(0, dead_indices, relocated_mean_time)
         self._opacity.index_copy_(0, dead_indices, relocated_opacity)
         self._lambda_opc.index_copy_(0, dead_indices, relocated_lambda_opc)
+        if self.input_dim == 7 and relocated_lambda_opc_time is not None:
+            self._lambda_opc_time.index_copy_(0, dead_indices, relocated_lambda_opc_time)
         self._scale.index_copy_(0, dead_indices, relocated_scale)
         self._l_triangle.index_copy_(0, dead_indices, relocated_l_triangle)
 
@@ -1591,16 +1744,15 @@ class GaussianModel:
         else:
             cond_params = view_dir
 
-        # Use fixed or learnable lambda_opc
-        if self.learnable_lambda_opc:
-            lambda_opc = self.get_lambda_opc.squeeze(-1)  # [N]
-        else:
-            lambda_opc = 0.125 if self.input_dim == 7 else 0.35
+        # Get lambda_opc (always tensor [N]) for view and time
+        # These are always tensors, whether learnable or fixed (broadcasted to [N])
+        lambda_opc = self.get_lambda_opc.squeeze(-1)  # [N]
+        lambda_opc_time = self.get_lambda_opc_time.squeeze(-1) if self.input_dim == 7 else None  # [N] or None
 
         is_test = False  # This is because masking precompute takes longer
         if is_test:
             # Test mode: use precomputed values
-            m_cond, pdf_cond = self.slice_gaussian_test(cond_params, lambda_opc=lambda_opc)
+            m_cond, pdf_cond = self.slice_gaussian_test(cond_params, lambda_opc=lambda_opc, lambda_opc_time=lambda_opc_time)
             shs = self.shs
             cov3D_precomp = self.cov3D_precomp
         else:
@@ -1608,7 +1760,7 @@ class GaussianModel:
             shs = self.get_features
             # slice_gaussian returns upper-triangular format [0,0], [0,1], [0,2], [1,1], [1,2], [2,2]
             # which is directly compatible with diff_gaussian_rasterization
-            m_cond, cov3D_precomp, pdf_cond = self.slice_gaussian(cond_params, c_dim=3, lambda_opc=lambda_opc)
+            m_cond, cov3D_precomp, pdf_cond = self.slice_gaussian(cond_params, c_dim=3, lambda_opc=lambda_opc, lambda_opc_time=lambda_opc_time)
 
         # Compute opacity with conditional probability
         opacity = self.get_opacity * pdf_cond
@@ -1712,11 +1864,9 @@ class GaussianModel:
         else:
             cond_params = view_dir
 
-        # Use fixed or learnable lambda_opc
-        if self.learnable_lambda_opc:
-            lambda_opc = self.get_lambda_opc.squeeze(-1)
-        else:
-            lambda_opc = 0.125 if self.input_dim == 7 else 0.35
+        # Get lambda_opc (always tensor [N])
+        # This is always a tensor, whether learnable or fixed (broadcasted to [N])
+        lambda_opc = self.get_lambda_opc.squeeze(-1)  # [N]
 
         # Training mode: compute conditional slicing
         shs = self.get_features
