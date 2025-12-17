@@ -547,7 +547,11 @@ def test_backward_gradient_flow():
 
 
 def test_backward_with_tensor_lambda():
-    """Test backward pass when lambda parameters are tensors."""
+    """Test backward pass when lambda parameters are tensors.
+    
+    With the updated CUDA kernel, gradients should now flow through
+    lambda_opc and lambda_opc_time parameters.
+    """
     print("\n" + "=" * 70)
     print("TEST: Backward Pass with Tensor Lambda Parameters")
     print("=" * 70)
@@ -558,7 +562,7 @@ def test_backward_with_tensor_lambda():
     
     m_1, m_2, query, covars, _, _ = create_test_inputs(N, C, device=device, requires_grad=True)
     
-    # Test with tensor lambdas
+    # Test with tensor lambdas - these should now receive gradients!
     lambda_opc = torch.rand(N, device=device, dtype=torch.float64) * 0.3 + 0.2
     lambda_opc.requires_grad_(True)
     lambda_opc_time = torch.rand(N, device=device, dtype=torch.float64) * 0.3 + 0.3
@@ -572,33 +576,34 @@ def test_backward_with_tensor_lambda():
             m_1, m_2, query, covars, lambda_opc, lambda_opc_time
         )
         
-        # Backward pass
+        # Backward pass - use scale to ensure lambda gradients flow
         loss = m_cond.sum() + cov3D.sum() + scale.sum()
         loss.backward()
         
-        # Check gradients
+        # Check gradients for standard inputs
         has_grad_m1 = m_1.grad is not None and m_1.grad.abs().sum() > 0
         has_grad_m2 = m_2.grad is not None and m_2.grad.abs().sum() > 0
         has_grad_covars = covars.grad is not None and covars.grad.abs().sum() > 0
         
         print(f"\nGradient flow with tensor lambdas:")
-        print(f"   m_1: {has_grad_m1} ✓" if has_grad_m1 else f"   m_1: {has_grad_m1} ✗")
-        print(f"   m_2: {has_grad_m2} ✓" if has_grad_m2 else f"   m_2: {has_grad_m2} ✗")
-        print(f"   covars: {has_grad_covars} ✓" if has_grad_covars else f"   covars: {has_grad_covars} ✗")
+        print(f"   m_1: {has_grad_m1} {'✓' if has_grad_m1 else '✗'}")
+        print(f"   m_2: {has_grad_m2} {'✓' if has_grad_m2 else '✗'}")
+        print(f"   covars: {has_grad_covars} {'✓' if has_grad_covars else '✗'}")
         
-        all_passed = has_grad_m1 and has_grad_m2 and has_grad_covars
+        # Check gradients for lambda parameters (now expected!)
+        has_grad_lambda_opc = lambda_opc.grad is not None and lambda_opc.grad.abs().sum() > 0
+        has_grad_lambda_opc_time = lambda_opc_time.grad is not None and lambda_opc_time.grad.abs().sum() > 0
         
-        # Note: lambda_opc and lambda_opc_time gradient flow depends on implementation
-        # The function may or may not support gradients through lambda parameters
-        if lambda_opc.grad is not None:
-            print(f"   lambda_opc: gradient available (norm={lambda_opc.grad.norm():.6f})")
-        else:
-            print(f"   lambda_opc: no gradient (not required or not supported)")
-            
-        if lambda_opc_time.grad is not None:
-            print(f"   lambda_opc_time: gradient available (norm={lambda_opc_time.grad.norm():.6f})")
-        else:
-            print(f"   lambda_opc_time: no gradient (not required or not supported)")
+        print(f"   lambda_opc: {has_grad_lambda_opc} {'✓' if has_grad_lambda_opc else '✗'}")
+        if has_grad_lambda_opc:
+            print(f"      gradient norm: {lambda_opc.grad.norm():.6f}")
+        print(f"   lambda_opc_time: {has_grad_lambda_opc_time} {'✓' if has_grad_lambda_opc_time else '✗'}")
+        if has_grad_lambda_opc_time:
+            print(f"      gradient norm: {lambda_opc_time.grad.norm():.6f}")
+        
+        # All inputs should have gradients, including lambda parameters
+        all_passed = (has_grad_m1 and has_grad_m2 and has_grad_covars and 
+                      has_grad_lambda_opc and has_grad_lambda_opc_time)
             
     except Exception as e:
         all_passed = False
@@ -606,7 +611,7 @@ def test_backward_with_tensor_lambda():
     
     print("\n" + "-" * 70)
     if all_passed:
-        print("Tensor lambda test PASSED!")
+        print("Tensor lambda test PASSED! (gradients flow through lambda parameters)")
     else:
         print("Tensor lambda test FAILED!")
     

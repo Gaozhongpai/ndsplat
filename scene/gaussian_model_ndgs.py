@@ -120,8 +120,7 @@ class GaussianModel:
             query=q,
             covars=v,
             lambda_opc=lambda_opc,
-            lambda_opc_time=lambda_opc_time,
-            zero_view_time_cross_terms=self.zero_view_time_cross_terms
+            lambda_opc_time=lambda_opc_time
         )
 
         return m_cond, cov3D_precomp, scale
@@ -156,15 +155,13 @@ class GaussianModel:
             v_regr=v_regr,
             query=q,
             lambda_opc=lambda_opc,
-            lambda_opc_time=lambda_opc_time,
-            zero_view_time_cross_terms=self.zero_view_time_cross_terms
+            lambda_opc_time=lambda_opc_time
         )
         return m_cond, scale
 
 
     def __init__(self, sh_degree : int, input_dim: int = 6, use_rot_scale_l_triangle: bool = False,
-                 learnable_lambda_opc: bool = True, zero_view_time_cross_terms: bool = False,
-                 time_duration: list = [0.0, 1.0]):
+                 learnable_lambda_opc: bool = True, time_duration: list = [0.0, 1.0]):
         """
         Initialize GaussianModel with flexible covariance parametrization.
 
@@ -174,8 +171,6 @@ class GaussianModel:
             use_rot_scale_l_triangle: If True, use rotation-scale-l_triangle parametrization (UBS style).
                                       If False, use direct diagonal-l_triangle parametrization (NDGS style).
             learnable_lambda_opc: If True, make lambda_opc a learnable parameter per Gaussian.
-            zero_view_time_cross_terms: If True, zero out view-time cross-terms to enforce block-diagonal
-                                        structure (only effective when input_dim=7). Default: False.
             time_duration: [min, max] time range for 7DGS (default: [0.0, 1.0]).
         """
         self.active_sh_degree = 0
@@ -186,7 +181,6 @@ class GaussianModel:
         # Track lambda_opc training state to avoid redundant enable/disable calls
         self._lambda_opc_training_enabled = False
         self.learnable_lambda_opc = learnable_lambda_opc
-        self.zero_view_time_cross_terms = zero_view_time_cross_terms
         self.time_duration = time_duration  # Time range for 7DGS
 
         self._xyz = torch.empty(0)
@@ -336,15 +330,7 @@ class GaussianModel:
         Σ_cond = [Σ_view (3x3),    0        ]
                  [      0,      σ_time (1x1)]
         """
-        l_triangle = self.l_triangle_activation(self._l_triangle)
-
-        # For 7DGS, optionally zero out view-time cross-terms to make conditioning block-diagonal
-        if self.input_dim == 7 and self.zero_view_time_cross_terms:
-            # Zero out indices 18-20 (time cross-terms with vx, vy, vz only)
-            l_triangle = l_triangle.clone()
-            l_triangle[:, 18:21] = 0.0
-
-        return l_triangle
+        return self.l_triangle_activation(self._l_triangle)
 
     @property
     def get_pc_v(self):
@@ -644,15 +630,6 @@ class GaussianModel:
         self.xyz_gradient_accum_abs = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")  # FastGS: for split decisions
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
-
-        # Optionally register gradient hook to zero out view-time cross-terms for input_dim=7
-        if self.input_dim == 7 and self.zero_view_time_cross_terms:
-            def zero_view_time_cross_term_grad(grad):
-                # Zero out indices 18-20 (time cross-terms with vx, vy, vz only)
-                # to enforce block-diagonal structure between view and time
-                grad[:, 18:21] = 0.0
-                return grad
-            self._l_triangle.register_hook(zero_view_time_cross_term_grad)
 
         l = [
             {'params': [self._xyz], 'lr': training_args.position_lr_init * self.spatial_lr_scale, "name": "xyz"},
@@ -1028,6 +1005,10 @@ class GaussianModel:
             self._mean_time = self._mean_time[valid_points_mask]
         self._opacity = optimizable_tensors["opacity"]
         self._lambda_opc = optimizable_tensors["lambda_opc"]
+        if "lambda_opc_time" in optimizable_tensors:
+            self._lambda_opc_time = optimizable_tensors["lambda_opc_time"]
+        elif self.input_dim == 7:
+            self._lambda_opc_time = self._lambda_opc_time[valid_points_mask]
         # Update covariance tensors (unified naming)
         self._scale = optimizable_tensors["scale"]
         self._l_triangle = optimizable_tensors["l_triangle"]
@@ -1614,6 +1595,7 @@ class GaussianModel:
             new_mean_time,
             new_opacity,
             new_lambda_opc,
+            new_lambda_opc_time,
             new_scale,
             new_l_triangle,
         ) = self._update_params(add_idx, ratio=ratio)
@@ -1632,6 +1614,7 @@ class GaussianModel:
             new_lambda_opc,
             new_scale,
             new_l_triangle,
+            new_lambda_opc_time,
         )
 
         # Reset optimizer state for source indices

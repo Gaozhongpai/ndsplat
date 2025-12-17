@@ -158,7 +158,7 @@ class GaussianModel:
 
     def __init__(self, sh_degree: int, input_dim: int = 6, use_beta: bool = False,
                  use_view_dependent_pos: bool = True, use_time_dependent_rotation: bool = True,
-                 zero_view_time_cross_terms: bool = False, time_duration: list = [0.0, 1.0]):
+                time_duration: list = [0.0, 1.0]):
         """
         Initialize Full DGS with view-dependent position, time-dependent rotation, and opacity.
 
@@ -168,8 +168,6 @@ class GaussianModel:
             use_beta: Whether to use spatial beta parameter (default: False)
             use_view_dependent_pos: Enable view-dependent position shift (default: True)
             use_time_dependent_rotation: Enable time-dependent rotation (only effective when input_dim=7)
-            zero_view_time_cross_terms: If True, zero out view-time cross-terms to enforce block-diagonal
-                                        structure (only effective when input_dim=7). Default: False.
             time_duration: [min, max] time range for 7DGS (default: [0.0, 1.0]).
         """
         self.active_sh_degree = 0
@@ -179,7 +177,6 @@ class GaussianModel:
         self.use_view_dependent_pos = use_view_dependent_pos
         # Rotation conditioning only makes sense with time dimension
         self.use_time_dependent_rotation = use_time_dependent_rotation and (input_dim == 7)
-        self.zero_view_time_cross_terms = zero_view_time_cross_terms
         self.time_duration = time_duration  # Time range for 7DGS
         self.cond_dim = input_dim - 3  # C = 3 for view-only, 4 for view+time
 
@@ -383,11 +380,7 @@ class GaussianModel:
     @property
     def get_L_22_inv(self):
         """
-        Get L_22_inv, optionally with block-diagonal structure enforced for input_dim=7.
-
-        For input_dim=7 (C=4), if zero_view_time_cross_terms is True, zeros out the
-        view-time cross terms (indices 6, 7, 8) to ensure V_22^{-1} = L @ L^T is
-        block-diagonal between view (3x3) and time (1x1).
+        Get L_22_inv.
 
         L_22_inv index layout for 4x4 precision matrix (lower triangular, row-major):
 
@@ -403,12 +396,6 @@ class GaussianModel:
         V_22^{-1} = [Σ_view^{-1} (3x3),       0          ]
                     [        0,         σ_time^{-1} (1x1)]
         """
-        if self.input_dim == 7 and self.zero_view_time_cross_terms:
-            # Clone to avoid modifying the parameter
-            L_22_inv = self._L_22_inv.clone()
-            # Zero out cross terms: l_30, l_31, l_32 at indices 6, 7, 8
-            L_22_inv[:, 6:9] = 0.0
-            return L_22_inv
         return self._L_22_inv
 
     def compute_time_attention(self, query_time, mean_time, L_22_inv_diag_rot):
@@ -659,14 +646,6 @@ class GaussianModel:
         self.percent_dense = training_args.percent_dense
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
-
-        # Optionally register gradient hook to zero out view-time cross terms for input_dim=7
-        if self.input_dim == 7 and self.zero_view_time_cross_terms:
-            def zero_cross_term_grad(grad):
-                # Zero out indices 6, 7, 8 (l_30, l_31, l_32) to enforce block-diagonal
-                grad[:, 6:9] = 0.0
-                return grad
-            self._L_22_inv.register_hook(zero_cross_term_grad)
 
         l = [
             {'params': [self._xyz], 'lr': training_args.position_lr_init * self.spatial_lr_scale, "name": "xyz"},

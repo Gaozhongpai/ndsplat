@@ -220,6 +220,7 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
         batch_visibility_filters = []
         batch_radii = []
         batch_viewspace_tensors = []  # Store viewspace tensors from each view
+        shift_reg_loss = None  # Initialize before loop, may be set inside
 
         for _ in range(pipe.mv):
             # Pick a random Camera
@@ -264,7 +265,7 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
                 shift_ratio = shift_magnitude / (spatial_scale + 1e-6)
                 # Penalize shifts that exceed max_shift_ratio (default 1.0 = spatial scale)
                 shift_reg_loss = torch.nn.functional.relu(shift_ratio - opt.max_shift_ratio).mean()
-                loss += opt.shift_reg * shift_reg_loss
+                # loss += opt.shift_reg * shift_reg_loss
 
             # Normalize by number of views (matching 7DGS-ICCV behavior)
             loss = loss / pipe.mv
@@ -312,7 +313,7 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
                 progress_bar.close()
 
             # Log and save
-            n_patient_change = training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render_wrapper, (pipe, background, mode), log_file, best_psnr_info)
+            n_patient_change = training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render_wrapper, (pipe, background, mode), log_file, best_psnr_info, shift_reg_loss)
 
             # Patient-based lambda_opc training (NDGS mode with learnable_lambda_opc)
             # Now works for both 6D and 7D (removed input_dim==7 restriction)
@@ -588,7 +589,7 @@ def prepare_output_and_logger(args):
         print("Tensorboard not available: not logging progress")
     return tb_writer, log_file
 
-def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, log_file=None, best_psnr_info=None):
+def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, log_file=None, best_psnr_info=None, shift_reg_loss=None):
     if tb_writer:
         tb_writer.add_scalar('train_loss_patches/l1_loss', Ll1.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/total_loss', loss.item(), iteration)
@@ -599,6 +600,9 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
         torch.cuda.empty_cache()
         validation_configs = ({'name': 'test', 'cameras' : scene.getTestCameras()},
                               {'name': 'train', 'cameras' : [scene.getTrainCameras()[idx % len(scene.getTrainCameras())] for idx in range(5, 30, 5)]})
+
+        if shift_reg_loss is not None:
+            print(f"\n[ITER {iteration}] Shift Reg Loss: {shift_reg_loss.item():.6f}")
 
         test_psnr_value = None  # Track test PSNR for best checkpoint
         for config in validation_configs:
