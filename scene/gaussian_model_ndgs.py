@@ -160,6 +160,15 @@ class GaussianModel:
         return m_cond, scale
 
 
+    # Default lambda_opc values for opacity scaling (single source of truth)
+    DEFAULT_LAMBDA_OPC_6D = 0.35   # For 6DGS (view-only)
+    DEFAULT_LAMBDA_OPC_7D = 0.125  # For 7DGS (view + time)
+
+    @property
+    def default_lambda_opc(self):
+        """Return the appropriate default lambda_opc based on input_dim."""
+        return self.DEFAULT_LAMBDA_OPC_7D if self.input_dim == 7 else self.DEFAULT_LAMBDA_OPC_6D
+
     def __init__(self, sh_degree : int, input_dim: int = 6, use_rot_scale_l_triangle: bool = False,
                  learnable_lambda_opc: bool = True, time_duration: list = [0.0, 1.0]):
         """
@@ -370,9 +379,8 @@ class GaussianModel:
         if self.learnable_lambda_opc:
             return self.opacity_activation(self._lambda_opc)
         else:
-            # Return fixed value of 0.35
-            default_val = 0.35
-            return torch.ones_like(self._opacity) * default_val
+            # Return fixed default value
+            return torch.ones_like(self._opacity) * self.default_lambda_opc
 
     @property
     def get_lambda_opc_time(self):
@@ -382,8 +390,8 @@ class GaussianModel:
         if self.learnable_lambda_opc:
             return self.opacity_activation(self._lambda_opc_time)
         else:
-            # Return fixed value of 0.35 for time component
-            return torch.ones_like(self._opacity) * 0.35
+            # Return fixed default value for time component
+            return torch.ones_like(self._opacity) * self.default_lambda_opc
 
     @property
     def get_scaling(self):
@@ -557,13 +565,12 @@ class GaussianModel:
 
         opacities = inverse_sigmoid(0.1 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda"))
 
-        # Initialize lambda_opc for view (0.35)
-        default_lambda_val = 0.35
-        lambda_opcs = inverse_sigmoid(default_lambda_val * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda"))
+        # Initialize lambda_opc for view
+        lambda_opcs = inverse_sigmoid(self.default_lambda_opc * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda"))
 
         # Initialize lambda_opc_time for time (only for 7DGS)
         if self.input_dim == 7:
-            lambda_opcs_time = inverse_sigmoid(0.35 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda"))
+            lambda_opcs_time = inverse_sigmoid(self.default_lambda_opc * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda"))
         else:
             lambda_opcs_time = torch.empty((fused_point_cloud.shape[0], 0), dtype=torch.float, device="cuda")
 
@@ -868,9 +875,8 @@ class GaussianModel:
         try:
             lambda_opcs = np.asarray(plydata.elements[0]["lambda_opc"])[..., np.newaxis]
         except:
-            # Default to 0.35 if not present in file
-            default_lambda = 0.35
-            lambda_opcs = np.full((xyz.shape[0], 1), inverse_sigmoid(default_lambda), dtype=np.float32)
+            # Default if not present in file
+            lambda_opcs = np.full((xyz.shape[0], 1), inverse_sigmoid(self.default_lambda_opc), dtype=np.float32)
         lambda_opcs = np.ascontiguousarray(lambda_opcs, dtype=np.float32)
 
         # Load lambda_opc_time (only for 7DGS, with backward compatibility)
@@ -878,8 +884,8 @@ class GaussianModel:
             try:
                 lambda_opcs_time = np.asarray(plydata.elements[0]["lambda_opc_time"])[..., np.newaxis]
             except:
-                # Default to 0.35 if not present in file
-                lambda_opcs_time = np.full((xyz.shape[0], 1), inverse_sigmoid(0.35), dtype=np.float32)
+                # Default if not present in file
+                lambda_opcs_time = np.full((xyz.shape[0], 1), inverse_sigmoid(self.default_lambda_opc), dtype=np.float32)
             lambda_opcs_time = np.ascontiguousarray(lambda_opcs_time, dtype=np.float32)
         else:
             lambda_opcs_time = np.empty((xyz.shape[0], 0), dtype=np.float32)
