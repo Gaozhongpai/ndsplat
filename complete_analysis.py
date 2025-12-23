@@ -18,10 +18,22 @@ import struct
 import matplotlib.pyplot as plt
 import matplotlib
 import os
+import json
 matplotlib.use('Agg')  # Non-interactive backend
 
 # Get the directory where this script is located
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def read_psnr_from_results(results_json_path, iteration_key='ours_30000'):
+    """Read PSNR from results.json file"""
+    try:
+        with open(results_json_path, 'r') as f:
+            data = json.load(f)
+        if iteration_key in data:
+            return data[iteration_key].get('PSNR', None)
+    except (FileNotFoundError, json.JSONDecodeError, KeyError) as e:
+        print(f"Warning: Could not read PSNR from {results_json_path}: {e}")
+    return None
 OUTPUT_DIR = os.path.join(SCRIPT_DIR, 'output')
 
 def read_ply_data(file_path):
@@ -293,27 +305,34 @@ print("="*80)
 print("COMPLETE POSITION SHIFT ANALYSIS")
 print("="*80)
 
+# datasets: (name, ply_path, method, results_json_path)
 datasets = [
-    ('Bunny (NEW)', '/code/workspace/6dgs-iclr/output/opacity_pos/tandt_pbr/bunny_cloud/point_cloud/iteration_best/point_cloud.ply', 'new'),
-    ('Dragon (NEW)', '/code/workspace/6dgs-iclr/output/opacity_pos/tandt_pbr/dragon/point_cloud/iteration_30000/point_cloud.ply', 'new'),
-    ('Chair (NEW)', '/code/workspace/6dgs-iclr/output/opacity_pos/nerf_synthetic/chair/point_cloud/iteration_30000/point_cloud.ply', 'new'),
-    ('Bunny (OLD)', '/code/workspace/6dgs-iclr/output/opacity_pos_v1/tandt_pbr/bunny_cloud/point_cloud/iteration_30000/point_cloud.ply', 'old'),
-    ('Dragon (OLD)', '/code/workspace/6dgs-iclr/output/opacity_pos_v1/tandt_pbr/dragon/point_cloud/iteration_30000/point_cloud.ply', 'old'),
-    ('Chair (OLD)', '/code/workspace/6dgs-iclr/output/opacity_pos_v1/nerf_synthetic/chair/point_cloud/iteration_30000/point_cloud.ply', 'old'),
-    ('Lego (OLD)', '/code/workspace/6dgs-iclr/output/opacity_pos_v1/nerf_synthetic/lego/point_cloud/iteration_30000/point_cloud.ply', 'old'),
-    ('Bunny (NDGS)', '/code/workspace/6dgs-iclr/output/ndgs/tandt_pbr/bunny_cloud/point_cloud/iteration_30000/point_cloud.ply', 'ndgs'),
-    ('Dragon (NDGS)', '/code/workspace/6dgs-iclr/output/ndgs/tandt_pbr/dragon/point_cloud/iteration_30000/point_cloud.ply', 'ndgs'),
-    ('Chair (NDGS)', '/code/workspace/6dgs-iclr/output/ndgs/nerf_synthetic/chair/point_cloud/iteration_30000/point_cloud.ply', 'ndgs'),
-    ('Lego (NDGS)', '/code/workspace/6dgs-iclr/output/ndgs/nerf_synthetic/lego/point_cloud/iteration_30000/point_cloud.ply', 'ndgs'),
+    ('Bunny (NEW)', '/code/workspace/6dgs-iclr/output/opacity_pos/tandt_pbr/bunny_cloud/point_cloud/iteration_best/point_cloud.ply', 'new', '/code/workspace/6dgs-iclr/output/opacity_pos/tandt_pbr/bunny_cloud/results.json'),
+    ('Dragon (NEW)', '/code/workspace/6dgs-iclr/output/opacity_pos/tandt_pbr/dragon/point_cloud/iteration_30000/point_cloud.ply', 'new', '/code/workspace/6dgs-iclr/output/opacity_pos/tandt_pbr/dragon/results.json'),
+    ('Chair (NEW)', '/code/workspace/6dgs-iclr/output/opacity_pos/nerf_synthetic/chair/point_cloud/iteration_30000/point_cloud.ply', 'new', '/code/workspace/6dgs-iclr/output/opacity_pos/nerf_synthetic/chair/results.json'),
+    ('Lego (New)', '/code/workspace/6dgs-iclr/output/opacity_pos/nerf_synthetic/lego/point_cloud/iteration_30000/point_cloud.ply', 'new', '/code/workspace/6dgs-iclr/output/opacity_pos/nerf_synthetic/lego/results.json'),
+    ('Bunny (OLD)', '/code/workspace/6dgs-iclr/output/opacity_pos_v1/tandt_pbr/bunny_cloud/point_cloud/iteration_30000/point_cloud.ply', 'old', '/code/workspace/6dgs-iclr/output/opacity_pos_v1/tandt_pbr/bunny_cloud/results.json'),
+    ('Dragon (OLD)', '/code/workspace/6dgs-iclr/output/opacity_pos_v1/tandt_pbr/dragon/point_cloud/iteration_30000/point_cloud.ply', 'old', '/code/workspace/6dgs-iclr/output/opacity_pos_v1/tandt_pbr/dragon/results.json'),
+    ('Chair (OLD)', '/code/workspace/6dgs-iclr/output/opacity_pos_v1/nerf_synthetic/chair/point_cloud/iteration_30000/point_cloud.ply', 'old', '/code/workspace/6dgs-iclr/output/opacity_pos_v1/nerf_synthetic/chair/results.json'),
+    ('Lego (OLD)', '/code/workspace/6dgs-iclr/output/opacity_pos_v1/nerf_synthetic/lego/point_cloud/iteration_30000/point_cloud.ply', 'old', '/code/workspace/6dgs-iclr/output/opacity_pos_v1/nerf_synthetic/lego/results.json'),
+    ('Bunny (NDGS)', '/code/workspace/6dgs-iclr/output/ndgs/tandt_pbr/bunny_cloud/point_cloud/iteration_30000/point_cloud.ply', 'ndgs', '/code/workspace/6dgs-iclr/output/ndgs/tandt_pbr/bunny_cloud/results.json'),
+    ('Dragon (NDGS)', '/code/workspace/6dgs-iclr/output/ndgs/tandt_pbr/dragon/point_cloud/iteration_30000/point_cloud.ply', 'ndgs', '/code/workspace/6dgs-iclr/output/ndgs/tandt_pbr/dragon/results.json'),
+    ('Chair (NDGS)', '/code/workspace/6dgs-iclr/output/ndgs/nerf_synthetic/chair/point_cloud/iteration_30000/point_cloud.ply', 'ndgs', '/code/workspace/6dgs-iclr/output/ndgs/nerf_synthetic/chair/results.json'),
+    ('Lego (NDGS)', '/code/workspace/6dgs-iclr/output/ndgs/nerf_synthetic/lego/point_cloud/iteration_30000/point_cloud.ply', 'ndgs', '/code/workspace/6dgs-iclr/output/ndgs/nerf_synthetic/lego/results.json'),
 ]
 
 results = []
-for name, path, method in datasets:
+for name, path, method, results_json_path in datasets:
     try:
         if method == 'ndgs':
             result = analyze_ndgs(name, path)
         else:
             result = analyze_decoupled(name, path, use_old_formula=(method == 'old'))
+        # Read PSNR from results.json
+        psnr = read_psnr_from_results(results_json_path)
+        result['psnr'] = psnr
+        if psnr is not None:
+            print(f"  PSNR (ours_30000): {psnr:.2f} dB")
         results.append(result)
     except Exception as e:
         print(f"Error: {e}")
@@ -516,8 +535,10 @@ def plot_distributions(results):
                 alpha_val = 0.2 if r['type'] == 'NDGS' else 0.5
                 size = 8 if r['type'] == 'NDGS' else 15
 
+                # Include PSNR in label if available
+                psnr_str = f" (PSNR={r.get('psnr', 0):.1f}dB)" if r.get('psnr') is not None else ""
                 ax.scatter(v22inv_data[indices], normalized_pos[indices],
-                          alpha=alpha_val, s=size, color=colors[r['type']], label=r['type'],
+                          alpha=alpha_val, s=size, color=colors[r['type']], label=f"{r['type']}{psnr_str}",
                           edgecolors='black', linewidths=0.3)
 
             ax.set_xlabel('V_22_inv Scale (Opacity Precision)', fontsize=12)

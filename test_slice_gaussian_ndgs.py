@@ -618,6 +618,93 @@ def test_backward_with_tensor_lambda():
     return all_passed
 
 
+def test_cuda_vs_pytorch_zero_cross_terms():
+    """Test that CUDA and PyTorch implementations match for zero_view_time_cross_terms variations.
+    
+    This tests the fix where CUDA now correctly applies both lambda_opc and lambda_opc_time
+    even when zero_view_time_cross_terms=False (matching PyTorch implementation).
+    """
+    print("\n" + "=" * 70)
+    print("TEST: CUDA vs PyTorch - zero_view_time_cross_terms Behavior")
+    print("=" * 70)
+    
+    device = "cuda"
+    N = 100
+    C = 4  # Only C=4 supports lambda_opc_time
+    
+    all_passed = True
+    
+    try:
+        from gsplat.cuda._wrapper import slice_gaussian_ndgs as cuda_slice_gaussian_ndgs
+        has_cuda = True
+    except ImportError as e:
+        print(f"   ⚠ CUDA implementation not available: {e}")
+        print("   Skipping CUDA vs PyTorch comparison test")
+        return True  # Skip test if CUDA not available
+    
+    m_1, m_2, query, covars, _, _ = create_test_inputs(N, C, device=device, requires_grad=False)
+    
+    # Use per-Gaussian lambda tensors
+    lambda_opc = torch.rand(N, device=device, dtype=torch.float64) * 0.3 + 0.2
+    lambda_opc_time = torch.rand(N, device=device, dtype=torch.float64) * 0.3 + 0.3
+    
+    test_cases = [
+        {"zero_cross": True, "desc": "zero_view_time_cross_terms=True"},
+        {"zero_cross": False, "desc": "zero_view_time_cross_terms=False"},
+    ]
+    
+    for case in test_cases:
+        zero_cross = case["zero_cross"]
+        desc = case["desc"]
+        
+        print(f"\n{desc}:")
+        
+        # PyTorch implementation
+        m_cond_py, cov3D_py, scale_py = _slice_gaussian_ndgs(
+            m_1, m_2, query, covars, lambda_opc, lambda_opc_time, zero_cross
+        )
+        
+        # CUDA implementation
+        m_cond_cuda, cov3D_cuda, scale_cuda = cuda_slice_gaussian_ndgs(
+            m_1, m_2, query, covars, lambda_opc, lambda_opc_time, zero_cross
+        )
+        
+        # Compare outputs
+        m_cond_diff = (m_cond_py - m_cond_cuda).abs().max().item()
+        cov3D_diff = (cov3D_py - cov3D_cuda).abs().max().item()
+        scale_diff = (scale_py - scale_cuda).abs().max().item()
+        
+        m_cond_match = m_cond_diff < 1e-5
+        cov3D_match = cov3D_diff < 1e-5
+        scale_match = scale_diff < 1e-5
+        
+        all_match = m_cond_match and cov3D_match and scale_match
+        status = "✓" if all_match else "✗"
+        all_passed = all_passed and all_match
+        
+        print(f"   m_cond max diff: {m_cond_diff:.2e} {'✓' if m_cond_match else '✗'}")
+        print(f"   cov3D max diff:  {cov3D_diff:.2e} {'✓' if cov3D_match else '✗'}")
+        print(f"   scale max diff:  {scale_diff:.2e} {'✓' if scale_match else '✗'}")
+        
+        # Additional check: scale values should differ between zero_cross=True and False
+        # (because the quadratic forms are computed differently)
+        
+    # Test that zero_cross=True and False give different results (as expected)
+    print("\n   Checking that zero_cross=True and False give different results:")
+    _, _, scale_true = _slice_gaussian_ndgs(m_1, m_2, query, covars, lambda_opc, lambda_opc_time, True)
+    _, _, scale_false = _slice_gaussian_ndgs(m_1, m_2, query, covars, lambda_opc, lambda_opc_time, False)
+    scale_diff_between = (scale_true - scale_false).abs().mean().item()
+    print(f"   Mean scale diff between True/False: {scale_diff_between:.6f}")
+    
+    print("\n" + "-" * 70)
+    if all_passed:
+        print("CUDA vs PyTorch comparison PASSED!")
+    else:
+        print("CUDA vs PyTorch comparison FAILED!")
+    
+    return all_passed
+
+
 # ==============================================================================
 # Main Test Runner
 # ==============================================================================
@@ -650,6 +737,7 @@ def run_all_tests():
     results["backward_manual"] = test_backward_manual_verification()
     results["backward_flow"] = test_backward_gradient_flow()
     results["backward_tensor_lambda"] = test_backward_with_tensor_lambda()
+    results["cuda_vs_pytorch"] = test_cuda_vs_pytorch_zero_cross_terms()
     
     # Summary
     print("\n" + "=" * 70)

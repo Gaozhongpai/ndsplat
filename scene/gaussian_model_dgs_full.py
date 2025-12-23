@@ -40,7 +40,8 @@ from utils.graphics_utils import BasicPointCloud
 from utils.general_utils import strip_symmetric, build_scaling_rotation
 
 # Import CUDA-accelerated slice functions
-from gsplat import slice_gaussian_full
+# from gsplat import slice_gaussian_full
+from gsplat import slice_gaussian_full_v2
 
 
 def quaternion_multiply(q1, q2):
@@ -209,6 +210,12 @@ class GaussianModel:
         self._L_22_inv_diag_rot = torch.empty(0)    # [N, 1] precision for time-based rotation attention
         self._rotation_delta = torch.empty(0)       # [N, 4] quaternion delta
 
+        # === Lambda parameters for V2 (learnable conditioning strength) ===
+        # Lambda controls V_22_inv influence: V_22_inv_scaled = (1-λ) * I + λ * V_22_inv
+        # Stored in logit space (inverse sigmoid), activated via sigmoid in slice_gaussian_full_method
+        self._lambda_view = torch.empty(0)   # [N] - view conditioning strength (logit space)
+        self._lambda_time = torch.empty(0)   # [N] - time conditioning strength (logit space, only for input_dim=7)
+
         # Spatial beta: [N, 1] controls spatial uncertainty/bandwidth (optional)
         self._beta = torch.empty(0)
 
@@ -243,6 +250,8 @@ class GaussianModel:
             self._L_22_inv,
             self._L_22_inv_diag_rot if self.use_time_dependent_rotation else None,
             self._rotation_delta if self.use_time_dependent_rotation else None,
+            self._lambda_view if self.use_view_dependent_pos else None,
+            self._lambda_time if (self.use_view_dependent_pos and self.input_dim == 7) else None,
             self._beta if self.use_beta else None,
             self._opacity,
             self.max_radii2D,
@@ -267,6 +276,8 @@ class GaussianModel:
          self._L_22_inv,
          _L_22_inv_diag_rot,
          _rotation_delta,
+         _lambda_view,
+         _lambda_time,
          _beta,
          self._opacity,
          self.max_radii2D,
@@ -279,6 +290,10 @@ class GaussianModel:
                 self._v_12_direction = _v_12_direction
             if _v_12_scale is not None:
                 self._v_12_scale = _v_12_scale
+            if _lambda_view is not None:
+                self._lambda_view = _lambda_view
+            if self.input_dim == 7 and _lambda_time is not None:
+                self._lambda_time = _lambda_time
         if self.use_time_dependent_rotation:
             if _L_22_inv_diag_rot is not None:
                 self._L_22_inv_diag_rot = _L_22_inv_diag_rot
@@ -452,16 +467,17 @@ class GaussianModel:
 
     def slice_gaussian_full_method(self, query, lambda_opc=None):
         """
-        Perform conditional Gaussian slicing for position, rotation, and opacity.
+        Perform conditional Gaussian slicing for position, rotation, and opacity using V2.
 
-        Uses the CUDA-accelerated slice_gaussian_full function that handles:
-        - Position: v_12 regression (INDEPENDENT of V_22^{-1})
-        - Opacity: full Cholesky L_22_inv parameterization (ONLY affects opacity)
+        Uses the CUDA-accelerated slice_gaussian_full_v2 function with learnable lambda parameters:
+        - Position: v_12 regression with lambda-controlled V_22_inv influence
+        - V_22_inv_scaled = (1-λ) * I + λ * V_22_inv (linear interpolation)
+        - Opacity: full Cholesky L_22_inv parameterization
         - Rotation: time-only conditioning when input_dim=7
 
         Given query view direction (+ optional time), compute:
-        - Conditional position: x_cond = x + v_12 @ (v - μ_v) [v_12 acts as v_regr, independent of V_22^{-1}]
-        - Opacity scale: attention = exp(-λ * (v - μ_v)^T @ V_22^{-1} @ (v - μ_v))
+        - Conditional position: x_cond = x + v_12 @ V_22_inv_scaled @ (v - μ_v)
+        - Opacity scale: attention = exp(-λ_opc * (v - μ_v)^T @ V_22^{-1} @ (v - μ_v))
         - Conditional rotation: q_cond = q_base ⊗ slerp(I, q_delta, 1 - attention_time)
           (only for time dimension when input_dim=7)
 
@@ -477,18 +493,31 @@ class GaussianModel:
         # Set default lambda_opc based on input_dim
         if lambda_opc is None:
             lambda_opc = 0.35
-        # Use slice_gaussian_full CUDA kernel
-        # Use get_L_22_inv to enforce block-diagonal structure (zero view-time cross terms)
-        x_cond, rotation_cond, opacity_scale = slice_gaussian_full(
+
+        # Apply sigmoid to lambda parameters (stored in logit space)
+        # Only used when use_view_dependent_pos is True
+        if self.use_view_dependent_pos:
+            lambda_view = torch.sigmoid(self._lambda_view)  # [N] -> [0, 1]
+            lambda_time = torch.sigmoid(self._lambda_time) if self.input_dim == 7 else None  # [N] -> [0, 1] or None
+        else:
+            # Use identity (lambda=0) when position conditioning is disabled
+            lambda_view = torch.zeros(self._xyz.shape[0], device=self._xyz.device)
+            lambda_time = None
+
+        # Use slice_gaussian_full_v2 CUDA kernel with learnable lambda
+        x_cond, rotation_cond, opacity_scale = slice_gaussian_full_v2(
             xyz=self._xyz,                   # [N, 3]
             view_mean=self.get_cond_mean,    # [N, C]
             query=query,                     # [N, C]
             v_12=self.get_v_12 if self.use_view_dependent_pos else None,  # [N, 3*C] or None
             L_22_inv=self.get_L_22_inv,      # [N, C*(C+1)/2] full Cholesky (block-diagonal for C=4)
+            lambda_view=lambda_view,         # [N] learnable conditioning strength for view (or zeros)
+            lambda_time=lambda_time,         # [N] or None, learnable conditioning strength for time
             rotation=self.get_rotation,      # [N, 4]
             rotation_delta=self.get_rotation_delta if self.use_time_dependent_rotation else None,  # [N, 4] or None
             L_22_inv_diag_rot=self._L_22_inv_diag_rot if self.use_time_dependent_rotation else None,  # [N, 1] or None
             lambda_opc=lambda_opc,
+            zero_view_time_cross_terms=True,  # Enforce block-diagonal structure for C=4
         )
 
         return x_cond, rotation_cond, opacity_scale
@@ -566,7 +595,7 @@ class GaussianModel:
             v_12_direction = torch.normal(0, 0.01, size=(num_gaussians, 3 * C), device=device)
             # Initialize scale to large negative value so sigmoid(scale) ≈ 0
             # This ensures zero position shift initially for training stability
-            v_12_scale = torch.full((num_gaussians, 1), -2.0, device=device)
+            v_12_scale = torch.full((num_gaussians, 1), 0.0, device=device)
         else:
             v_12_direction = torch.empty(0, device=device)
             v_12_scale = torch.empty(0, device=device)
@@ -612,6 +641,20 @@ class GaussianModel:
             L_22_inv_diag_rot = torch.empty(0, device=device)
             rotation_delta = torch.empty(0, device=device)
 
+        # Lambda parameters for V2 (learnable conditioning strength)
+        # Only used when use_view_dependent_pos is True
+        # Initialize to 0.0 in logit space -> sigmoid(0) = 0.5 (moderate conditioning)
+        # This starts with 50% blend between identity and V_22_inv
+        if self.use_view_dependent_pos:
+            lambda_view = torch.zeros((num_gaussians,), device=device)
+            if self.input_dim == 7:
+                lambda_time = torch.zeros((num_gaussians,), device=device)
+            else:
+                lambda_time = torch.empty(0, device=device)
+        else:
+            lambda_view = torch.empty(0, device=device)
+            lambda_time = torch.empty(0, device=device)
+
         # Spatial beta (optional)
         if self.use_beta:
             betas = torch.zeros((num_gaussians, 1), dtype=torch.float, device=device)
@@ -634,6 +677,11 @@ class GaussianModel:
         if self.use_view_dependent_pos:
             self._v_12_direction = nn.Parameter(v_12_direction.requires_grad_(True))
             self._v_12_scale = nn.Parameter(v_12_scale.requires_grad_(True))
+            # Lambda parameters (only when position conditioning is enabled)
+            self._lambda_view = nn.Parameter(lambda_view.requires_grad_(True))
+            if self.input_dim == 7:
+                self._lambda_time = nn.Parameter(lambda_time.requires_grad_(True))
+
         if self.use_time_dependent_rotation:
             self._L_22_inv_diag_rot = nn.Parameter(L_22_inv_diag_rot.requires_grad_(True))
             self._rotation_delta = nn.Parameter(rotation_delta.requires_grad_(True))
@@ -666,6 +714,10 @@ class GaussianModel:
         if self.use_view_dependent_pos:
             l.append({'params': [self._v_12_direction], 'lr': training_args.feature_lr, "name": "v_12_direction"})
             l.append({'params': [self._v_12_scale], 'lr': training_args.feature_lr, "name": "v_12_scale"})
+            # Lambda parameters (only when position conditioning is enabled)
+            l.append({'params': [self._lambda_view], 'lr': training_args.feature_lr, "name": "lambda_view"})
+            if self.input_dim == 7:
+                l.append({'params': [self._lambda_time], 'lr': training_args.feature_lr, "name": "lambda_time"})
 
         # Add time-dependent rotation parameters (precision + delta)
         if self.use_time_dependent_rotation:
@@ -719,6 +771,11 @@ class GaussianModel:
                 l.append('L_22_inv_diag_rot_{}'.format(i))
             for i in range(self._rotation_delta.shape[1]):
                 l.append('rotation_delta_{}'.format(i))
+        # Lambda parameters (per-Gaussian scalar, only when position conditioning is enabled)
+        if self.use_view_dependent_pos:
+            l.append('lambda_view')
+            if self.input_dim == 7:
+                l.append('lambda_time')
         if self.use_beta:
             for i in range(self._beta.shape[1]):
                 l.append('beta_{}'.format(i))
@@ -753,6 +810,13 @@ class GaussianModel:
             rotation_delta = self._rotation_delta.detach().cpu().numpy()
             attrs_list.append(L_22_inv_diag_rot)
             attrs_list.append(rotation_delta)
+        # Lambda parameters (per-Gaussian scalar [N], only when position conditioning is enabled)
+        if self.use_view_dependent_pos:
+            lambda_view = self._lambda_view.detach().cpu().numpy()[:, np.newaxis]  # [N, 1]
+            attrs_list.append(lambda_view)
+            if self.input_dim == 7:
+                lambda_time = self._lambda_time.detach().cpu().numpy()[:, np.newaxis]  # [N, 1]
+                attrs_list.append(lambda_time)
         if self.use_beta:
             betas = self._beta.detach().cpu().numpy()
             attrs_list.append(betas)
@@ -871,6 +935,25 @@ class GaussianModel:
             for idx, attr_name in enumerate(rot_delta_names):
                 rotation_delta[:, idx] = np.asarray(plydata.elements[0][attr_name])
 
+        # Load lambda parameters (per-Gaussian scalar, only when position conditioning is enabled)
+        if self.use_view_dependent_pos:
+            if 'lambda_view' in [p.name for p in plydata.elements[0].properties]:
+                lambda_view = np.asarray(plydata.elements[0]['lambda_view'])
+            else:
+                # Default initialization if not present
+                lambda_view = np.zeros(xyz.shape[0], dtype=np.float32)
+
+            if self.input_dim == 7:
+                if 'lambda_time' in [p.name for p in plydata.elements[0].properties]:
+                    lambda_time = np.asarray(plydata.elements[0]['lambda_time'])
+                else:
+                    lambda_time = np.zeros(xyz.shape[0], dtype=np.float32)
+            else:
+                lambda_time = np.zeros(0, dtype=np.float32)
+        else:
+            lambda_view = np.zeros(0, dtype=np.float32)
+            lambda_time = np.zeros(0, dtype=np.float32)
+
         # Load beta if enabled
         if self.use_beta:
             beta_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("beta_")]
@@ -892,6 +975,11 @@ class GaussianModel:
         if self.use_view_dependent_pos:
             self._v_12_direction = nn.Parameter(torch.tensor(v_12_direction, dtype=torch.float, device="cuda").requires_grad_(True))
             self._v_12_scale = nn.Parameter(torch.tensor(v_12_scale, dtype=torch.float, device="cuda").requires_grad_(True))
+            # Lambda parameters (only when position conditioning is enabled)
+            self._lambda_view = nn.Parameter(torch.tensor(lambda_view, dtype=torch.float, device="cuda").requires_grad_(True))
+            if self.input_dim == 7:
+                self._lambda_time = nn.Parameter(torch.tensor(lambda_time, dtype=torch.float, device="cuda").requires_grad_(True))
+
         if self.use_time_dependent_rotation:
             self._L_22_inv_diag_rot = nn.Parameter(torch.tensor(L_22_inv_diag_rot, dtype=torch.float, device="cuda").requires_grad_(True))
             self._rotation_delta = nn.Parameter(torch.tensor(rotation_delta, dtype=torch.float, device="cuda").requires_grad_(True))
@@ -953,6 +1041,13 @@ class GaussianModel:
         if self.use_view_dependent_pos:
             self._v_12_direction = optimizable_tensors["v_12_direction"]
             self._v_12_scale = optimizable_tensors["v_12_scale"]
+            # Lambda parameters (only when position conditioning is enabled)
+            self._lambda_view = optimizable_tensors["lambda_view"]
+            if "lambda_time" in optimizable_tensors:
+                self._lambda_time = optimizable_tensors["lambda_time"]
+            elif self.input_dim == 7:
+                # For 6DGS -> 7DGS conversion, prune manually
+                self._lambda_time = self._lambda_time[valid_points_mask]
         if self.use_time_dependent_rotation:
             self._L_22_inv_diag_rot = optimizable_tensors["L_22_inv_diag_rot"]
             self._rotation_delta = optimizable_tensors["rotation_delta"]
@@ -987,7 +1082,8 @@ class GaussianModel:
     def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities,
                               new_scaling, new_rotation, new_mean_view, new_mean_time,
                               new_L_22_inv, new_v_12_direction=None, new_v_12_scale=None,
-                              new_L_22_inv_diag_rot=None, new_rotation_delta=None, new_beta=None):
+                              new_L_22_inv_diag_rot=None, new_rotation_delta=None,
+                              new_lambda_view=None, new_lambda_time=None, new_beta=None):
         d = {
             "xyz": new_xyz,
             "f_dc": new_features_dc,
@@ -1002,6 +1098,10 @@ class GaussianModel:
         if self.use_view_dependent_pos:
             d["v_12_direction"] = new_v_12_direction
             d["v_12_scale"] = new_v_12_scale
+            # Lambda parameters (only when position conditioning is enabled)
+            d["lambda_view"] = new_lambda_view
+            if self.input_dim == 7:
+                d["lambda_time"] = new_lambda_time
         if self.use_time_dependent_rotation:
             d["L_22_inv_diag_rot"] = new_L_22_inv_diag_rot
             d["rotation_delta"] = new_rotation_delta
@@ -1025,6 +1125,13 @@ class GaussianModel:
         if self.use_view_dependent_pos:
             self._v_12_direction = optimizable_tensors["v_12_direction"]
             self._v_12_scale = optimizable_tensors["v_12_scale"]
+            # Lambda parameters (only when position conditioning is enabled)
+            self._lambda_view = optimizable_tensors["lambda_view"]
+            if "lambda_time" in optimizable_tensors:
+                self._lambda_time = optimizable_tensors["lambda_time"]
+            elif self.input_dim == 7:
+                # For 6DGS -> 7DGS conversion, concatenate manually
+                self._lambda_time = torch.cat([self._lambda_time, new_lambda_time], dim=0)
         if self.use_time_dependent_rotation:
             self._L_22_inv_diag_rot = optimizable_tensors["L_22_inv_diag_rot"]
             self._rotation_delta = optimizable_tensors["rotation_delta"]
@@ -1063,13 +1170,17 @@ class GaussianModel:
         new_v_12_scale = self._v_12_scale[selected_pts_mask].repeat(N, 1) if self.use_view_dependent_pos else None
         new_L_22_inv_diag_rot = self._L_22_inv_diag_rot[selected_pts_mask].repeat(N, 1) if self.use_time_dependent_rotation else None
         new_rotation_delta = self._rotation_delta[selected_pts_mask].repeat(N, 1) if self.use_time_dependent_rotation else None
+        # Lambda parameters (per-Gaussian scalar [N])
+        new_lambda_view = self._lambda_view[selected_pts_mask].repeat(N)
+        new_lambda_time = self._lambda_time[selected_pts_mask].repeat(N) if self.input_dim == 7 else None
         new_beta = self._beta[selected_pts_mask].repeat(N, 1) if self.use_beta else None
 
         self.densification_postfix(
             new_xyz, new_features_dc, new_features_rest, new_opacity,
             new_scaling, new_rotation, new_mean_view, new_mean_time, new_L_22_inv,
             new_v_12_direction, new_v_12_scale,
-            new_L_22_inv_diag_rot, new_rotation_delta, new_beta
+            new_L_22_inv_diag_rot, new_rotation_delta,
+            new_lambda_view, new_lambda_time, new_beta
         )
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
@@ -1096,13 +1207,17 @@ class GaussianModel:
         new_v_12_scale = self._v_12_scale[selected_pts_mask] if self.use_view_dependent_pos else None
         new_L_22_inv_diag_rot = self._L_22_inv_diag_rot[selected_pts_mask] if self.use_time_dependent_rotation else None
         new_rotation_delta = self._rotation_delta[selected_pts_mask] if self.use_time_dependent_rotation else None
+        # Lambda parameters
+        new_lambda_view = self._lambda_view[selected_pts_mask]
+        new_lambda_time = self._lambda_time[selected_pts_mask] if self.input_dim == 7 else None
         new_beta = self._beta[selected_pts_mask] if self.use_beta else None
 
         self.densification_postfix(
             new_xyz, new_features_dc, new_features_rest, new_opacities,
             new_scaling, new_rotation, new_mean_view, new_mean_time, new_L_22_inv,
             new_v_12_direction, new_v_12_scale,
-            new_L_22_inv_diag_rot, new_rotation_delta, new_beta
+            new_L_22_inv_diag_rot, new_rotation_delta,
+            new_lambda_view, new_lambda_time, new_beta
         )
 
     def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size, iteration):
@@ -1163,6 +1278,10 @@ class GaussianModel:
         if self.use_view_dependent_pos:
             result['v_12_direction'] = self._v_12_direction[idxs]
             result['v_12_scale'] = self._v_12_scale[idxs]
+            # Lambda parameters (only when position conditioning is enabled)
+            result['lambda_view'] = self._lambda_view[idxs]
+            if self.input_dim == 7:
+                result['lambda_time'] = self._lambda_time[idxs]
 
         if self.use_time_dependent_rotation:
             result['L_22_inv_diag_rot'] = self._L_22_inv_diag_rot[idxs]
@@ -1235,6 +1354,10 @@ class GaussianModel:
         if self.use_view_dependent_pos:
             self._v_12_direction.index_copy_(0, dead_indices, params['v_12_direction'])
             self._v_12_scale.index_copy_(0, dead_indices, params['v_12_scale'])
+            # Lambda parameters (only when position conditioning is enabled)
+            self._lambda_view.index_copy_(0, dead_indices, params['lambda_view'])
+            if self.input_dim == 7:
+                self._lambda_time.index_copy_(0, dead_indices, params['lambda_time'])
 
         if self.use_time_dependent_rotation:
             self._L_22_inv_diag_rot.index_copy_(0, dead_indices, params['L_22_inv_diag_rot'])
@@ -1292,6 +1415,8 @@ class GaussianModel:
             params.get('v_12_scale'),
             params.get('L_22_inv_diag_rot'),
             params.get('rotation_delta'),
+            params.get('lambda_view'),
+            params.get('lambda_time'),
             params.get('beta'),
         )
 
@@ -1320,6 +1445,10 @@ class GaussianModel:
         if self.use_view_dependent_pos:
             tensors_dict["v_12_direction"] = self._v_12_direction
             tensors_dict["v_12_scale"] = self._v_12_scale
+            # Lambda parameters (only when position conditioning is enabled)
+            tensors_dict["lambda_view"] = self._lambda_view
+            if self.input_dim == 7:
+                tensors_dict["lambda_time"] = self._lambda_time
         if self.use_time_dependent_rotation:
             tensors_dict["L_22_inv_diag_rot"] = self._L_22_inv_diag_rot
             tensors_dict["rotation_delta"] = self._rotation_delta
@@ -1371,6 +1500,11 @@ class GaussianModel:
         if self.use_view_dependent_pos:
             self._v_12_direction = optimizable_tensors["v_12_direction"]
             self._v_12_scale = optimizable_tensors["v_12_scale"]
+            # Lambda parameters (only when position conditioning is enabled)
+            if "lambda_view" in optimizable_tensors:
+                self._lambda_view = optimizable_tensors["lambda_view"]
+            if "lambda_time" in optimizable_tensors:
+                self._lambda_time = optimizable_tensors["lambda_time"]
         if self.use_time_dependent_rotation:
             self._L_22_inv_diag_rot = optimizable_tensors["L_22_inv_diag_rot"]
             self._rotation_delta = optimizable_tensors["rotation_delta"]

@@ -357,6 +357,32 @@ We additionally evaluate on the 6DGS-PBR dataset, which contains challenging vie
 
 \begin{table}[h]
 \centering
+\caption{Quantitative comparison on NeRF Synthetic dataset at 30K iterations. Best results in \textbf{bold}.}
+\label{tab:6dgs_pbr}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l|ccc|ccc|ccc}
+\toprule
+& \multicolumn{3}{c|}{\textbf{N-DGS}} & \multicolumn{3}{c|}{\textbf{Opacity-Only}} & \multicolumn{3}{c}{\textbf{Opacity+Pos}} \\
+Scene & PSNR$\uparrow$ & SSIM$\uparrow$ & LPIPS$\downarrow$ & PSNR$\uparrow$ & SSIM$\uparrow$ & LPIPS$\downarrow$ & PSNR$\uparrow$ & SSIM$\uparrow$ & LPIPS$\downarrow$ \\
+\midrule
+\texttt{chair} & 35.83 & 0.987 & 0.013 & 36.02 & 0.987 & 0.013 & \textbf{36.37} & \textbf{0.988} & \textbf{0.012} \\
+\texttt{drums} & \textbf{26.90} & 0.957 & 0.035 & 26.78 & 0.956 & 0.036 & 26.87 & \textbf{0.958} & \textbf{0.034} \\
+\texttt{ficus} & 34.11 & 0.985 & 0.013 & 35.14 & 0.988 & 0.011 & \textbf{35.20} & \textbf{0.988} & \textbf{0.011} \\
+\texttt{hotdog} & 38.00 & 0.985 & 0.021 & 37.94 & 0.985 & 0.022 & \textbf{38.09} & \textbf{0.986} & \textbf{0.020} \\
+\texttt{lego} & 35.51 & 0.981 & 0.018 & 35.27 & 0.980 & 0.019 & \textbf{35.83} & \textbf{0.983} & \textbf{0.016} \\
+\texttt{materials} & \textbf{31.58} & \textbf{0.971} & \textbf{0.028} & 30.74 & 0.966 & 0.032 & 31.22 & 0.969 & 0.029 \\
+\texttt{mic} & 35.35 & 0.991 & 0.006 & 35.64 & 0.992 & 0.006 & \textbf{36.21} & \textbf{0.993} & \textbf{0.005} \\
+\texttt{ship} & 30.98 & 0.906 & 0.107 & 30.96 & 0.906 & 0.115 & \textbf{31.17} & \textbf{0.908} & \textbf{0.107} \\
+\midrule
+\textbf{\texttt{Mean}} & 33.53 & 0.970 & 0.030 & 33.56 & 0.970 & 0.032 & \textbf{33.87} & \textbf{0.972} & \textbf{0.029} \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+
+\begin{table}[h]
+\centering
 \caption{Quantitative comparison on 6DGS-PBR dataset at 30K iterations. Best results in \textbf{bold}.}
 \label{tab:6dgs_pbr}
 \resizebox{\textwidth}{!}{%
