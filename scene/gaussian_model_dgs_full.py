@@ -159,7 +159,7 @@ class GaussianModel:
 
     def __init__(self, sh_degree: int, input_dim: int = 6, use_beta: bool = False,
                  use_view_dependent_pos: bool = True, use_time_dependent_rotation: bool = True,
-                time_duration: list = [0.0, 1.0]):
+                time_duration: list = [0.0, 1.0], l_22_inv_init_scale: float = 1.0):
         """
         Initialize Full DGS with view-dependent position, time-dependent rotation, and opacity.
 
@@ -169,7 +169,10 @@ class GaussianModel:
             use_beta: Whether to use spatial beta parameter (default: False)
             use_view_dependent_pos: Enable view-dependent position shift (default: True)
             use_time_dependent_rotation: Enable time-dependent rotation (only effective when input_dim=7)
-            time_duration: [min, max] time range for 7DGS (default: [0.0, 1.0]).
+            time_duration: [min, max] time range for 7DGS (default: [0.0, 1.0])
+            l_22_inv_init_scale: Initialization scale for L_22_inv diagonal (default: 1.0).
+                               Using 1.0 gives log(1.0)=0.0 (standard initialization).
+                               Using 2.0 gives log(2.0)≈0.693 (wider Gaussian for PBR scenes).
         """
         self.active_sh_degree = 0
         self.max_sh_degree = sh_degree
@@ -179,6 +182,7 @@ class GaussianModel:
         # Rotation conditioning only makes sense with time dimension
         self.use_time_dependent_rotation = use_time_dependent_rotation and (input_dim == 7)
         self.time_duration = time_duration  # Time range for 7DGS
+        self.l_22_inv_init_scale = l_22_inv_init_scale  # Initialization scale for L_22_inv diagonal
         self.cond_dim = input_dim - 3  # C = 3 for view-only, 4 for view+time
 
         # Standard 3DGS parameters
@@ -624,8 +628,10 @@ class GaussianModel:
                 dist_t = (self.time_duration[1] - self.time_duration[0]) / 10
                 L_22_inv[:, diag_idx] = math.log(1.0 / math.sqrt(dist_t))
             else:
-                # View direction precision: 1.0 (variance=1, precision=1)
-                L_22_inv[:, diag_idx] = math.log(2.0)  # log(1.0) = 0
+                # View direction precision initialization
+                # Default: log(1.0)=0.0 for standard initialization
+                # PBR scenes: log(2.0)≈0.693 gives wider Gaussians (set l_22_inv_init_scale=2.0)
+                L_22_inv[:, diag_idx] = math.log(self.l_22_inv_init_scale)
 
         # Time-dependent rotation conditioning (only when input_dim=7)
         # Uses only time dimension (index 3) for rotation attention

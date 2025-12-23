@@ -54,25 +54,25 @@ run_experiment() {
     python metrics.py -m "$output_dir"
 }
 
-# ============================================
-# 4. NDGS mode (full Cholesky precision)
-# ============================================
-echo "=============================================="
-echo "Running NDGS mode benchmarks"
-echo "=============================================="
+# # ============================================
+# # 4. NDGS mode (full Cholesky precision)
+# # ============================================
+# echo "=============================================="
+# echo "Running NDGS mode benchmarks"
+# echo "=============================================="
 
-for dir in "$base_dir"*/; do
-    if [ -d "$dir" ]; then
-        scene_name=$(basename "${dir%/}")
-        if [[ "$scene_name" == *.zip ]]; then
-            continue
-        fi
+# for dir in "$base_dir"*/; do
+#     if [ -d "$dir" ]; then
+#         scene_name=$(basename "${dir%/}")
+#         if [[ "$scene_name" == *.zip ]]; then
+#             continue
+#         fi
 
-        output_dir="output/ndgs/dnerf/${scene_name}"
-        echo "Processing ${scene_name} with mode ndgs..."
-        run_experiment "ndgs" "$output_dir" "$dir" ""
-    fi
-done
+#         output_dir="output/ndgs/dnerf/${scene_name}"
+#         echo "Processing ${scene_name} with mode ndgs..."
+#         run_experiment "ndgs" "$output_dir" "$dir" ""
+#     fi
+# done
 
 # # ============================================
 # # 1. opacity_only mode (no position shift)

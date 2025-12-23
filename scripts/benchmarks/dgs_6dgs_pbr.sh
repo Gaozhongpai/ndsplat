@@ -64,7 +64,7 @@ run_experiment() {
 
 #         output_dir="output/opacity_only/tandt_pbr/${scene_name}"
 #         echo "Processing ${scene_name} with mode opacity_only..."
-#         run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos False --use_rot_scale_l_triangle True"
+#         run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos False --use_rot_scale_l_triangle True --l_22_inv_init_scale 2.0"
 #     fi
 # done
 
@@ -84,7 +84,7 @@ for dir in "$base_dir"*/; do
 
         output_dir="output/opacity_pos/tandt_pbr/${scene_name}"
         echo "Processing ${scene_name} with mode opacity_pos..."
-        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --use_rot_scale_l_triangle True"
+        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --use_rot_scale_l_triangle True --l_22_inv_init_scale 2.0"
     fi
 done
 

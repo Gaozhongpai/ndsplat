@@ -21,10 +21,10 @@ echo "=============================================="
 # ============================================
 # Static scene benchmarks (input_dim=6)
 # ============================================
-# echo ""
-# echo "[1/4] Running NeRF Synthetic benchmark (static)..."
-# echo ""
-# bash "$SCRIPT_DIR/dgs_nerf_synthetic.sh"
+echo ""
+echo "[1/4] Running NeRF Synthetic benchmark (static)..."
+echo ""
+bash "$SCRIPT_DIR/dgs_nerf_synthetic.sh"
 
 echo ""
 echo "[2/4] Running Tanks & Temples PBR benchmark (static)..."
