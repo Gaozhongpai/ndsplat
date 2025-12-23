@@ -160,17 +160,8 @@ class GaussianModel:
         return m_cond, scale
 
 
-    # Default lambda_opc values for opacity scaling (single source of truth)
-    DEFAULT_LAMBDA_OPC_6D = 0.35   # For 6DGS (view-only)
-    DEFAULT_LAMBDA_OPC_7D = 0.125  # For 7DGS (view + time)
-
-    @property
-    def default_lambda_opc(self):
-        """Return the appropriate default lambda_opc based on input_dim."""
-        return self.DEFAULT_LAMBDA_OPC_7D if self.input_dim == 7 else self.DEFAULT_LAMBDA_OPC_6D
-
     def __init__(self, sh_degree : int, input_dim: int = 6, use_rot_scale_l_triangle: bool = False,
-                 learnable_lambda_opc: bool = True, time_duration: list = [0.0, 1.0]):
+                 learnable_lambda_opc: bool = True, time_duration: list = [0.0, 1.0], lambda_opc: float = 0.35):
         """
         Initialize GaussianModel with flexible covariance parametrization.
 
@@ -181,11 +172,15 @@ class GaussianModel:
                                       If False, use direct diagonal-l_triangle parametrization (NDGS style).
             learnable_lambda_opc: If True, make lambda_opc a learnable parameter per Gaussian.
             time_duration: [min, max] time range for 7DGS (default: [0.0, 1.0]).
+            lambda_opc: Default lambda_opc value for opacity scaling (default: 0.35).
         """
         self.active_sh_degree = 0
         self.max_sh_degree = sh_degree
         self.input_dim = input_dim  # 6 for 6DGS, 7 for 7DGS (with time)
         self.use_rot_scale_l_triangle = use_rot_scale_l_triangle
+
+        # Store default lambda_opc value
+        self.default_lambda_opc = lambda_opc
 
         # Track lambda_opc training state to avoid redundant enable/disable calls
         self._lambda_opc_training_enabled = False

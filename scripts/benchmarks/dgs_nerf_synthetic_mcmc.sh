@@ -67,29 +67,6 @@ run_experiment() {
     python metrics.py -m "$output_dir"
 }
 
-
-# ============================================
-# 3. NDGS mode with MCMC (full Cholesky precision)
-# ============================================
-echo "=============================================="
-echo "Running NDGS mode benchmarks (MCMC)"
-echo "=============================================="
-
-for dir in "$base_dir"*/; do
-    if [ -d "$dir" ]; then
-        clean_dir="${dir%/}"
-        scene_name=$(basename "$clean_dir")
-        if [[ "$scene_name" == "README.txt" ]] || [[ "$scene_name" == *.zip ]]; then
-            continue
-        fi
-
-        output_dir="output/mcmc/ndgs/nerf_synthetic/${scene_name}"
-        echo "Processing ${scene_name} with mode ndgs (MCMC)..."
-        run_experiment "ndgs" "$output_dir" "$dir" "--use_rot_scale_l_triangle True"
-    fi
-done
-
-
 # ============================================
 # 1. opacity_only mode with MCMC (no position shift)
 # ============================================
@@ -133,3 +110,26 @@ for dir in "$base_dir"*/; do
 done
 
 echo "MCMC Benchmark completed!"
+
+
+# ============================================
+# 3. NDGS mode with MCMC (full Cholesky precision)
+# ============================================
+echo "=============================================="
+echo "Running NDGS mode benchmarks (MCMC)"
+echo "=============================================="
+
+for dir in "$base_dir"*/; do
+    if [ -d "$dir" ]; then
+        clean_dir="${dir%/}"
+        scene_name=$(basename "$clean_dir")
+        if [[ "$scene_name" == "README.txt" ]] || [[ "$scene_name" == *.zip ]]; then
+            continue
+        fi
+
+        output_dir="output/mcmc/ndgs/nerf_synthetic/${scene_name}"
+        echo "Processing ${scene_name} with mode ndgs (MCMC)..."
+        run_experiment "ndgs" "$output_dir" "$dir"
+    fi
+done
+

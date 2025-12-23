@@ -49,26 +49,26 @@ run_experiment() {
     python metrics.py -m "$output_dir"
 }
 
-# # ============================================
-# # 1. opacity_only mode (no position shift)
-# # ============================================
-# echo "=============================================="
-# echo "Running opacity_only mode benchmarks"
-# echo "=============================================="
+# ============================================
+# 1. opacity_only mode (no position shift)
+# ============================================
+echo "=============================================="
+echo "Running opacity_only mode benchmarks"
+echo "=============================================="
 
-# for dir in "$base_dir"*/; do
-#     if [ -d "$dir" ]; then
-#         clean_dir="${dir%/}"
-#         scene_name=$(basename "$clean_dir")
-#         if [[ "$scene_name" == "README.txt" ]] || [[ "$scene_name" == *.zip ]]; then
-#             continue
-#         fi
+for dir in "$base_dir"*/; do
+    if [ -d "$dir" ]; then
+        clean_dir="${dir%/}"
+        scene_name=$(basename "$clean_dir")
+        if [[ "$scene_name" == "README.txt" ]] || [[ "$scene_name" == *.zip ]]; then
+            continue
+        fi
 
-#         output_dir="output/opacity_only/nerf_synthetic/${scene_name}"
-#         echo "Processing ${scene_name} with mode opacity_only..."
-#         run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos False --use_rot_scale_l_triangle True"
-#     fi
-# done
+        output_dir="output/opacity_only/nerf_synthetic/${scene_name}"
+        echo "Processing ${scene_name} with mode opacity_only..."
+        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos False"
+    fi
+done
 
 # ============================================
 # 2. opacity_pos mode (opacity + position)
@@ -87,7 +87,7 @@ for dir in "$base_dir"*/; do
 
         output_dir="output/opacity_pos/nerf_synthetic/${scene_name}"
         echo "Processing ${scene_name} with mode opacity_pos..."
-        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --use_rot_scale_l_triangle True"
+        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True"
     fi
 done
 

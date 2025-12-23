@@ -54,45 +54,26 @@ run_experiment() {
     python metrics.py -m "$output_dir"
 }
 
-# # ============================================
-# # 4. NDGS mode (full Cholesky precision)
-# # ============================================
-# echo "=============================================="
-# echo "Running NDGS mode benchmarks"
-# echo "=============================================="
 
-# for dir in "$base_dir"*/; do
-#     if [ -d "$dir" ]; then
-#         scene_name=$(basename "${dir%/}")
-#         if [[ "$scene_name" == *.zip ]]; then
-#             continue
-#         fi
+# ============================================
+# 1. opacity_only mode (no position shift)
+# ============================================
+echo "=============================================="
+echo "Running opacity_only mode benchmarks"
+echo "=============================================="
 
-#         output_dir="output/ndgs/dnerf/${scene_name}"
-#         echo "Processing ${scene_name} with mode ndgs..."
-#         run_experiment "ndgs" "$output_dir" "$dir" ""
-#     fi
-# done
+for dir in "$base_dir"*/; do
+    if [ -d "$dir" ]; then
+        scene_name=$(basename "${dir%/}")
+        if [[ "$scene_name" == *.zip ]]; then
+            continue
+        fi
 
-# # ============================================
-# # 1. opacity_only mode (no position shift)
-# # ============================================
-# echo "=============================================="
-# echo "Running opacity_only mode benchmarks"
-# echo "=============================================="
-
-# for dir in "$base_dir"*/; do
-#     if [ -d "$dir" ]; then
-#         scene_name=$(basename "${dir%/}")
-#         if [[ "$scene_name" == *.zip ]]; then
-#             continue
-#         fi
-
-#         output_dir="output/opacity_only/dnerf/${scene_name}"
-#         echo "Processing ${scene_name} with mode opacity_only..."
-#         run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos False --use_view_dependent_rot False"
-#     fi
-# done
+        output_dir="output/opacity_only/dnerf/${scene_name}"
+        echo "Processing ${scene_name} with mode opacity_only..."
+        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos False --use_view_dependent_rot False --l_22_inv_init_scale 0.02"
+    fi
+done
 
 # ============================================
 # 2. opacity_pos mode (opacity + position)
@@ -110,29 +91,49 @@ for dir in "$base_dir"*/; do
 
         output_dir="output/opacity_pos/dnerf/${scene_name}"
         echo "Processing ${scene_name} with mode opacity_pos..."
-        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --use_view_dependent_rot False"
+        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --use_view_dependent_rot False --l_22_inv_init_scale 0.02"
     fi
 done
 
-# # ============================================
-# # 3. opacity_pos_rot mode (opacity + position + rotation)
-# # ============================================
-# echo "=============================================="
-# echo "Running opacity_pos_rot mode benchmarks"
-# echo "=============================================="
+# ============================================
+# 3. opacity_pos_rot mode (opacity + position + rotation)
+# ============================================
+echo "=============================================="
+echo "Running opacity_pos_rot mode benchmarks"
+echo "=============================================="
 
-# for dir in "$base_dir"*/; do
-#     if [ -d "$dir" ]; then
-#         scene_name=$(basename "${dir%/}")
-#         if [[ "$scene_name" == *.zip ]]; then
-#             continue
-#         fi
+for dir in "$base_dir"*/; do
+    if [ -d "$dir" ]; then
+        scene_name=$(basename "${dir%/}")
+        if [[ "$scene_name" == *.zip ]]; then
+            continue
+        fi
 
-#         output_dir="output/opacity_pos_rot/dnerf/${scene_name}"
-#         echo "Processing ${scene_name} with mode opacity_pos_rot..."
-#         run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --use_view_dependent_rot True"
-#     fi
-# done
+        output_dir="output/opacity_pos_rot/dnerf/${scene_name}"
+        echo "Processing ${scene_name} with mode opacity_pos_rot..."
+        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --use_view_dependent_rot True --l_22_inv_init_scale 0.02"
+    fi
+done
 
+
+# ============================================
+# 4. NDGS mode (full Cholesky precision)
+# ============================================
+echo "=============================================="
+echo "Running NDGS mode benchmarks"
+echo "=============================================="
+
+for dir in "$base_dir"*/; do
+    if [ -d "$dir" ]; then
+        scene_name=$(basename "${dir%/}")
+        if [[ "$scene_name" == *.zip ]]; then
+            continue
+        fi
+
+        output_dir="output/ndgs/dnerf/${scene_name}"
+        echo "Processing ${scene_name} with mode ndgs..."
+        run_experiment "ndgs" "$output_dir" "$dir" "--lambda_opc 0.01"
+    fi
+done
 
 echo "Benchmark completed!"
