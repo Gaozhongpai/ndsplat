@@ -5,7 +5,8 @@ Tests the new V2 version with lambda-controlled V_22_inv influence.
 Compares CUDA kernel gradients against PyTorch autograd gradients for all parameters:
 - Position: xyz, v_12, L_22_inv, view_mean
 - Lambda: lambda_view, lambda_time (NEW in V2)
-- Rotation: rotation, rotation_delta, L_22_inv_diag_rot (time-only, when C=4)
+
+Note: Rotation conditioning has been removed from this version.
 """
 
 import torch
@@ -21,7 +22,6 @@ def test_slice_gaussian_full_v2_gradients(
     N=1000,
     C=3,
     use_pos=True,
-    use_rot=True,
     use_per_gaussian_lambda=True,
     zero_view_time_cross_terms=True,
     seed=42,
@@ -33,24 +33,19 @@ def test_slice_gaussian_full_v2_gradients(
         N: Number of Gaussians
         C: Conditioning dimension (3 for view, 4 for view+time)
         use_pos: Whether to use position conditioning
-        use_rot: Whether to use rotation conditioning (only meaningful when C=4)
         use_per_gaussian_lambda: Whether to use per-Gaussian lambda [N] or scalar
-        zero_view_time_cross_terms: Whether to zero out view-time cross-terms for opacity (only when C=4)
+        zero_view_time_cross_terms: Whether to zero out view-time cross-terms in opacity
         seed: Random seed for reproducibility
     """
     torch.manual_seed(seed)
     device = "cuda"
 
-    # Rotation conditioning only works with C=4 (view+time)
-    if use_rot and C != 4:
-        print(f"Warning: Rotation conditioning requires C=4, but C={C}. Disabling rotation conditioning.")
-        use_rot = False
-
     print("=" * 70)
     print("slice_gaussian_full_v2 Gradient Verification Test")
     print("=" * 70)
-    print(f"N={N}, C={C}, use_pos={use_pos}, use_rot={use_rot}")
-    print(f"use_per_gaussian_lambda={use_per_gaussian_lambda}, zero_view_time_cross_terms={zero_view_time_cross_terms}")
+    print(f"N={N}, C={C}, use_pos={use_pos}")
+    print(f"use_per_gaussian_lambda={use_per_gaussian_lambda}")
+    print(f"zero_view_time_cross_terms={zero_view_time_cross_terms}")
     print()
 
     # Create test inputs
@@ -84,17 +79,6 @@ def test_slice_gaussian_full_v2_gradients(
         lambda_view = torch.full((N,), 0.5, device=device, requires_grad=True)
         lambda_time = torch.full((N,), 0.3, device=device, requires_grad=True) if C == 4 else None
 
-    # Rotation conditioning (time-only when C=4)
-    rotation = F.normalize(torch.randn(N, 4, device=device), dim=-1)
-    rotation.requires_grad_(True)
-    if use_rot:
-        rotation_delta = F.normalize(torch.randn(N, 4, device=device), dim=-1)
-        rotation_delta.requires_grad_(True)
-        L_22_inv_diag_rot = torch.randn(N, 1, device=device, requires_grad=True) * 0.5
-    else:
-        rotation_delta = None
-        L_22_inv_diag_rot = None
-
     lambda_opc = 0.35
 
     # ============ Test with PyTorch autograd (ground truth) ============
@@ -107,20 +91,14 @@ def test_slice_gaussian_full_v2_gradients(
     L_22_inv_pt = L_22_inv.detach().clone().requires_grad_(True)
     lambda_view_pt = lambda_view.detach().clone().requires_grad_(True)
     lambda_time_pt = lambda_time.detach().clone().requires_grad_(True) if lambda_time is not None else None
-    rotation_pt = rotation.detach().clone().requires_grad_(True)
-    rotation_delta_pt = rotation_delta.detach().clone().requires_grad_(True) if rotation_delta is not None else None
-    L_22_inv_diag_rot_pt = L_22_inv_diag_rot.detach().clone().requires_grad_(True) if L_22_inv_diag_rot is not None else None
 
     # Forward pass with PyTorch
-    x_cond_pt, rotation_cond_pt, attention_pt = _slice_gaussian_full_v2(
+    x_cond_pt, attention_pt = _slice_gaussian_full_v2(
         xyz_pt,
         view_mean_pt,
         query,
         v_12_pt,
         L_22_inv_pt,
-        rotation_pt,
-        rotation_delta_pt,
-        L_22_inv_diag_rot_pt,
         lambda_view_pt,
         lambda_time_pt,
         lambda_opc,
@@ -129,13 +107,11 @@ def test_slice_gaussian_full_v2_gradients(
 
     # Create random upstream gradients
     grad_x_cond = torch.randn_like(x_cond_pt)
-    grad_rotation_cond = torch.randn_like(rotation_cond_pt)
     grad_attention = torch.randn_like(attention_pt)
 
     # Backward pass with PyTorch
     loss_pt = (
         (x_cond_pt * grad_x_cond).sum() +
-        (rotation_cond_pt * grad_rotation_cond).sum() +
         (attention_pt * grad_attention).sum()
     )
     loss_pt.backward()
@@ -146,16 +122,11 @@ def test_slice_gaussian_full_v2_gradients(
         'view_mean': view_mean_pt.grad.clone(),
         'L_22_inv': L_22_inv_pt.grad.clone(),
         'lambda_view': lambda_view_pt.grad.clone(),
-        'rotation': rotation_pt.grad.clone(),
     }
     if v_12_pt is not None:
         pt_grads['v_12'] = v_12_pt.grad.clone()
-    if lambda_time_pt is not None:
+    if lambda_time_pt is not None and lambda_time_pt.grad is not None:
         pt_grads['lambda_time'] = lambda_time_pt.grad.clone()
-    if rotation_delta_pt is not None:
-        pt_grads['rotation_delta'] = rotation_delta_pt.grad.clone()
-    if L_22_inv_diag_rot_pt is not None:
-        pt_grads['L_22_inv_diag_rot'] = L_22_inv_diag_rot_pt.grad.clone()
 
     # ============ Test with CUDA kernel ============
     print("Computing CUDA kernel gradients...")
@@ -167,12 +138,9 @@ def test_slice_gaussian_full_v2_gradients(
     L_22_inv_cuda = L_22_inv.detach().clone().requires_grad_(True)
     lambda_view_cuda = lambda_view.detach().clone().requires_grad_(True)
     lambda_time_cuda = lambda_time.detach().clone().requires_grad_(True) if lambda_time is not None else None
-    rotation_cuda = rotation.detach().clone().requires_grad_(True)
-    rotation_delta_cuda = rotation_delta.detach().clone().requires_grad_(True) if rotation_delta is not None else None
-    L_22_inv_diag_rot_cuda = L_22_inv_diag_rot.detach().clone().requires_grad_(True) if L_22_inv_diag_rot is not None else None
 
     # Forward pass with CUDA kernel
-    x_cond_cuda, rotation_cond_cuda, attention_cuda = slice_gaussian_full_v2(
+    x_cond_cuda, attention_cuda = slice_gaussian_full_v2(
         xyz_cuda,
         view_mean_cuda,
         query,
@@ -180,9 +148,6 @@ def test_slice_gaussian_full_v2_gradients(
         L_22_inv_cuda,
         lambda_view_cuda,
         lambda_time_cuda,
-        rotation_cuda,
-        rotation_delta_cuda,
-        L_22_inv_diag_rot_cuda,
         lambda_opc,
         zero_view_time_cross_terms,
     )
@@ -190,7 +155,6 @@ def test_slice_gaussian_full_v2_gradients(
     # Backward pass with same upstream gradients
     loss_cuda = (
         (x_cond_cuda * grad_x_cond).sum() +
-        (rotation_cond_cuda * grad_rotation_cond).sum() +
         (attention_cuda * grad_attention).sum()
     )
     loss_cuda.backward()
@@ -201,16 +165,11 @@ def test_slice_gaussian_full_v2_gradients(
         'view_mean': view_mean_cuda.grad.clone(),
         'L_22_inv': L_22_inv_cuda.grad.clone(),
         'lambda_view': lambda_view_cuda.grad.clone(),
-        'rotation': rotation_cuda.grad.clone(),
     }
     if v_12_cuda is not None:
         cuda_grads['v_12'] = v_12_cuda.grad.clone()
-    if lambda_time_cuda is not None:
+    if lambda_time_cuda is not None and lambda_time_cuda.grad is not None:
         cuda_grads['lambda_time'] = lambda_time_cuda.grad.clone()
-    if rotation_delta_cuda is not None:
-        cuda_grads['rotation_delta'] = rotation_delta_cuda.grad.clone()
-    if L_22_inv_diag_rot_cuda is not None:
-        cuda_grads['L_22_inv_diag_rot'] = L_22_inv_diag_rot_cuda.grad.clone()
 
     # ============ Compare gradients ============
     print()
@@ -260,14 +219,6 @@ def test_slice_gaussian_full_v2_gradients(
     if 'lambda_time' in pt_grads:
         results['lambda_time'] = compare_grads("lambda_time (time conditioning strength)", pt_grads['lambda_time'], cuda_grads['lambda_time'])
 
-    # Rotation gradients
-    print("\n--- ROTATION GRADIENTS ---")
-    results['rotation'] = compare_grads("rotation (q_base)", pt_grads['rotation'], cuda_grads['rotation'])
-    if 'rotation_delta' in pt_grads:
-        results['rotation_delta'] = compare_grads("rotation_delta (q_delta)", pt_grads['rotation_delta'], cuda_grads['rotation_delta'])
-    if 'L_22_inv_diag_rot' in pt_grads:
-        results['L_22_inv_diag_rot'] = compare_grads("L_22_inv_diag_rot (time precision)", pt_grads['L_22_inv_diag_rot'], cuda_grads['L_22_inv_diag_rot'])
-
     # Shared gradient
     print("\n--- SHARED GRADIENTS ---")
     results['view_mean'] = compare_grads("view_mean (shared canonical view)", pt_grads['view_mean'], cuda_grads['view_mean'])
@@ -301,7 +252,6 @@ def test_forward_output_match(
     N=100,
     C=3,
     use_pos=True,
-    use_rot=False,
     use_per_gaussian_lambda=True,
     zero_view_time_cross_terms=True,
     seed=42,
@@ -312,16 +262,13 @@ def test_forward_output_match(
     torch.manual_seed(seed)
     device = "cuda"
 
-    # Rotation conditioning only works with C=4
-    if use_rot and C != 4:
-        use_rot = False
-
     print()
     print("=" * 70)
     print("Forward Pass Output Comparison")
     print("=" * 70)
-    print(f"N={N}, C={C}, use_pos={use_pos}, use_rot={use_rot}")
-    print(f"use_per_gaussian_lambda={use_per_gaussian_lambda}, zero_view_time_cross_terms={zero_view_time_cross_terms}")
+    print(f"N={N}, C={C}, use_pos={use_pos}")
+    print(f"use_per_gaussian_lambda={use_per_gaussian_lambda}")
+    print(f"zero_view_time_cross_terms={zero_view_time_cross_terms}")
 
     # Create test inputs
     xyz = torch.randn(N, 3, device=device)
@@ -342,22 +289,15 @@ def test_forward_output_match(
         lambda_view = torch.full((N,), 0.5, device=device)
         lambda_time = torch.full((N,), 0.3, device=device) if C == 4 else None
 
-    rotation = F.normalize(torch.randn(N, 4, device=device), dim=-1)
-    rotation_delta = F.normalize(torch.randn(N, 4, device=device), dim=-1) if use_rot else None
-    L_22_inv_diag_rot = torch.randn(N, 1, device=device) * 0.5 if use_rot else None
-
     lambda_opc = 0.35
 
     # PyTorch forward
-    x_cond_pt, rotation_cond_pt, attention_pt = _slice_gaussian_full_v2(
+    x_cond_pt, attention_pt = _slice_gaussian_full_v2(
         xyz,
         view_mean,
         query,
         v_12,
         L_22_inv,
-        rotation,
-        rotation_delta,
-        L_22_inv_diag_rot,
         lambda_view,
         lambda_time,
         lambda_opc,
@@ -365,7 +305,7 @@ def test_forward_output_match(
     )
 
     # CUDA forward
-    x_cond_cuda, rotation_cond_cuda, attention_cuda = slice_gaussian_full_v2(
+    x_cond_cuda, attention_cuda = slice_gaussian_full_v2(
         xyz,
         view_mean,
         query,
@@ -373,21 +313,16 @@ def test_forward_output_match(
         L_22_inv,
         lambda_view,
         lambda_time,
-        rotation,
-        rotation_delta,
-        L_22_inv_diag_rot,
         lambda_opc,
         zero_view_time_cross_terms,
     )
 
     # Compare outputs
     print(f"\nx_cond difference:        max={torch.abs(x_cond_pt - x_cond_cuda).max():.8f}")
-    print(f"rotation_cond difference: max={torch.abs(rotation_cond_pt - rotation_cond_cuda).max():.8f}")
     print(f"attention difference:     max={torch.abs(attention_pt - attention_cuda).max():.8f}")
 
     all_match = (
         torch.allclose(x_cond_pt, x_cond_cuda, rtol=1e-4, atol=1e-4) and
-        torch.allclose(rotation_cond_pt, rotation_cond_cuda, rtol=1e-4, atol=1e-4) and
         torch.allclose(attention_pt, attention_cuda, rtol=1e-4, atol=1e-4)
     )
 
@@ -420,9 +355,6 @@ def test_lambda_learning():
     v_12 = torch.randn(N, 3 * C, device=device) * 0.1
     n_L_22_inv = C * (C + 1) // 2
     L_22_inv = torch.randn(N, n_L_22_inv, device=device) * 0.5
-    rotation = F.normalize(torch.randn(N, 4, device=device), dim=-1)
-    rotation_delta = F.normalize(torch.randn(N, 4, device=device), dim=-1)
-    L_22_inv_diag_rot = torch.randn(N, 1, device=device) * 0.5
 
     # Learnable lambda parameters
     lambda_view = torch.full((N,), 0.5, device=device, requires_grad=True)
@@ -439,10 +371,9 @@ def test_lambda_learning():
     for step in range(10):
         optimizer.zero_grad()
 
-        x_cond, rotation_cond, attention = slice_gaussian_full_v2(
+        x_cond, attention = slice_gaussian_full_v2(
             xyz, view_mean, query, v_12, L_22_inv,
             lambda_view, lambda_time,
-            rotation, rotation_delta, L_22_inv_diag_rot,
             lambda_opc=0.35,
             zero_view_time_cross_terms=True,
         )
@@ -480,25 +411,22 @@ def test_different_configurations():
     print("=" * 70)
 
     configs = [
-        # (C, use_pos, use_rot, per_gaussian, zero_cross, description)
-        (3, True, False, False, True, "C=3, scalar lambda"),
-        (3, True, False, True, True, "C=3, per-Gaussian lambda"),
-        (4, True, False, False, True, "C=4, scalar lambda, no rotation"),
-        (4, True, False, True, True, "C=4, per-Gaussian lambda, no rotation"),
-        (4, True, True, False, True, "C=4, scalar lambda, with rotation"),
-        (4, True, True, True, True, "C=4, per-Gaussian lambda, with rotation (FULL 7DGS-V2)"),
-        (4, True, True, True, False, "C=4, per-Gaussian lambda, full cross-terms"),
+        # (C, use_pos, per_gaussian, zero_cross, description)
+        (3, True, False, True, "C=3, scalar lambda"),
+        (3, True, True, True, "C=3, per-Gaussian lambda"),
+        (4, True, False, True, "C=4, scalar lambda"),
+        (4, True, True, True, "C=4, per-Gaussian lambda (FULL 6DGS-V2)"),
+        (4, True, True, False, "C=4, per-Gaussian lambda, full cross-terms"),
     ]
 
     all_results = {}
-    for C, use_pos, use_rot, per_gaussian, zero_cross, desc in configs:
+    for C, use_pos, per_gaussian, zero_cross, desc in configs:
         print(f"\n--- {desc} ---")
         try:
             results = test_slice_gaussian_full_v2_gradients(
                 N=500,
                 C=C,
                 use_pos=use_pos,
-                use_rot=use_rot,
                 use_per_gaussian_lambda=per_gaussian,
                 zero_view_time_cross_terms=zero_cross,
                 seed=42,
@@ -521,15 +449,14 @@ if __name__ == "__main__":
 
     for C in (3, 4):
         for per_gaussian in (False, True):
-            use_rot = C == 4
-            test_forward_output_match(
-                N=100,
-                C=C,
-                use_pos=True,
-                use_rot=use_rot,
-                use_per_gaussian_lambda=per_gaussian,
-                zero_view_time_cross_terms=True,
-            )
+            for zero_cross in (True, False) if C == 4 else (True,):
+                test_forward_output_match(
+                    N=100,
+                    C=C,
+                    use_pos=True,
+                    use_per_gaussian_lambda=per_gaussian,
+                    zero_view_time_cross_terms=zero_cross,
+                )
 
     # Test gradient matching
     print("\n\n" + "=" * 70)
@@ -538,15 +465,14 @@ if __name__ == "__main__":
 
     for C in (3, 4):
         for per_gaussian in (False, True):
-            use_rot = C == 4
-            test_slice_gaussian_full_v2_gradients(
-                N=1000,
-                C=C,
-                use_pos=True,
-                use_rot=use_rot,
-                use_per_gaussian_lambda=per_gaussian,
-                zero_view_time_cross_terms=True,
-            )
+            for zero_cross in (True, False) if C == 4 else (True,):
+                test_slice_gaussian_full_v2_gradients(
+                    N=1000,
+                    C=C,
+                    use_pos=True,
+                    use_per_gaussian_lambda=per_gaussian,
+                    zero_view_time_cross_terms=zero_cross,
+                )
 
     # Test lambda learning
     print("\n\n" + "=" * 70)

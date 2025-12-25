@@ -4,6 +4,7 @@ __pycache__
 .venv
 .aux
 output
+output_v1
 build
 diff_rasterization/diff_rast.egg-info
 diff_rasterization/dist

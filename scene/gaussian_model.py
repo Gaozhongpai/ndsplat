@@ -386,7 +386,7 @@ class GaussianModel:
 
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation)
 
-    def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size):
+    def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size, iteration=None):
         grads = self.xyz_gradient_accum / self.denom
         grads[grads.isnan()] = 0.0
 
@@ -436,7 +436,6 @@ class GaussianModel:
             projmatrix=viewpoint_camera.full_proj_transform,
             sh_degree=self.active_sh_degree,
             campos=viewpoint_camera.camera_center,
-            use_tcgs=False,
             prefiltered=False,
             debug=pipe.debug
         )

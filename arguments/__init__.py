@@ -31,7 +31,6 @@ class ParamGroup:
     # Parameters that should accept explicit True/False values from command line
     EXPLICIT_BOOL_PARAMS = {
         'use_view_dependent_pos',
-        'use_view_dependent_rotation',
         'use_rot_scale_l_triangle',
     }
 
@@ -83,7 +82,6 @@ class ModelParams(ParamGroup):
         self.use_jpeg_compression = False  # If True: use JPEG compression for images to save GPU memory (slower but memory-efficient)
         # DGS view-dependent flags (only used when mode="dgs")
         self.use_view_dependent_pos = True  # Enable view-dependent position shift
-        self.use_view_dependent_rotation = True  # Enable time-dependent rotation (only when input_dim=7)
         self.l_22_inv_init_scale = 1.0  # Initialization scale for L_22_inv diagonal (1.0 for standard, 2.0 for PBR scenes)
         self.lambda_opc = 0.35  # Default lambda_opc for opacity scaling (0.35 standard, 0.01 for dnerf, 0.2 for PBR)
         super().__init__(parser, "Loading Parameters", sentinel)

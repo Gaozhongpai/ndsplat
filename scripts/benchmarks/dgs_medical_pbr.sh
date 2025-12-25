@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Benchmark different modes on D-NeRF dynamic datasets
+# Benchmark different modes on Medical PBR datasets
 #
 # Modes:
 # | Mode         | Output Dir                | Description                            |
@@ -8,13 +8,14 @@
 # | opacity_only | output/opacity_only/...   | Opacity conditioning only (no position)|
 # | opacity_pos  | output/opacity_pos/...    | Opacity + Position conditioning        |
 # | ndgs         | output/ndgs/...           | N-DGS with full Cholesky precision     |
+# | 3dgs         | output/3dgs/...           | Standard 3DGS baseline                 |
 #
 # Note: Rotation conditioning is only available for dynamic scenes (C=4 with time)
 # Note: Scale is NOT view-dependent (use get_scaling directly)
 
 shopt -s dotglob
 
-base_dir="/code/dataset/dnerf/"
+base_dir="/code/dataset/tandt_db/medical_pbr/"
 
 # Function to run experiment for a given mode and output directory
 run_experiment() {
@@ -33,19 +34,14 @@ run_experiment() {
     python train.py -s "$dir" \
         --model_path "$output_dir" \
         --mode "$mode" \
-        --mv 4 \
-        --input_dim 7 \
-        --resolution 2 \
         $extra_args \
-        --eval
+        --eval 
 
     # Render at multiple iterations (including best)
     for iter in 7000 30000 best; do
         python render.py -m "$output_dir" \
             --skip_train \
             --iteration ${iter} \
-            --input_dim 7 \
-            --resolution 2 \
             $extra_args
     done
 
@@ -53,6 +49,27 @@ run_experiment() {
     python metrics.py -m "$output_dir"
 }
 
+
+# ============================================
+# 4. 3DGS mode (standard 3DGS baseline)
+# ============================================
+echo "=============================================="
+echo "Running 3DGS mode benchmarks"
+echo "=============================================="
+
+for dir in "$base_dir"*/; do
+    if [ -d "$dir" ]; then
+        clean_dir="${dir%/}"
+        scene_name=$(basename "$clean_dir")
+        if [[ "$scene_name" == "README.txt" ]] || [[ "$scene_name" == *.zip ]]; then
+            continue
+        fi
+
+        output_dir="output/3dgs/medical_pbr/${scene_name}"
+        echo "Processing ${scene_name} with mode 3dgs..."
+        run_experiment "3dgs" "$output_dir" "$dir" ""
+    fi
+done
 
 # ============================================
 # 1. opacity_only mode (no position shift)
@@ -63,14 +80,15 @@ echo "=============================================="
 
 for dir in "$base_dir"*/; do
     if [ -d "$dir" ]; then
-        scene_name=$(basename "${dir%/}")
-        if [[ "$scene_name" == *.zip ]]; then
+        clean_dir="${dir%/}"
+        scene_name=$(basename "$clean_dir")
+        if [[ "$scene_name" == "README.txt" ]] || [[ "$scene_name" == *.zip ]]; then
             continue
         fi
 
-        output_dir="output/opacity_only/dnerf/${scene_name}"
+        output_dir="output/opacity_only/medical_pbr/${scene_name}"
         echo "Processing ${scene_name} with mode opacity_only..."
-        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos False --l_22_inv_init_scale 0.02"
+        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos False"
     fi
 done
 
@@ -83,20 +101,20 @@ echo "=============================================="
 
 for dir in "$base_dir"*/; do
     if [ -d "$dir" ]; then
-        scene_name=$(basename "${dir%/}")
-        if [[ "$scene_name" == *.zip ]]; then
+        clean_dir="${dir%/}"
+        scene_name=$(basename "$clean_dir")
+        if [[ "$scene_name" == "README.txt" ]] || [[ "$scene_name" == *.zip ]]; then
             continue
         fi
 
-        output_dir="output/opacity_pos/dnerf/${scene_name}"
+        output_dir="output/opacity_pos/medical_pbr/${scene_name}"
         echo "Processing ${scene_name} with mode opacity_pos..."
-        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --l_22_inv_init_scale 0.02"
+        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True"
     fi
 done
 
-
 # ============================================
-# 4. NDGS mode (full Cholesky precision)
+# 3. NDGS mode (full Cholesky precision)
 # ============================================
 echo "=============================================="
 echo "Running NDGS mode benchmarks"
@@ -104,15 +122,17 @@ echo "=============================================="
 
 for dir in "$base_dir"*/; do
     if [ -d "$dir" ]; then
-        scene_name=$(basename "${dir%/}")
-        if [[ "$scene_name" == *.zip ]]; then
+        clean_dir="${dir%/}"
+        scene_name=$(basename "$clean_dir")
+        if [[ "$scene_name" == "README.txt" ]] || [[ "$scene_name" == *.zip ]]; then
             continue
         fi
 
-        output_dir="output/ndgs/dnerf/${scene_name}"
+        output_dir="output/ndgs/medical_pbr/${scene_name}"
         echo "Processing ${scene_name} with mode ndgs..."
-        run_experiment "ndgs" "$output_dir" "$dir" "--lambda_opc 0.01"
+        run_experiment "ndgs" "$output_dir" "$dir" ""
     fi
 done
+
 
 echo "Benchmark completed!"

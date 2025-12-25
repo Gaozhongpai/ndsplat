@@ -93,8 +93,11 @@ def evaluate(model_paths):
                 renders, gts, image_names = readImages(renders_dir, gt_dir)
 
                 # Load point cloud to count Gaussians
-                ply_path = str(method_dir).replace("test", "point_cloud").replace("ours_", "iteration_")
-                ply_path = os.path.join(ply_path, "point_cloud.ply")
+                # Replace only the final path components to avoid replacing text in scene names
+                method_name = method_dir.name  # e.g., "ours_7000"
+                iteration_name = method_name.replace("ours_", "iteration_")
+                ply_path = method_dir.parent.parent / "point_cloud" / iteration_name / "point_cloud.ply"
+                ply_path = str(ply_path)
                 mesh = trimesh.load(ply_path)
                 num_gaussians = mesh.vertices.shape[0]
 

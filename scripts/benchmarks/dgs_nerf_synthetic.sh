@@ -91,25 +91,25 @@ for dir in "$base_dir"*/; do
     fi
 done
 
-# # ============================================
-# # 3. NDGS mode (full Cholesky precision)
-# # ============================================
-# echo "=============================================="
-# echo "Running NDGS mode benchmarks"
-# echo "=============================================="
+# ============================================
+# 3. NDGS mode (full Cholesky precision)
+# ============================================
+echo "=============================================="
+echo "Running NDGS mode benchmarks"
+echo "=============================================="
 
-# for dir in "$base_dir"*/; do
-#     if [ -d "$dir" ]; then
-#         clean_dir="${dir%/}"
-#         scene_name=$(basename "$clean_dir")
-#         if [[ "$scene_name" == "README.txt" ]] || [[ "$scene_name" == *.zip ]]; then
-#             continue
-#         fi
+for dir in "$base_dir"*/; do
+    if [ -d "$dir" ]; then
+        clean_dir="${dir%/}"
+        scene_name=$(basename "$clean_dir")
+        if [[ "$scene_name" == "README.txt" ]] || [[ "$scene_name" == *.zip ]]; then
+            continue
+        fi
 
-#         output_dir="output/ndgs/nerf_synthetic/${scene_name}"
-#         echo "Processing ${scene_name} with mode ndgs..."
-#         run_experiment "ndgs" "$output_dir" "$dir" ""
-#     fi
-# done
+        output_dir="output/ndgs/nerf_synthetic/${scene_name}"
+        echo "Processing ${scene_name} with mode ndgs..."
+        run_experiment "ndgs" "$output_dir" "$dir" ""
+    fi
+done
 
 echo "Benchmark completed!"

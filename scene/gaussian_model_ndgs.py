@@ -587,7 +587,7 @@ class GaussianModel:
             if self.input_dim == 7:
                 # 7DGS: direction (3) + time (1)
                 scales_direction = self.scale_inverse_activation(
-                    torch.ones(init_n_gs, 3, device=device)
+                    torch.ones(init_n_gs, 3, device=device) # * 0.1
                 )
                 # Time scale = sqrt(duration/10)
                 dist_t = (self.time_duration[1] - self.time_duration[0]) / 10
@@ -598,7 +598,7 @@ class GaussianModel:
             else:
                 # 6DGS: direction (3) only
                 scales_direction = self.scale_inverse_activation(
-                    torch.ones(init_n_gs, self.gs_dim - 3, device=device)
+                    torch.ones(init_n_gs, self.gs_dim - 3, device=device) * 0.1
                 )
                 scales = torch.cat([scales_spatial, scales_direction], dim=1)
         else:

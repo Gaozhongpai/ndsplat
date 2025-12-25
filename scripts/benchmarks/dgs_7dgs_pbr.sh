@@ -7,7 +7,6 @@
 # |--------------|---------------------------|----------------------------------------|
 # | opacity_only | output/opacity_only/...   | Opacity conditioning only (no position)|
 # | opacity_pos  | output/opacity_pos/...    | Opacity + Position conditioning        |
-# | opacity_pos_rot | output/opacity_pos_rot/... | Opacity + Position + Rotation cond. |
 # | ndgs         | output/ndgs/...           | N-DGS with full Cholesky precision     |
 #
 # Note: Rotation conditioning is only available for dynamic scenes (C=4 with time)
@@ -71,7 +70,7 @@ for dir in "$base_dir"*/; do
 
         output_dir="output/opacity_only/7dgs_pbr/${scene_name}"
         echo "Processing ${scene_name} with mode opacity_only..."
-        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos False --use_view_dependent_rot False"
+        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos False"
     fi
 done
 
@@ -91,27 +90,7 @@ for dir in "$base_dir"*/; do
 
         output_dir="output/opacity_pos/7dgs_pbr/${scene_name}"
         echo "Processing ${scene_name} with mode opacity_pos..."
-        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --use_view_dependent_rot False"
-    fi
-done
-
-# ============================================
-# 3. opacity_pos_rot mode (opacity + position + rotation)
-# ============================================
-echo "=============================================="
-echo "Running opacity_pos_rot mode benchmarks"
-echo "=============================================="
-
-for dir in "$base_dir"*/; do
-    if [ -d "$dir" ]; then
-        scene_name=$(basename "${dir%/}")
-        if [[ "$scene_name" == *.zip ]]; then
-            continue
-        fi
-
-        output_dir="output/opacity_pos_rot/7dgs_pbr/${scene_name}"
-        echo "Processing ${scene_name} with mode opacity_pos_rot..."
-        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --use_view_dependent_rot True"
+        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True"
     fi
 done
 
