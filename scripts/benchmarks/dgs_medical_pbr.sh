@@ -3,12 +3,13 @@
 # Benchmark different modes on Medical PBR datasets
 #
 # Modes:
-# | Mode         | Output Dir                | Description                            |
-# |--------------|---------------------------|----------------------------------------|
-# | opacity_only | output/opacity_only/...   | Opacity conditioning only (no position)|
-# | opacity_pos  | output/opacity_pos/...    | Opacity + Position conditioning        |
-# | ndgs         | output/ndgs/...           | N-DGS with full Cholesky precision     |
-# | 3dgs         | output/3dgs/...           | Standard 3DGS baseline                 |
+# | Mode                 | Output Dir                        | Description                            |
+# |----------------------|-----------------------------------|----------------------------------------|
+# | opacity_only         | output/opacity_only/...           | Opacity conditioning only (no position)|
+# | opacity_pos          | output/opacity_pos/...            | Opacity + Position conditioning        |
+# | opacity_pos_decouple | output/opacity_pos_decouple/...   | Decoupled position + opacity (λ=0)     |
+# | ndgs                 | output/ndgs/...                   | N-DGS with full Cholesky precision     |
+# | 3dgs                 | output/3dgs/...                   | Standard 3DGS baseline                 |
 #
 # Note: Rotation conditioning is only available for dynamic scenes (C=4 with time)
 # Note: Scale is NOT view-dependent (use get_scaling directly)
@@ -114,7 +115,28 @@ for dir in "$base_dir"*/; do
 done
 
 # ============================================
-# 3. NDGS mode (full Cholesky precision)
+# 3. opacity_pos_decouple mode (decoupled λ=0)
+# ============================================
+echo "=============================================="
+echo "Running opacity_pos_decouple mode benchmarks"
+echo "=============================================="
+
+for dir in "$base_dir"*/; do
+    if [ -d "$dir" ]; then
+        clean_dir="${dir%/}"
+        scene_name=$(basename "$clean_dir")
+        if [[ "$scene_name" == "README.txt" ]] || [[ "$scene_name" == *.zip ]]; then
+            continue
+        fi
+
+        output_dir="output/opacity_pos_decouple/medical_pbr/${scene_name}"
+        echo "Processing ${scene_name} with mode opacity_pos_decouple..."
+        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --use_opacity_pos_decouple True"
+    fi
+done
+
+# ============================================
+# 4. NDGS mode (full Cholesky precision)
 # ============================================
 echo "=============================================="
 echo "Running NDGS mode benchmarks"

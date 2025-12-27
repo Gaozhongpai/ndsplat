@@ -172,7 +172,8 @@ def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_
         elif mode == "dgs":
             # DGS mode: Full DGS with configurable view-dependent position
             gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim,
-                                      use_view_dependent_pos=dataset.use_view_dependent_pos)
+                                      use_view_dependent_pos=dataset.use_view_dependent_pos,
+                                      use_opacity_pos_decouple=dataset.use_opacity_pos_decouple)
         elif mode == "dgs-color":
             # DGS-color mode: Joint position+color with simplified v_12/L_22_inv parameterization
             gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim)

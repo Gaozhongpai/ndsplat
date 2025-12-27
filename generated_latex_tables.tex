@@ -1,0 +1,264 @@
+
+% 7DGS_PBR - Quality Metrics
+\begin{table}[h]
+\centering
+\caption{Quantitative comparison on 7Dgs Pbr dataset at 30K iterations. Best results in \textbf{bold}.}
+\label{tab:7dgs_pbr}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l|ccc|ccc|ccc}
+\toprule
+ & \multicolumn{3}{c|}{\textbf{N-DGS}} & \multicolumn{3}{c|}{\textbf{Opacity-Only}} & \multicolumn{3}{c}{\textbf{Opacity+Pos}} \\
+Scene & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ \\
+\midrule
+\texttt{cloud} & \textbf{30.31} & \textbf{0.956} & \textbf{0.072} & 29.02 & 0.954 & 0.077 & 29.58 & 0.955 & 0.074 \\
+\texttt{dust} & \textbf{39.30} & \textbf{0.959} & \textbf{0.031} & 36.46 & 0.954 & 0.039 & 37.64 & 0.956 & 0.032 \\
+\texttt{flame} & \textbf{33.90} & \textbf{0.945} & \textbf{0.054} & 30.31 & 0.933 & 0.066 & 29.74 & 0.929 & 0.065 \\
+\texttt{heart} & \textbf{36.09} & \textbf{0.987} & \textbf{0.018} & 34.98 & 0.984 & 0.022 & 34.21 & 0.984 & 0.019 \\
+\texttt{heart\_1600} & \textbf{32.15} & \textbf{0.966} & \textbf{0.048} & 31.19 & 0.961 & 0.053 & 29.94 & 0.958 & 0.050 \\
+\texttt{suzanne} & \textbf{27.53} & \textbf{0.947} & \textbf{0.061} & 27.39 & 0.944 & 0.064 & 27.07 & 0.938 & 0.069 \\
+\midrule
+\textbf{\texttt{Mean}} & \textbf{33.21} & \textbf{0.960} & \textbf{0.047} & 31.56 & 0.955 & 0.053 & 31.36 & 0.953 & 0.051 \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+
+% 7DGS_PBR - Efficiency Metrics
+\begin{table}[h]
+\centering
+\caption{Efficiency comparison on 7Dgs Pbr dataset.}
+\label{tab:7dgs_pbr_efficiency}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l|rrr|rrr|rrr}
+\toprule
+ & \multicolumn{3}{c|}{\textbf{N-DGS}} & \multicolumn{3}{c|}{\textbf{Opacity-Only}} & \multicolumn{3}{c}{\textbf{Opacity+Pos}} \\
+Scene & $\#$Gauss (K) & Time (min) & FPS & $\#$Gauss (K) & Time (min) & FPS & $\#$Gauss (K) & Time (min) & FPS \\
+\midrule
+\texttt{cloud} & 47 & 76.87 & \textbf{950.04} & 69 & \textbf{76.31} & 908.41 & \textbf{159} & 76.72 & 777.31 \\
+\texttt{dust} & 16 & \textbf{13.11} & 1052.85 & 19 & 14.63 & \textbf{1125.22} & \textbf{32} & 18.80 & 933.62 \\
+\texttt{flame} & 21 & \textbf{14.91} & \textbf{1063.87} & 24 & 17.33 & 1014.67 & \textbf{42} & 20.17 & 869.78 \\
+\texttt{heart} & 139 & 30.75 & 593.96 & 183 & \textbf{28.58} & \textbf{703.96} & \textbf{210} & 32.10 & 587.93 \\
+\texttt{heart\_1600} & 180 & 22.75 & 432.58 & 238 & \textbf{20.77} & \textbf{742.15} & \textbf{301} & 24.56 & 609.06 \\
+\texttt{suzanne} & 563 & 70.47 & 165.70 & \textbf{910} & \textbf{56.79} & \textbf{440.92} & 734 & 58.56 & 424.30 \\
+\midrule
+\textbf{\texttt{Mean}} & 161 & 38.14 & 709.83 & 240 & \textbf{35.74} & \textbf{822.55} & \textbf{246} & 38.48 & 700.33 \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+
+% DNERF - Quality Metrics
+\begin{table}[h]
+\centering
+\caption{Quantitative comparison on Dnerf dataset at 30K iterations. Best results in \textbf{bold}.}
+\label{tab:dnerf}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l|ccc|ccc|ccc}
+\toprule
+ & \multicolumn{3}{c|}{\textbf{N-DGS}} & \multicolumn{3}{c|}{\textbf{Opacity-Only}} & \multicolumn{3}{c}{\textbf{Opacity+Pos}} \\
+Scene & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ \\
+\midrule
+\texttt{bouncingballs} & \textbf{34.00} & \textbf{0.981} & 0.025 & 32.52 & 0.978 & 0.028 & 33.04 & 0.979 & \textbf{0.025} \\
+\texttt{hellwarrior} & 32.76 & 0.932 & 0.093 & 33.54 & 0.941 & 0.085 & \textbf{34.35} & \textbf{0.945} & \textbf{0.075} \\
+\texttt{hook} & 31.15 & 0.960 & 0.044 & 28.55 & 0.937 & 0.062 & \textbf{32.87} & \textbf{0.969} & \textbf{0.031} \\
+\texttt{jumpingjacks} & \textbf{31.22} & \textbf{0.967} & 0.043 & 28.62 & 0.952 & 0.054 & 30.78 & 0.965 & \textbf{0.039} \\
+\texttt{lego} & \textbf{28.33} & \textbf{0.943} & 0.055 & 27.13 & 0.939 & \textbf{0.055} & 27.50 & 0.936 & 0.058 \\
+\texttt{mutant} & 39.38 & 0.993 & 0.007 & 34.55 & 0.981 & 0.019 & \textbf{40.28} & \textbf{0.994} & \textbf{0.006} \\
+\texttt{standup} & 38.50 & 0.988 & 0.013 & 33.02 & 0.972 & 0.029 & \textbf{39.01} & \textbf{0.989} & \textbf{0.009} \\
+\texttt{trex} & 29.68 & 0.978 & 0.023 & 29.42 & 0.975 & 0.022 & \textbf{30.36} & \textbf{0.979} & \textbf{0.019} \\
+\midrule
+\textbf{\texttt{Mean}} & 33.13 & 0.968 & 0.038 & 30.92 & 0.959 & 0.044 & \textbf{33.52} & \textbf{0.970} & \textbf{0.033} \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+
+% DNERF - Efficiency Metrics
+\begin{table}[h]
+\centering
+\caption{Efficiency comparison on Dnerf dataset.}
+\label{tab:dnerf_efficiency}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l|rrr|rrr|rrr}
+\toprule
+ & \multicolumn{3}{c|}{\textbf{N-DGS}} & \multicolumn{3}{c|}{\textbf{Opacity-Only}} & \multicolumn{3}{c}{\textbf{Opacity+Pos}} \\
+Scene & $\#$Gauss (K) & Time (min) & FPS & $\#$Gauss (K) & Time (min) & FPS & $\#$Gauss (K) & Time (min) & FPS \\
+\midrule
+\texttt{bouncingballs} & \textbf{178} & 22.73 & 398.65 & 103 & \textbf{16.09} & \textbf{770.99} & 134 & 17.59 & 640.82 \\
+\texttt{hellwarrior} & 13 & 8.25 & \textbf{1151.03} & \textbf{17} & \textbf{7.87} & 1141.34 & 16 & 10.11 & 1029.25 \\
+\texttt{hook} & 36 & \textbf{9.71} & \textbf{1042.00} & 55 & 11.42 & 1027.26 & \textbf{83} & 15.32 & 822.92 \\
+\texttt{jumpingjacks} & 24 & \textbf{9.61} & 1069.25 & 31 & 10.67 & \textbf{1101.29} & \textbf{77} & 14.93 & 853.54 \\
+\texttt{lego} & 113 & 21.09 & 583.20 & \textbf{143} & \textbf{17.93} & \textbf{700.47} & 122 & 19.95 & 676.12 \\
+\texttt{mutant} & 62 & 14.74 & 829.30 & 67 & \textbf{13.27} & \textbf{930.20} & \textbf{88} & 16.70 & 756.05 \\
+\texttt{standup} & 20 & 9.71 & 1074.73 & 26 & \textbf{9.28} & \textbf{1140.56} & \textbf{58} & 15.48 & 867.40 \\
+\texttt{trex} & 100 & \textbf{16.77} & 667.96 & 118 & 19.09 & \textbf{778.03} & \textbf{140} & 20.05 & 686.99 \\
+\midrule
+\textbf{\texttt{Mean}} & 68 & 14.08 & 852.01 & 70 & \textbf{13.20} & \textbf{948.77} & \textbf{90} & 16.26 & 791.64 \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+
+% MEDICAL_PBR - Quality Metrics
+\begin{table}[h]
+\centering
+\caption{Quantitative comparison on Medical Pbr dataset at 30K iterations. Best results in \textbf{bold}.}
+\label{tab:medical_pbr}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l|ccc|ccc|ccc|ccc}
+\toprule
+ & \multicolumn{3}{c|}{\textbf{N-DGS}} & \multicolumn{3}{c|}{\textbf{Opacity-Only}} & \multicolumn{3}{c|}{\textbf{Opacity+Pos}} & \multicolumn{3}{c}{\textbf{3DGS}} \\
+Scene & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ \\
+\midrule
+\texttt{bone\_fracture} & 36.08 & 0.983 & 0.023 & 36.30 & 0.984 & 0.022 & \textbf{36.40} & \textbf{0.984} & \textbf{0.022} & 34.98 & 0.982 & 0.023 \\
+\texttt{cerebral} & 34.24 & 0.965 & 0.067 & 34.22 & 0.966 & 0.065 & \textbf{34.39} & \textbf{0.967} & \textbf{0.063} & 32.99 & 0.963 & 0.068 \\
+\texttt{gel} & \textbf{41.24} & 0.987 & 0.037 & 40.69 & 0.987 & 0.034 & 40.99 & \textbf{0.988} & \textbf{0.034} & 39.05 & 0.986 & 0.036 \\
+\texttt{heart} & \textbf{35.85} & 0.978 & 0.029 & 35.76 & 0.979 & 0.028 & 35.84 & \textbf{0.979} & \textbf{0.027} & 35.05 & 0.978 & 0.028 \\
+\texttt{intestine} & 39.72 & 0.979 & 0.039 & 39.66 & 0.979 & 0.038 & \textbf{39.75} & \textbf{0.979} & \textbf{0.037} & 38.81 & 0.978 & 0.039 \\
+\texttt{liver} & \textbf{43.50} & \textbf{0.991} & 0.030 & 42.69 & 0.991 & 0.029 & 42.78 & 0.990 & 0.029 & 41.23 & 0.990 & \textbf{0.029} \\
+\texttt{lower} & \textbf{41.58} & 0.994 & 0.009 & 41.25 & 0.994 & 0.008 & 41.57 & \textbf{0.994} & \textbf{0.008} & 40.03 & 0.993 & 0.009 \\
+\texttt{vascular} & \textbf{39.62} & 0.989 & 0.015 & 39.53 & 0.989 & 0.015 & 39.57 & \textbf{0.989} & \textbf{0.015} & 38.72 & 0.988 & 0.016 \\
+\midrule
+\textbf{\texttt{Mean}} & \textbf{38.98} & 0.983 & 0.031 & 38.76 & 0.984 & 0.030 & 38.91 & \textbf{0.984} & \textbf{0.029} & 37.61 & 0.982 & 0.031 \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+
+% MEDICAL_PBR - Efficiency Metrics
+\begin{table}[h]
+\centering
+\caption{Efficiency comparison on Medical Pbr dataset.}
+\label{tab:medical_pbr_efficiency}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l|rrr|rrr|rrr|rrr}
+\toprule
+ & \multicolumn{3}{c|}{\textbf{N-DGS}} & \multicolumn{3}{c|}{\textbf{Opacity-Only}} & \multicolumn{3}{c|}{\textbf{Opacity+Pos}} & \multicolumn{3}{c}{\textbf{3DGS}} \\
+Scene & $\#$Gauss (K) & Time (min) & FPS & $\#$Gauss (K) & Time (min) & FPS & $\#$Gauss (K) & Time (min) & FPS & $\#$Gauss (K) & Time (min) & FPS \\
+\midrule
+\texttt{bone\_fracture} & 138 & 7.39 & \textbf{737.98} & 213 & 8.22 & 712.65 & 219 & 8.74 & 656.24 & \textbf{272} & \textbf{6.81} & 349.28 \\
+\texttt{cerebral} & 270 & 16.07 & 376.34 & 316 & 15.40 & \textbf{579.80} & 323 & 16.21 & 543.47 & \textbf{370} & \textbf{12.74} & 258.61 \\
+\texttt{gel} & 57 & 7.18 & 1038.67 & 59 & 6.75 & \textbf{1076.07} & 57 & 7.12 & 962.10 & \textbf{60} & \textbf{5.90} & 778.65 \\
+\texttt{heart} & 151 & 8.88 & 691.18 & 186 & 8.01 & \textbf{766.73} & 184 & 8.39 & 709.61 & \textbf{213} & \textbf{6.90} & 544.12 \\
+\texttt{intestine} & 128 & 8.79 & 771.56 & 146 & 8.04 & \textbf{913.69} & 148 & 8.54 & 826.89 & \textbf{173} & \textbf{7.16} & 522.52 \\
+\texttt{liver} & 44 & 5.30 & 1056.65 & 46 & \textbf{4.92} & \textbf{1138.56} & 45 & 5.03 & 1030.49 & \textbf{54} & 5.47 & 852.21 \\
+\texttt{lower} & 95 & 5.74 & 937.15 & 121 & 5.53 & \textbf{977.40} & 125 & 5.99 & 870.23 & \textbf{165} & \textbf{4.88} & 584.58 \\
+\texttt{vascular} & 141 & 7.14 & 745.52 & 149 & \textbf{5.89} & \textbf{999.96} & 148 & 6.48 & 892.26 & \textbf{166} & 6.20 & 653.69 \\
+\midrule
+\textbf{\texttt{Mean}} & 128 & 8.31 & 794.38 & 154 & 7.84 & \textbf{895.61} & 156 & 8.31 & 811.41 & \textbf{184} & \textbf{7.01} & 567.96 \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+
+% NERF_SYNTHETIC - Quality Metrics
+\begin{table}[h]
+\centering
+\caption{Quantitative comparison on Nerf Synthetic dataset at 30K iterations. Best results in \textbf{bold}.}
+\label{tab:nerf_synthetic}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l|ccc|ccc|ccc}
+\toprule
+ & \multicolumn{3}{c|}{\textbf{N-DGS}} & \multicolumn{3}{c|}{\textbf{Opacity-Only}} & \multicolumn{3}{c}{\textbf{Opacity+Pos}} \\
+Scene & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ \\
+\midrule
+\texttt{chair} & 35.75 & 0.986 & 0.013 & \textbf{36.36} & \textbf{0.988} & 0.012 & 36.20 & 0.988 & \textbf{0.012} \\
+\texttt{drums} & 26.75 & 0.956 & 0.036 & 26.80 & 0.957 & 0.035 & \textbf{26.88} & \textbf{0.958} & \textbf{0.034} \\
+\texttt{ficus} & 33.54 & 0.984 & 0.014 & \textbf{35.30} & \textbf{0.988} & \textbf{0.011} & 34.86 & 0.987 & 0.011 \\
+\texttt{hotdog} & 38.10 & 0.985 & 0.022 & \textbf{38.13} & \textbf{0.986} & 0.020 & 37.97 & 0.986 & \textbf{0.020} \\
+\texttt{lego} & 35.63 & 0.981 & 0.019 & \textbf{35.87} & \textbf{0.982} & 0.017 & 35.71 & 0.982 & \textbf{0.017} \\
+\texttt{materials} & 30.78 & 0.967 & 0.033 & 31.00 & 0.967 & 0.030 & \textbf{31.76} & \textbf{0.972} & \textbf{0.027} \\
+\texttt{mic} & 35.63 & 0.992 & 0.006 & \textbf{36.12} & \textbf{0.993} & \textbf{0.005} & 36.10 & 0.992 & 0.006 \\
+\texttt{ship} & 30.85 & 0.906 & 0.112 & \textbf{31.16} & \textbf{0.908} & 0.109 & 30.96 & 0.908 & \textbf{0.106} \\
+\midrule
+\textbf{\texttt{Mean}} & 33.38 & 0.970 & 0.032 & \textbf{33.85} & 0.971 & 0.030 & 33.81 & \textbf{0.971} & \textbf{0.029} \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+
+% NERF_SYNTHETIC - Efficiency Metrics
+\begin{table}[h]
+\centering
+\caption{Efficiency comparison on Nerf Synthetic dataset.}
+\label{tab:nerf_synthetic_efficiency}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l|rrr|rrr|rrr}
+\toprule
+ & \multicolumn{3}{c|}{\textbf{N-DGS}} & \multicolumn{3}{c|}{\textbf{Opacity-Only}} & \multicolumn{3}{c}{\textbf{Opacity+Pos}} \\
+Scene & $\#$Gauss (K) & Time (min) & FPS & $\#$Gauss (K) & Time (min) & FPS & $\#$Gauss (K) & Time (min) & FPS \\
+\midrule
+\texttt{chair} & 178 & 6.11 & 635.27 & 206 & \textbf{5.54} & \textbf{713.54} & \textbf{207} & 5.98 & 649.26 \\
+\texttt{drums} & 193 & 6.19 & 476.51 & 239 & \textbf{5.62} & \textbf{683.86} & \textbf{255} & 6.18 & 622.56 \\
+\texttt{ficus} & 117 & 4.58 & 840.56 & \textbf{147} & \textbf{4.27} & \textbf{973.46} & 137 & 4.88 & 882.10 \\
+\texttt{hotdog} & 102 & 6.04 & 871.45 & 98 & \textbf{5.56} & \textbf{982.05} & \textbf{112} & 6.30 & 837.32 \\
+\texttt{lego} & 186 & 7.06 & 480.97 & 220 & \textbf{5.67} & \textbf{697.44} & \textbf{235} & 6.35 & 626.26 \\
+\texttt{materials} & 136 & 5.38 & \textbf{767.74} & 182 & \textbf{5.09} & 759.30 & \textbf{193} & 5.74 & 687.70 \\
+\texttt{mic} & 188 & \textbf{5.84} & 486.29 & 260 & 6.21 & \textbf{625.05} & \textbf{264} & 6.84 & 571.01 \\
+\texttt{ship} & 271 & 9.60 & 365.77 & 256 & \textbf{8.68} & \textbf{605.15} & \textbf{272} & 9.66 & 540.47 \\
+\midrule
+\textbf{\texttt{Mean}} & 171 & 6.35 & 615.57 & 201 & \textbf{5.83} & \textbf{754.98} & \textbf{209} & 6.49 & 677.09 \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+
+% TANDT_PBR - Quality Metrics
+\begin{table}[h]
+\centering
+\caption{Quantitative comparison on Tandt Pbr dataset at 30K iterations. Best results in \textbf{bold}.}
+\label{tab:tandt_pbr}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l|ccc|ccc|ccc}
+\toprule
+ & \multicolumn{3}{c|}{\textbf{N-DGS}} & \multicolumn{3}{c|}{\textbf{Opacity-Only}} & \multicolumn{3}{c}{\textbf{Opacity+Pos}} \\
+Scene & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ \\
+\midrule
+\texttt{bunny\_cloud} & 40.87 & 0.993 & 0.045 & \textbf{43.44} & 0.993 & 0.042 & 43.33 & \textbf{0.993} & \textbf{0.040} \\
+\texttt{cloud} & 41.93 & 0.991 & 0.052 & \textbf{43.47} & 0.992 & 0.048 & 43.45 & \textbf{0.992} & \textbf{0.045} \\
+\texttt{dragon} & 35.69 & \textbf{0.943} & 0.041 & 34.42 & 0.914 & 0.051 & \textbf{37.11} & 0.941 & \textbf{0.038} \\
+\texttt{explosion} & \textbf{40.97} & \textbf{0.989} & \textbf{0.037} & 37.81 & 0.983 & 0.041 & 39.34 & 0.986 & 0.037 \\
+\texttt{rvr\_x} & 33.48 & 0.964 & 0.057 & 31.81 & 0.956 & 0.067 & \textbf{34.63} & \textbf{0.971} & \textbf{0.046} \\
+\texttt{smoke} & \textbf{40.02} & \textbf{0.990} & \textbf{0.041} & 38.20 & 0.989 & 0.049 & 39.55 & 0.990 & 0.047 \\
+\texttt{suzanne} & 26.81 & 0.929 & \textbf{0.106} & 26.65 & 0.927 & 0.112 & \textbf{27.00} & \textbf{0.930} & 0.106 \\
+\midrule
+\textbf{\texttt{Mean}} & 37.11 & 0.971 & 0.054 & 36.54 & 0.965 & 0.059 & \textbf{37.77} & \textbf{0.972} & \textbf{0.051} \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+
+% TANDT_PBR - Efficiency Metrics
+\begin{table}[h]
+\centering
+\caption{Efficiency comparison on Tandt Pbr dataset.}
+\label{tab:tandt_pbr_efficiency}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l|rrr|rrr|rrr}
+\toprule
+ & \multicolumn{3}{c|}{\textbf{N-DGS}} & \multicolumn{3}{c|}{\textbf{Opacity-Only}} & \multicolumn{3}{c}{\textbf{Opacity+Pos}} \\
+Scene & $\#$Gauss (K) & Time (min) & FPS & $\#$Gauss (K) & Time (min) & FPS & $\#$Gauss (K) & Time (min) & FPS \\
+\midrule
+\texttt{bunny\_cloud} & 24 & \textbf{33.69} & \textbf{718.47} & 63 & 42.62 & 689.88 & \textbf{65} & 48.66 & 613.22 \\
+\texttt{cloud} & 16 & \textbf{32.61} & 597.10 & \textbf{62} & 39.08 & \textbf{700.35} & 60 & 40.61 & 634.16 \\
+\texttt{dragon} & 92 & \textbf{12.76} & \textbf{855.89} & 118 & 12.87 & 787.64 & \textbf{145} & 13.62 & 703.61 \\
+\texttt{explosion} & 34 & \textbf{22.13} & \textbf{875.48} & 72 & 29.54 & 813.28 & \textbf{73} & 30.20 & 732.86 \\
+\texttt{rvr\_x} & 170 & 6.57 & 689.47 & 221 & \textbf{6.44} & \textbf{796.54} & \textbf{335} & 8.01 & 654.89 \\
+\texttt{smoke} & 51 & \textbf{46.48} & \textbf{608.02} & 72 & 55.67 & 568.30 & \textbf{73} & 58.50 & 540.75 \\
+\texttt{suzanne} & 200 & 33.16 & 404.34 & 221 & \textbf{28.80} & \textbf{518.17} & \textbf{232} & 30.71 & 513.88 \\
+\midrule
+\textbf{\texttt{Mean}} & 84 & \textbf{26.77} & 678.40 & 118 & 30.72 & \textbf{696.31} & \textbf{140} & 32.90 & 627.62 \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+

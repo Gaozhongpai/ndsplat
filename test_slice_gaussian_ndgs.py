@@ -705,6 +705,236 @@ def test_cuda_vs_pytorch_zero_cross_terms():
     return all_passed
 
 
+def test_numerical_stability():
+    """Test with ill-conditioned covariance matrices and extreme values."""
+    print("\n" + "=" * 70)
+    print("TEST: Numerical Stability with Ill-Conditioned Covariances")
+    print("=" * 70)
+
+    device = "cuda"
+    N = 50
+    C = 4
+
+    all_passed = True
+
+    # Test 1: Very small eigenvalues (near-singular covariance)
+    print("\n1. Near-singular covariance matrices (small eigenvalues):")
+    m_1 = torch.randn(N, 3, device=device, dtype=torch.float64)
+    m_2 = F.normalize(torch.randn(N, C, device=device, dtype=torch.float64), dim=-1)
+    query = F.normalize(torch.randn(N, C, device=device, dtype=torch.float64), dim=-1)
+
+    # Create covariance with very small eigenvalues
+    D = 3 + C
+    L = torch.randn(N, D, D, device=device, dtype=torch.float64) * 0.01  # Very small scale
+    L = torch.tril(L)
+    L = L + torch.eye(D, device=device, dtype=torch.float64).unsqueeze(0) * 0.01
+    covars_small = torch.bmm(L, L.transpose(-1, -2))
+
+    try:
+        m_cond, cov3D, scale = _slice_gaussian_ndgs(
+            m_1, m_2, query, covars_small, lambda_opc=0.35, lambda_opc_time=0.45
+        )
+
+        has_nan = torch.isnan(m_cond).any() or torch.isnan(cov3D).any() or torch.isnan(scale).any()
+        has_inf = torch.isinf(m_cond).any() or torch.isinf(cov3D).any() or torch.isinf(scale).any()
+
+        valid = not has_nan and not has_inf
+        status = "✓" if valid else "✗"
+        all_passed = all_passed and valid
+        print(f"   No NaN/Inf in outputs: {status}")
+        if not valid:
+            print(f"      NaN: {has_nan}, Inf: {has_inf}")
+    except Exception as e:
+        all_passed = False
+        print(f"   ✗ FAIL with error: {e}")
+
+    # Test 2: Very large eigenvalues
+    print("\n2. Large eigenvalue covariance matrices:")
+    L = torch.randn(N, D, D, device=device, dtype=torch.float64) * 10.0  # Large scale
+    L = torch.tril(L)
+    L = L + torch.eye(D, device=device, dtype=torch.float64).unsqueeze(0) * 5.0
+    covars_large = torch.bmm(L, L.transpose(-1, -2))
+
+    try:
+        m_cond, cov3D, scale = _slice_gaussian_ndgs(
+            m_1, m_2, query, covars_large, lambda_opc=0.35, lambda_opc_time=0.45
+        )
+
+        has_nan = torch.isnan(m_cond).any() or torch.isnan(cov3D).any() or torch.isnan(scale).any()
+        has_inf = torch.isinf(m_cond).any() or torch.isinf(cov3D).any() or torch.isinf(scale).any()
+
+        valid = not has_nan and not has_inf
+        status = "✓" if valid else "✗"
+        all_passed = all_passed and valid
+        print(f"   No NaN/Inf in outputs: {status}")
+    except Exception as e:
+        all_passed = False
+        print(f"   ✗ FAIL with error: {e}")
+
+    # Test 3: Mixed condition numbers
+    print("\n3. Mixed condition numbers (some well-conditioned, some ill-conditioned):")
+    covars_mixed = torch.zeros(N, D, D, device=device, dtype=torch.float64)
+    for i in range(N):
+        if i % 2 == 0:
+            # Well-conditioned
+            L_i = torch.randn(D, D, device=device, dtype=torch.float64) * 0.5
+            L_i = torch.tril(L_i) + torch.eye(D, device=device, dtype=torch.float64) * 0.5
+        else:
+            # Ill-conditioned
+            L_i = torch.randn(D, D, device=device, dtype=torch.float64) * 0.01
+            L_i = torch.tril(L_i) + torch.eye(D, device=device, dtype=torch.float64) * 0.01
+        covars_mixed[i] = L_i @ L_i.T
+
+    try:
+        m_cond, cov3D, scale = _slice_gaussian_ndgs(
+            m_1, m_2, query, covars_mixed, lambda_opc=0.35, lambda_opc_time=0.45
+        )
+
+        has_nan = torch.isnan(m_cond).any() or torch.isnan(cov3D).any() or torch.isnan(scale).any()
+        has_inf = torch.isinf(m_cond).any() or torch.isinf(cov3D).any() or torch.isinf(scale).any()
+
+        valid = not has_nan and not has_inf
+        status = "✓" if valid else "✗"
+        all_passed = all_passed and valid
+        print(f"   No NaN/Inf in outputs: {status}")
+    except Exception as e:
+        all_passed = False
+        print(f"   ✗ FAIL with error: {e}")
+
+    print("\n" + "-" * 70)
+    if all_passed:
+        print("Numerical stability tests PASSED!")
+    else:
+        print("Some numerical stability tests FAILED!")
+
+    return all_passed
+
+
+def test_extreme_lambda_values():
+    """Test with extreme lambda parameter values."""
+    print("\n" + "=" * 70)
+    print("TEST: Extreme Lambda Parameter Values")
+    print("=" * 70)
+
+    device = "cuda"
+    N = 50
+    C = 4
+
+    all_passed = True
+
+    m_1, m_2, query, covars, _, _ = create_test_inputs(N, C, device=device, requires_grad=False)
+
+    test_cases = [
+        {"lambda_opc": 0.0, "lambda_opc_time": 0.0, "desc": "Both lambdas = 0 (no opacity decay)"},
+        {"lambda_opc": 1.0, "lambda_opc_time": 1.0, "desc": "Both lambdas = 1.0 (strong decay)"},
+        {"lambda_opc": 10.0, "lambda_opc_time": 10.0, "desc": "Both lambdas = 10.0 (very strong decay)"},
+        {"lambda_opc": 0.0, "lambda_opc_time": 1.0, "desc": "Mixed: lambda_opc=0, lambda_opc_time=1"},
+        {"lambda_opc": torch.zeros(N, device=device, dtype=torch.float64),
+         "lambda_opc_time": torch.ones(N, device=device, dtype=torch.float64),
+         "desc": "Per-Gaussian: zeros and ones"},
+        {"lambda_opc": torch.full((N,), 1e-6, device=device, dtype=torch.float64),
+         "lambda_opc_time": torch.full((N,), 100.0, device=device, dtype=torch.float64),
+         "desc": "Extreme per-Gaussian: 1e-6 and 100.0"},
+    ]
+
+    for case in test_cases:
+        lambda_opc = case["lambda_opc"]
+        lambda_opc_time = case["lambda_opc_time"]
+        desc = case["desc"]
+
+        print(f"\n{desc}:")
+
+        try:
+            m_cond, cov3D, scale = _slice_gaussian_ndgs(
+                m_1, m_2, query, covars, lambda_opc, lambda_opc_time
+            )
+
+            # Check for numerical issues
+            has_nan = torch.isnan(m_cond).any() or torch.isnan(cov3D).any() or torch.isnan(scale).any()
+            has_inf = torch.isinf(m_cond).any() or torch.isinf(cov3D).any() or torch.isinf(scale).any()
+
+            # Check scale range
+            scale_in_range = (scale > 0).all() and (scale <= 1).all()
+
+            valid = not has_nan and not has_inf and scale_in_range
+            status = "✓" if valid else "✗"
+            all_passed = all_passed and valid
+
+            print(f"   No NaN/Inf: {not has_nan and not has_inf} {'✓' if not has_nan and not has_inf else '✗'}")
+            print(f"   Scale in (0,1]: {scale_in_range} {'✓' if scale_in_range else '✗'}")
+            print(f"   Scale range: [{scale.min():.6f}, {scale.max():.6f}]")
+
+        except Exception as e:
+            all_passed = False
+            print(f"   ✗ FAIL with error: {e}")
+
+    print("\n" + "-" * 70)
+    if all_passed:
+        print("Extreme lambda value tests PASSED!")
+    else:
+        print("Some extreme lambda value tests FAILED!")
+
+    return all_passed
+
+
+def test_large_batch_sizes():
+    """Test with large batch sizes to ensure scalability."""
+    print("\n" + "=" * 70)
+    print("TEST: Large Batch Sizes")
+    print("=" * 70)
+
+    device = "cuda"
+    C = 4
+
+    all_passed = True
+
+    batch_sizes = [1000, 5000, 10000]
+
+    for N in batch_sizes:
+        print(f"\nBatch size N={N}:")
+
+        try:
+            m_1, m_2, query, covars, lambda_opc, lambda_opc_time = create_test_inputs(
+                N, C, device=device, requires_grad=False
+            )
+
+            # Forward pass
+            import time
+            start = time.time()
+            m_cond, cov3D, scale = _slice_gaussian_ndgs(
+                m_1, m_2, query, covars, lambda_opc, lambda_opc_time
+            )
+            elapsed = time.time() - start
+
+            # Check correctness
+            valid = (
+                m_cond.shape == (N, 3) and
+                cov3D.shape == (N, 6) and
+                scale.shape == (N, 1) and
+                not torch.isnan(m_cond).any() and
+                not torch.isnan(cov3D).any() and
+                not torch.isnan(scale).any()
+            )
+
+            status = "✓" if valid else "✗"
+            all_passed = all_passed and valid
+
+            print(f"   Shapes correct: {valid} {status}")
+            print(f"   Time: {elapsed:.4f}s ({N/elapsed:.0f} Gaussians/sec)")
+
+        except Exception as e:
+            all_passed = False
+            print(f"   ✗ FAIL with error: {e}")
+
+    print("\n" + "-" * 70)
+    if all_passed:
+        print("Large batch size tests PASSED!")
+    else:
+        print("Some large batch size tests FAILED!")
+
+    return all_passed
+
+
 # ==============================================================================
 # Main Test Runner
 # ==============================================================================
@@ -738,7 +968,16 @@ def run_all_tests():
     results["backward_flow"] = test_backward_gradient_flow()
     results["backward_tensor_lambda"] = test_backward_with_tensor_lambda()
     results["cuda_vs_pytorch"] = test_cuda_vs_pytorch_zero_cross_terms()
-    
+
+    # Robustness Tests
+    print("\n" + "#" * 70)
+    print("# ROBUSTNESS TESTS")
+    print("#" * 70)
+
+    results["numerical_stability"] = test_numerical_stability()
+    results["extreme_lambda"] = test_extreme_lambda_values()
+    results["large_batches"] = test_large_batch_sizes()
+
     # Summary
     print("\n" + "=" * 70)
     print("FINAL SUMMARY")

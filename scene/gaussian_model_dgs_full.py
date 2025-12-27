@@ -114,20 +114,35 @@ class GaussianModel:
     """
     Full DGS with view-dependent position, time-dependent rotation, and opacity.
 
-    Position and opacity are DECOUPLED (v_12 is independent of V_22^{-1}):
-    - _v_12: [N, 3*C] position regression matrix (v_regr), independent of V_22^{-1}
-    - _L_22_inv: [N, C*(C+1)/2] Cholesky of V_22^{-1} (precision matrix, ONLY affects opacity)
+    Position and opacity can operate in multiple modes controlled by lambda parameters:
+    - _v_12: [N, 3*C] position regression matrix
+    - _L_22_inv: [N, C*(C+1)/2] Cholesky of V_22^{-1} (precision matrix)
+    - _lambda_view, _lambda_time: [N] learnable coupling strength (in logit space)
 
-    Mathematical formulation:
+    Mathematical formulation (V2):
     - V_22^{-1} = L_22_inv @ L_22_inv^T (precision from Cholesky, no matrix inversion!)
-    - x_cond = x + v_12 @ (v - μ_v)  (position shift, INDEPENDENT of V_22^{-1})
-    - attention = exp(-λ * (v - μ_v)^T @ V_22^{-1} @ (v - μ_v))  (opacity scale)
-    - q_cond = q_base ⊗ slerp(I, q_delta, 1 - attention_time)  (rotation, only for time when input_dim=7)
+    - V_22_inv_scaled = (1-λ) * I + λ * V_22^{-1}  (lambda-controlled interpolation)
+    - x_cond = x + v_12 @ V_22_inv_scaled @ (v - μ_v)  (position shift with lambda control)
+    - attention = exp(-λ_opc * (v - μ_v)^T @ V_22^{-1} @ (v - μ_v))  (opacity scale)
+
+    Operating Modes:
+    1. Decoupled Mode (use_opacity_pos_decouple=True, λ=0):
+       - Position: v_12 acts directly (independent of V_22^{-1})
+       - Opacity: Uses V_22^{-1} for view-dependent fading
+       - Separate control of position shift and opacity decay sharpness
+
+    2. Partially Coupled (0 < λ < 1, default):
+       - Smooth interpolation between identity and V_22^{-1}
+       - Learnable coupling strength for better regularization
+
+    3. Fully Coupled (λ=1):
+       - Standard conditional Gaussian inference
+       - Equivalent to traditional N-DGS behavior
 
     Physical interpretation:
     - attention ≈ 1 (canonical view): use base params unchanged, minimal opacity reduction
     - attention ≈ 0 (oblique view): apply full position shift, strong opacity reduction
-    - Position shift and opacity modulation are learned independently
+    - Lambda controls how much V_22^{-1} influences position shift
     - Rotation only varies with time (not view direction) when input_dim=7
     """
 
@@ -156,7 +171,7 @@ class GaussianModel:
         self.time_act_inv = lambda x: inverse_sigmoid(torch.clip(x, min=1e-6, max=1.0 - 1e-6))
 
     def __init__(self, sh_degree: int, input_dim: int = 6, use_beta: bool = False,
-                 use_view_dependent_pos: bool = True,
+                 use_view_dependent_pos: bool = True, use_opacity_pos_decouple: bool = False,
                 time_duration: list = [0.0, 1.0], l_22_inv_init_scale: float = 1.0):
         """
         Initialize Full DGS with view-dependent position, time-dependent rotation, and opacity.
@@ -166,6 +181,7 @@ class GaussianModel:
             input_dim: 6 for position+view, 7 for position+view+time
             use_beta: Whether to use spatial beta parameter (default: False)
             use_view_dependent_pos: Enable view-dependent position shift (default: True)
+            use_opacity_pos_decouple: Decouple position and opacity by setting lambda=0 (default: False)
             time_duration: [min, max] time range for 7DGS (default: [0.0, 1.0])
             l_22_inv_init_scale: Initialization scale for L_22_inv diagonal (default: 1.0).
                                Using 1.0 gives log(1.0)=0.0 (standard initialization).
@@ -176,6 +192,7 @@ class GaussianModel:
         self.input_dim = input_dim
         self.use_beta = use_beta
         self.use_view_dependent_pos = use_view_dependent_pos
+        self.use_opacity_pos_decouple = use_opacity_pos_decouple  # Decouple position and opacity
         self.time_duration = time_duration  # Time range for 7DGS
         self.l_22_inv_init_scale = l_22_inv_init_scale  # Initialization scale for L_22_inv diagonal
         self.cond_dim = input_dim - 3  # C = 3 for view-only, 4 for view+time
@@ -466,9 +483,16 @@ class GaussianModel:
 
         # Apply sigmoid to lambda parameters (stored in logit space)
         # Only used when use_view_dependent_pos is True
+        # Skip sigmoid when use_opacity_pos_decouple=True (lambda stored as exact value, not logit)
         if self.use_view_dependent_pos:
-            lambda_view = torch.sigmoid(self._lambda_view)  # [N] -> [0, 1]
-            lambda_time = torch.sigmoid(self._lambda_time) if self.input_dim == 7 else None  # [N] -> [0, 1] or None
+            if self.use_opacity_pos_decouple:
+                # Decouple mode: use lambda directly (already 0.0, no sigmoid)
+                lambda_view = self._lambda_view  # [N], exact value
+                lambda_time = self._lambda_time if self.input_dim == 7 else None  # [N] or None, exact value
+            else:
+                # Default mode: apply sigmoid (lambda in logit space)
+                lambda_view = torch.sigmoid(self._lambda_view)  # [N] -> [0, 1]
+                lambda_time = torch.sigmoid(self._lambda_time) if self.input_dim == 7 else None  # [N] -> [0, 1] or None
         else:
             # Use identity (lambda=0) when position conditioning is disabled
             lambda_view = torch.zeros(self._xyz.shape[0], device=self._xyz.device)
@@ -597,14 +621,12 @@ class GaussianModel:
 
         # Lambda parameters for V2 (learnable conditioning strength)
         # Only used when use_view_dependent_pos is True
-        # Initialize to 0.0 in logit space -> sigmoid(0) = 0.5 (moderate conditioning)
-        # This starts with 50% blend between identity and V_22_inv
+        # Initialize to 0.0 (interpreted differently based on use_opacity_pos_decouple):
+        # - use_opacity_pos_decouple=True: 0.0 is exact value (no sigmoid) -> λ=0 (decoupled)
+        # - use_opacity_pos_decouple=False: 0.0 is logit -> sigmoid(0)=0.5 (moderate coupling)
         if self.use_view_dependent_pos:
             lambda_view = torch.zeros((num_gaussians,), device=device)
-            if self.input_dim == 7:
-                lambda_time = torch.zeros((num_gaussians,), device=device)
-            else:
-                lambda_time = torch.empty(0, device=device)
+            lambda_time = torch.zeros((num_gaussians,), device=device) if self.input_dim == 7 else torch.empty(0, device=device)
         else:
             lambda_view = torch.empty(0, device=device)
             lambda_time = torch.empty(0, device=device)
@@ -632,9 +654,10 @@ class GaussianModel:
             self._v_12_direction = nn.Parameter(v_12_direction.requires_grad_(True))
             self._v_12_scale = nn.Parameter(v_12_scale.requires_grad_(True))
             # Lambda parameters (only when position conditioning is enabled)
-            self._lambda_view = nn.Parameter(lambda_view.requires_grad_(True))
+            # Non-learnable when use_opacity_pos_decouple=True (decouple mode)
+            self._lambda_view = nn.Parameter(lambda_view.requires_grad_(not self.use_opacity_pos_decouple))
             if self.input_dim == 7:
-                self._lambda_time = nn.Parameter(lambda_time.requires_grad_(True))
+                self._lambda_time = nn.Parameter(lambda_time.requires_grad_(not self.use_opacity_pos_decouple))
 
         if self.use_beta:
             self._beta = nn.Parameter(betas.requires_grad_(True))
@@ -665,10 +688,11 @@ class GaussianModel:
         if self.use_view_dependent_pos:
             l.append({'params': [self._v_12_direction], 'lr': training_args.feature_lr, "name": "v_12_direction"})
             l.append({'params': [self._v_12_scale], 'lr': training_args.feature_lr, "name": "v_12_scale"})
-            # Lambda parameters (only when position conditioning is enabled)
-            l.append({'params': [self._lambda_view], 'lr': training_args.feature_lr, "name": "lambda_view"})
-            if self.input_dim == 7:
-                l.append({'params': [self._lambda_time], 'lr': training_args.feature_lr, "name": "lambda_time"})
+            # Lambda parameters (only when position conditioning is enabled AND not in decouple mode)
+            if not self.use_opacity_pos_decouple:
+                l.append({'params': [self._lambda_view], 'lr': training_args.feature_lr, "name": "lambda_view"})
+                if self.input_dim == 7:
+                    l.append({'params': [self._lambda_time], 'lr': training_args.feature_lr, "name": "lambda_time"})
 
         # Add beta if enabled
         if self.use_beta:
@@ -896,9 +920,10 @@ class GaussianModel:
             self._v_12_direction = nn.Parameter(torch.tensor(v_12_direction, dtype=torch.float, device="cuda").requires_grad_(True))
             self._v_12_scale = nn.Parameter(torch.tensor(v_12_scale, dtype=torch.float, device="cuda").requires_grad_(True))
             # Lambda parameters (only when position conditioning is enabled)
-            self._lambda_view = nn.Parameter(torch.tensor(lambda_view, dtype=torch.float, device="cuda").requires_grad_(True))
+            # Non-learnable when use_opacity_pos_decouple=True (decouple mode)
+            self._lambda_view = nn.Parameter(torch.tensor(lambda_view, dtype=torch.float, device="cuda").requires_grad_(not self.use_opacity_pos_decouple))
             if self.input_dim == 7:
-                self._lambda_time = nn.Parameter(torch.tensor(lambda_time, dtype=torch.float, device="cuda").requires_grad_(True))
+                self._lambda_time = nn.Parameter(torch.tensor(lambda_time, dtype=torch.float, device="cuda").requires_grad_(not self.use_opacity_pos_decouple))
 
         if self.use_beta:
             self._beta = nn.Parameter(torch.tensor(betas, dtype=torch.float, device="cuda").requires_grad_(True))
@@ -959,11 +984,17 @@ class GaussianModel:
             self._v_12_direction = optimizable_tensors["v_12_direction"]
             self._v_12_scale = optimizable_tensors["v_12_scale"]
             # Lambda parameters (only when position conditioning is enabled)
-            self._lambda_view = optimizable_tensors["lambda_view"]
+            if "lambda_view" in optimizable_tensors:
+                # Lambda is in optimizer (use_opacity_pos_decouple=False)
+                self._lambda_view = optimizable_tensors["lambda_view"]
+            else:
+                # Lambda not in optimizer (use_opacity_pos_decouple=True), prune manually
+                self._lambda_view = self._lambda_view[valid_points_mask]
+
             if "lambda_time" in optimizable_tensors:
                 self._lambda_time = optimizable_tensors["lambda_time"]
             elif self.input_dim == 7:
-                # For 6DGS -> 7DGS conversion, prune manually
+                # For 6DGS -> 7DGS conversion or decoupled mode, prune manually
                 self._lambda_time = self._lambda_time[valid_points_mask]
         if self.use_beta:
             self._beta = optimizable_tensors["beta"]
@@ -1036,11 +1067,17 @@ class GaussianModel:
             self._v_12_direction = optimizable_tensors["v_12_direction"]
             self._v_12_scale = optimizable_tensors["v_12_scale"]
             # Lambda parameters (only when position conditioning is enabled)
-            self._lambda_view = optimizable_tensors["lambda_view"]
+            if "lambda_view" in optimizable_tensors:
+                # Lambda is in optimizer (use_opacity_pos_decouple=False)
+                self._lambda_view = optimizable_tensors["lambda_view"]
+            else:
+                # Lambda not in optimizer (use_opacity_pos_decouple=True), concatenate manually
+                self._lambda_view = torch.cat([self._lambda_view, new_lambda_view], dim=0)
+
             if "lambda_time" in optimizable_tensors:
                 self._lambda_time = optimizable_tensors["lambda_time"]
             elif self.input_dim == 7:
-                # For 6DGS -> 7DGS conversion, concatenate manually
+                # For 6DGS -> 7DGS conversion or decoupled mode, concatenate manually
                 self._lambda_time = torch.cat([self._lambda_time, new_lambda_time], dim=0)
         if self.use_beta:
             self._beta = optimizable_tensors["beta"]

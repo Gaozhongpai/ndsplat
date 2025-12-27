@@ -3,11 +3,12 @@
 # Benchmark different modes on D-NeRF dynamic datasets
 #
 # Modes:
-# | Mode         | Output Dir                | Description                            |
-# |--------------|---------------------------|----------------------------------------|
-# | opacity_only | output/opacity_only/...   | Opacity conditioning only (no position)|
-# | opacity_pos  | output/opacity_pos/...    | Opacity + Position conditioning        |
-# | ndgs         | output/ndgs/...           | N-DGS with full Cholesky precision     |
+# | Mode                 | Output Dir                        | Description                            |
+# |----------------------|-----------------------------------|----------------------------------------|
+# | opacity_only         | output/opacity_only/...           | Opacity conditioning only (no position)|
+# | opacity_pos          | output/opacity_pos/...            | Opacity + Position conditioning        |
+# | opacity_pos_decouple | output/opacity_pos_decouple/...   | Decoupled position + opacity (λ=0)     |
+# | ndgs                 | output/ndgs/...                   | N-DGS with full Cholesky precision     |
 #
 # Note: Rotation conditioning is only available for dynamic scenes (C=4 with time)
 # Note: Scale is NOT view-dependent (use get_scaling directly)
@@ -94,6 +95,25 @@ for dir in "$base_dir"*/; do
     fi
 done
 
+# ============================================
+# 3. opacity_pos_decouple mode (decoupled λ=0)
+# ============================================
+echo "=============================================="
+echo "Running opacity_pos_decouple mode benchmarks"
+echo "=============================================="
+
+for dir in "$base_dir"*/; do
+    if [ -d "$dir" ]; then
+        scene_name=$(basename "${dir%/}")
+        if [[ "$scene_name" == *.zip ]]; then
+            continue
+        fi
+
+        output_dir="output/opacity_pos_decouple/dnerf/${scene_name}"
+        echo "Processing ${scene_name} with mode opacity_pos_decouple..."
+        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --use_opacity_pos_decouple True --l_22_inv_init_scale 0.02"
+    fi
+done
 
 # ============================================
 # 4. NDGS mode (full Cholesky precision)

@@ -3,11 +3,12 @@
 # Run DGS benchmarks on all datasets
 #
 # Modes:
-# | Mode         | Output Dir                | Description                            |
-# |--------------|---------------------------|----------------------------------------|
-# | opacity_only | output/opacity_only/...   | Opacity conditioning only (no position)|
-# | opacity_pos  | output/opacity_pos/...    | Opacity + Position conditioning        |
-# | ndgs         | output/ndgs/...           | N-DGS with full Cholesky precision     |
+# | Mode                 | Output Dir                        | Description                            |
+# |----------------------|-----------------------------------|----------------------------------------|
+# | opacity_only         | output/opacity_only/...           | Opacity conditioning only (no position)|
+# | opacity_pos          | output/opacity_pos/...            | Opacity + Position conditioning        |
+# | opacity_pos_decouple | output/opacity_pos_decouple/...   | Decoupled position + opacity (λ=0)     |
+# | ndgs                 | output/ndgs/...                   | N-DGS with full Cholesky precision     |
 #
 # Note: Rotation conditioning is only available for dynamic scenes (C=4 with time)
 # Note: Scale is NOT view-dependent (use get_scaling directly)
