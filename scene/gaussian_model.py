@@ -405,6 +405,214 @@ class GaussianModel:
         self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True)
         self.denom[update_filter] += 1
 
+    # ============================================================================
+    # MCMC-based densification methods (adapted from gaussian_model_dgs_full.py)
+    # ============================================================================
+
+    @property
+    def get_xyz_covariance(self):
+        """
+        Get 3x3 spatial covariance matrix for MCMC noise injection.
+
+        For standard 3DGS, we compute the spatial covariance from scaling and rotation.
+
+        Returns:
+            Spatial covariance matrix [N, 3, 3]
+        """
+        L = build_scaling_rotation(self.get_scaling, self._rotation)
+        covariance = L @ L.transpose(1, 2)
+        return covariance
+
+    def _update_params(self, idxs, ratio):
+        """Update parameters for MCMC sampling with opacity adjustment.
+
+        Args:
+            idxs: Indices of Gaussians to sample from
+            ratio: Number of times each Gaussian is sampled (for opacity adjustment)
+
+        Returns:
+            Dict of updated parameters
+        """
+        new_opacity = 1.0 - torch.pow(
+            1.0 - self.get_opacity[idxs, 0], 1.0 / (ratio + 1)
+        )
+        new_opacity = torch.clamp(
+            new_opacity.unsqueeze(-1),
+            max=1.0 - torch.finfo(torch.float32).eps,
+            min=0.005,
+        )
+        new_opacity = self.inverse_opacity_activation(new_opacity)
+
+        return {
+            'xyz': self._xyz[idxs],
+            'features_dc': self._features_dc[idxs],
+            'features_rest': self._features_rest[idxs],
+            'scaling': self._scaling[idxs],
+            'rotation': self._rotation[idxs],
+            'opacity': new_opacity,
+        }
+
+    def _sample_alives(self, probs, num, alive_indices=None):
+        """Sample from alive Gaussians with probability weighting.
+
+        Args:
+            probs: Probability weights for sampling
+            num: Number of samples to draw
+            alive_indices: Indices of alive Gaussians (optional)
+
+        Returns:
+            sampled_idxs: Indices of sampled Gaussians
+            ratio: Count of how many times each index was sampled
+        """
+        probs = probs / (probs.sum() + torch.finfo(torch.float32).eps)
+        sampled_idxs = torch.multinomial(probs, num, replacement=True)
+        if alive_indices is not None:
+            sampled_idxs = alive_indices[sampled_idxs]
+        ratio = torch.bincount(sampled_idxs)[sampled_idxs]
+        return sampled_idxs, ratio
+
+    def relocate_gs(self, dead_mask=None):
+        """Relocate dead Gaussians by sampling from alive ones (MCMC).
+
+        This method implements MCMC-style densification by relocating dead Gaussians
+        (low opacity) to positions sampled from alive Gaussians, weighted by opacity.
+
+        Args:
+            dead_mask: Boolean mask indicating dead Gaussians to relocate
+        """
+        if dead_mask is None or dead_mask.sum() == 0:
+            return
+
+        alive_mask = ~dead_mask
+        dead_indices = dead_mask.nonzero(as_tuple=True)[0]
+        alive_indices = alive_mask.nonzero(as_tuple=True)[0]
+
+        if alive_indices.shape[0] <= 0:
+            return
+
+        # Sample from alive ones based on opacity
+        probs = self.get_opacity[alive_indices, 0]
+        reinit_idx, ratio = self._sample_alives(
+            alive_indices=alive_indices, probs=probs, num=dead_indices.shape[0]
+        )
+
+        params = self._update_params(reinit_idx, ratio=ratio)
+
+        # Copy relocated parameters to dead Gaussian positions
+        self._xyz.index_copy_(0, dead_indices, params['xyz'])
+        self._features_dc.index_copy_(0, dead_indices, params['features_dc'])
+        self._features_rest.index_copy_(0, dead_indices, params['features_rest'])
+        self._scaling.index_copy_(0, dead_indices, params['scaling'])
+        self._rotation.index_copy_(0, dead_indices, params['rotation'])
+        self._opacity.index_copy_(0, dead_indices, params['opacity'])
+
+        # Update opacity at source indices
+        self._opacity.index_copy_(0, reinit_idx, self._opacity.index_select(0, dead_indices))
+
+        # Reset optimizer state for updated indices
+        self.replace_tensors_to_optimizer(inds=reinit_idx)
+
+    def add_new_gs(self, cap_max):
+        """Add new Gaussians by sampling from existing ones (MCMC).
+
+        This method implements MCMC-style densification by adding new Gaussians
+        sampled from existing ones, weighted by opacity, up to a maximum cap.
+
+        Args:
+            cap_max: Maximum number of Gaussians allowed
+
+        Returns:
+            Number of Gaussians added
+        """
+        current_num_points = self._opacity.shape[0]
+        target_num = min(cap_max, int(1.02 * current_num_points))
+        num_gs = max(0, target_num - current_num_points)
+
+        if num_gs <= 0:
+            return 0
+
+        # Sample based on opacity
+        probs = self.get_opacity.squeeze(-1)
+        add_idx, ratio = self._sample_alives(probs=probs, num=num_gs)
+
+        params = self._update_params(add_idx, ratio=ratio)
+
+        # Update opacity at source indices
+        self._opacity[add_idx] = params['opacity']
+
+        # Add new Gaussians using densification_postfix
+        self.densification_postfix(
+            params['xyz'],
+            params['features_dc'],
+            params['features_rest'],
+            params['opacity'],
+            params['scaling'],
+            params['rotation']
+        )
+
+        # Reset optimizer state for source indices
+        self.replace_tensors_to_optimizer(inds=add_idx)
+
+        return num_gs
+
+    def replace_tensors_to_optimizer(self, inds=None):
+        """Replace tensors in optimizer, optionally resetting specific indices.
+
+        Args:
+            inds: Indices to reset in optimizer state (None = reset all)
+        """
+        tensors_dict = {
+            "xyz": self._xyz,
+            "f_dc": self._features_dc,
+            "f_rest": self._features_rest,
+            "opacity": self._opacity,
+            "scaling": self._scaling,
+            "rotation": self._rotation,
+        }
+
+        optimizable_tensors = {}
+        for group in self.optimizer.param_groups:
+            if group["name"] not in tensors_dict:
+                continue
+            assert len(group["params"]) == 1
+            tensor = tensors_dict[group["name"]]
+
+            if tensor.numel() == 0:
+                optimizable_tensors[group["name"]] = group["params"][0]
+                continue
+
+            stored_state = self.optimizer.state.get(group["params"][0], None)
+
+            if stored_state is not None:
+                if inds is not None:
+                    # Reset only specified indices
+                    stored_state["exp_avg"][inds] = 0
+                    stored_state["exp_avg_sq"][inds] = 0
+                else:
+                    # Reset all
+                    stored_state["exp_avg"] = torch.zeros_like(tensor)
+                    stored_state["exp_avg_sq"] = torch.zeros_like(tensor)
+
+                del self.optimizer.state[group["params"][0]]
+                group["params"][0] = nn.Parameter(tensor.requires_grad_(True))
+                self.optimizer.state[group["params"][0]] = stored_state
+            else:
+                # No optimizer state yet, just update the parameter
+                group["params"][0] = nn.Parameter(tensor.requires_grad_(True))
+
+            optimizable_tensors[group["name"]] = group["params"][0]
+
+        self._xyz = optimizable_tensors["xyz"]
+        self._features_dc = optimizable_tensors["f_dc"]
+        self._features_rest = optimizable_tensors["f_rest"]
+        self._opacity = optimizable_tensors["opacity"]
+        self._scaling = optimizable_tensors["scaling"]
+        self._rotation = optimizable_tensors["rotation"]
+
+        torch.cuda.empty_cache()
+
+        return optimizable_tensors
+
     def render_tcgs(self, viewpoint_camera, pipe, background, scaling_modifier=1.0, override_color=None, is_test=False):
         """
         Render using standard 3DGS rasterization (diff-gaussian-rasterization).

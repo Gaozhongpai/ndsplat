@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Benchmark different modes on D-NeRF dynamic datasets
+# Benchmark different modes on Mip-NeRF 360 v2 datasets
 #
 # Modes:
 # | Mode                 | Output Dir                        | Description                            |
@@ -17,7 +17,20 @@
 
 shopt -s dotglob
 
-base_dir="/code/dataset/dnerf/"
+base_dir="/code/dataset/360_v2/"
+
+# List of all scenes in 360_v2 dataset
+SCENES=(
+    "bicycle"
+    "bonsai"
+    "counter"
+    "flowers"
+    "garden"
+    "kitchen"
+    "room"
+    "stump"
+    "treehill"
+)
 
 # Function to run experiment for a given mode and output directory
 run_experiment() {
@@ -36,26 +49,21 @@ run_experiment() {
     python train.py -s "$dir" \
         --model_path "$output_dir" \
         --mode "$mode" \
-        --mv 4 \
-        --input_dim 7 \
-        --resolution 2 \
         $extra_args \
-        --eval
+        --eval \
+        -w
 
     # Render at multiple iterations (including best)
     for iter in 7000 30000 best; do
         python render.py -m "$output_dir" \
             --skip_train \
             --iteration ${iter} \
-            --input_dim 7 \
-            --resolution 2 \
             $extra_args
     done
 
     # Compute metrics
     python metrics.py -m "$output_dir"
 }
-
 
 # ============================================
 # 1. opacity_only mode (no position shift)
@@ -64,16 +72,12 @@ echo "=============================================="
 echo "Running opacity_only mode benchmarks"
 echo "=============================================="
 
-for dir in "$base_dir"*/; do
+for scene_name in "${SCENES[@]}"; do
+    dir="${base_dir}${scene_name}"
     if [ -d "$dir" ]; then
-        scene_name=$(basename "${dir%/}")
-        if [[ "$scene_name" == *.zip ]]; then
-            continue
-        fi
-
-        output_dir="output/opacity_only/dnerf/${scene_name}"
+        output_dir="output/opacity_only/360_v2/${scene_name}"
         echo "Processing ${scene_name} with mode opacity_only..."
-        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos False --l_22_inv_init_scale 0.02"
+        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos False"
     fi
 done
 
@@ -84,16 +88,12 @@ echo "=============================================="
 echo "Running opacity_pos mode benchmarks"
 echo "=============================================="
 
-for dir in "$base_dir"*/; do
+for scene_name in "${SCENES[@]}"; do
+    dir="${base_dir}${scene_name}"
     if [ -d "$dir" ]; then
-        scene_name=$(basename "${dir%/}")
-        if [[ "$scene_name" == *.zip ]]; then
-            continue
-        fi
-
-        output_dir="output/opacity_pos/dnerf/${scene_name}"
+        output_dir="output/opacity_pos/360_v2/${scene_name}"
         echo "Processing ${scene_name} with mode opacity_pos..."
-        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --l_22_inv_init_scale 0.02"
+        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True"
     fi
 done
 
@@ -104,16 +104,12 @@ echo "=============================================="
 echo "Running opacity_pos_decouple mode benchmarks"
 echo "=============================================="
 
-for dir in "$base_dir"*/; do
+for scene_name in "${SCENES[@]}"; do
+    dir="${base_dir}${scene_name}"
     if [ -d "$dir" ]; then
-        scene_name=$(basename "${dir%/}")
-        if [[ "$scene_name" == *.zip ]]; then
-            continue
-        fi
-
-        output_dir="output/opacity_pos_decouple/dnerf/${scene_name}"
+        output_dir="output/opacity_pos_decouple/360_v2/${scene_name}"
         echo "Processing ${scene_name} with mode opacity_pos_decouple..."
-        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --use_opacity_pos_decouple True --l_22_inv_init_scale 0.02"
+        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --use_opacity_pos_decouple True"
     fi
 done
 
@@ -124,16 +120,12 @@ echo "=============================================="
 echo "Running NDGS mode benchmarks"
 echo "=============================================="
 
-for dir in "$base_dir"*/; do
+for scene_name in "${SCENES[@]}"; do
+    dir="${base_dir}${scene_name}"
     if [ -d "$dir" ]; then
-        scene_name=$(basename "${dir%/}")
-        if [[ "$scene_name" == *.zip ]]; then
-            continue
-        fi
-
-        output_dir="output/ndgs/dnerf/${scene_name}"
+        output_dir="output/ndgs/360_v2/${scene_name}"
         echo "Processing ${scene_name} with mode ndgs..."
-        run_experiment "ndgs" "$output_dir" "$dir" "--lambda_opc 0.01"
+        run_experiment "ndgs" "$output_dir" "$dir" ""
     fi
 done
 
@@ -144,16 +136,12 @@ done
 # echo "Running NDGS V2 (no position shift) mode benchmarks"
 # echo "=============================================="
 
-# for dir in "$base_dir"*/; do
+# for scene_name in "${SCENES[@]}"; do
+#     dir="${base_dir}${scene_name}"
 #     if [ -d "$dir" ]; then
-#         scene_name=$(basename "${dir%/}")
-#         if [[ "$scene_name" == *.zip ]]; then
-#             continue
-#         fi
-
-#         output_dir="output/ndgs_v2_no_pos/dnerf/${scene_name}"
+#         output_dir="output/ndgs_v2_no_pos/360_v2/${scene_name}"
 #         echo "Processing ${scene_name} with mode ndgs-v2 (no pos)..."
-#         run_experiment "ndgs-v2" "$output_dir" "$dir" "--use_rot_scale_l_triangle True --use_view_dependent_pos False --lambda_opc 0.01"
+#         run_experiment "ndgs-v2" "$output_dir" "$dir" "--use_rot_scale_l_triangle True --use_view_dependent_pos False"
 #     fi
 # done
 
@@ -164,16 +152,12 @@ done
 # echo "Running NDGS V2 (with position shift) mode benchmarks"
 # echo "=============================================="
 
-# for dir in "$base_dir"*/; do
+# for scene_name in "${SCENES[@]}"; do
+#     dir="${base_dir}${scene_name}"
 #     if [ -d "$dir" ]; then
-#         scene_name=$(basename "${dir%/}")
-#         if [[ "$scene_name" == *.zip ]]; then
-#             continue
-#         fi
-
-#         output_dir="output/ndgs_v2_with_pos/dnerf/${scene_name}"
+#         output_dir="output/ndgs_v2_with_pos/360_v2/${scene_name}"
 #         echo "Processing ${scene_name} with mode ndgs-v2 (with pos)..."
-#         run_experiment "ndgs-v2" "$output_dir" "$dir" "--use_rot_scale_l_triangle True --use_view_dependent_pos True --lambda_opc 0.01"
+#         run_experiment "ndgs-v2" "$output_dir" "$dir" "--use_rot_scale_l_triangle True --use_view_dependent_pos True"
 #     fi
 # done
 

@@ -9,6 +9,8 @@
 # | opacity_pos          | output/opacity_pos/...            | Opacity + Position conditioning        |
 # | opacity_pos_decouple | output/opacity_pos_decouple/...   | Decoupled position + opacity (λ=0)     |
 # | ndgs                 | output/ndgs/...                   | N-DGS with full Cholesky precision     |
+# | ndgs_v2_no_pos       | output/ndgs_v2_no_pos/...         | N-DGS V2: v_11 only, no position shift |
+# | ndgs_v2_with_pos     | output/ndgs_v2_with_pos/...       | N-DGS V2: v_11 only, with position shift|
 # | 3dgs                 | output/3dgs/...                   | Standard 3DGS baseline                 |
 #
 # Note: Rotation conditioning is only available for dynamic scenes (C=4 with time)
@@ -156,5 +158,47 @@ for dir in "$base_dir"*/; do
     fi
 done
 
+
+# # ============================================
+# # 6. NDGS V2 with position shift mode
+# # ============================================
+# echo "=============================================="
+# echo "Running NDGS V2 (with position shift) mode benchmarks"
+# echo "=============================================="
+
+# for dir in "$base_dir"*/; do
+#     if [ -d "$dir" ]; then
+#         clean_dir="${dir%/}"
+#         scene_name=$(basename "$clean_dir")
+#         if [[ "$scene_name" == "README.txt" ]] || [[ "$scene_name" == *.zip ]]; then
+#             continue
+#         fi
+
+#         output_dir="output/ndgs_v2_with_pos/medical_pbr/${scene_name}"
+#         echo "Processing ${scene_name} with mode ndgs-v2 (with pos)..."
+#         run_experiment "ndgs-v2" "$output_dir" "$dir" "--use_rot_scale_l_triangle True --use_view_dependent_pos True"
+#     fi
+# done
+
+# # ============================================
+# # 5. NDGS V2 no position shift mode
+# # ============================================
+# echo "=============================================="
+# echo "Running NDGS V2 (no position shift) mode benchmarks"
+# echo "=============================================="
+
+# for dir in "$base_dir"*/; do
+#     if [ -d "$dir" ]; then
+#         clean_dir="${dir%/}"
+#         scene_name=$(basename "$clean_dir")
+#         if [[ "$scene_name" == "README.txt" ]] || [[ "$scene_name" == *.zip ]]; then
+#             continue
+#         fi
+
+#         output_dir="output/ndgs_v2_no_pos/medical_pbr/${scene_name}"
+#         echo "Processing ${scene_name} with mode ndgs-v2 (no pos)..."
+#         run_experiment "ndgs-v2" "$output_dir" "$dir" "--use_rot_scale_l_triangle True --use_view_dependent_pos False"
+#     fi
+# done
 
 echo "Benchmark completed!"

@@ -9,7 +9,12 @@ def extract_metrics(base_path):
     # Get all scene directories
     scenes = [d for d in base_path.iterdir() if d.is_dir()]
 
+    # Skip if no scenes exist
+    if not scenes:
+        return [], {}, None
+
     results = []
+    means = {}
     output_lines = []
 
     # Header
@@ -74,16 +79,16 @@ def extract_metrics(base_path):
         output_lines.append("")
         output_lines.append(f"Total scenes: {len(results)}")
         output_lines.append("=" * 80)
+
+        # Save to file only if we have results
+        output_file = base_path / "metrics_summary.txt"
+        with open(output_file, 'w') as f:
+            f.write("\n".join(output_lines))
+
+        return results, means, str(output_file)
     else:
-        output_lines.append("No valid results found.")
-        output_lines.append("=" * 80)
-
-    # Save to file
-    output_file = base_path / "metrics_summary.txt"
-    with open(output_file, 'w') as f:
-        f.write("\n".join(output_lines))
-
-    return results, means, str(output_file)
+        # No valid results found - skip this dataset
+        return [], {}, None
 
 def process_all_methods_datasets(root_path):
     """Process all methods and datasets in the output directory."""
@@ -109,7 +114,7 @@ def process_all_methods_datasets(root_path):
 
             results, means, output_file = extract_metrics(dataset_dir)
 
-            if results:
+            if results and output_file:
                 print(f"    ✓ Saved summary to: {output_file}")
                 print(f"    ✓ Processed {len(results)} scenes")
 
@@ -127,7 +132,7 @@ def process_all_methods_datasets(root_path):
                 if means:
                     print(f"    ✓ Mean PSNR: {means.get('PSNR', 0):.4f} | SSIM: {means.get('SSIM', 0):.6f} | LPIPS: {means.get('LPIPS', 0):.6f}")
             else:
-                print(f"    ✗ No valid results found in {dataset_dir}")
+                print(f"    ⊘ Skipping {dataset_dir} (no results.json files found - experiments may still be running)")
 
     # Print overall summary
     print(f"\n\n{'=' * 80}")
@@ -146,7 +151,9 @@ def process_all_methods_datasets(root_path):
     for method, datasets in sorted(methods_data.items()):
         print(f"\n{method}:")
         for ds in datasets:
-            print(f"  - {ds['dataset']:20s} ({ds['num_scenes']:2d} scenes) | PSNR: {ds['means'].get('PSNR', 0):7.4f} | SSIM: {ds['means'].get('SSIM', 0):.6f} | LPIPS: {ds['means'].get('LPIPS', 0):.6f}")
+            means = ds['means']
+            train_min = means.get('Training_time', 0) / 60.0 if means.get('Training_time', 0) else 0
+            print(f"  - {ds['dataset']:20s} ({ds['num_scenes']:2d} scenes) | PSNR: {means.get('PSNR', 0):7.4f} | SSIM: {means.get('SSIM', 0):.6f} | LPIPS: {means.get('LPIPS', 0):.6f} | #G: {means.get('Number', 0):>10,.0f} | Train: {train_min:>6.1f}min | FPS: {means.get('FPS', 0):>6.1f}")
 
     print(f"\n{'=' * 80}")
     print(f"Total summaries created: {len(all_summaries)}")

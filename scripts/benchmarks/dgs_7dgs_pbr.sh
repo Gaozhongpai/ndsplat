@@ -9,6 +9,8 @@
 # | opacity_pos          | output/opacity_pos/...            | Opacity + Position conditioning        |
 # | opacity_pos_decouple | output/opacity_pos_decouple/...   | Decoupled position + opacity (λ=0)     |
 # | ndgs                 | output/ndgs/...                   | N-DGS with full Cholesky precision     |
+# | ndgs_v2_no_pos       | output/ndgs_v2_no_pos/...         | N-DGS V2: v_11 only, no position shift |
+# | ndgs_v2_with_pos     | output/ndgs_v2_with_pos/...       | N-DGS V2: v_11 only, with position shift|
 #
 # Note: Rotation conditioning is only available for dynamic scenes (C=4 with time)
 # Note: Scale is NOT view-dependent (use get_scaling directly)
@@ -69,9 +71,16 @@ for dir in "$base_dir"*/; do
             continue
         fi
 
+        # Set l_22_inv_init_scale: 2 for cloud, 0.2 for others
+        if [[ "$scene_name" == "cloud" ]]; then
+            l_22_scale=2.5
+        else
+            l_22_scale=0.4
+        fi
+
         output_dir="output/opacity_only/7dgs_pbr/${scene_name}"
-        echo "Processing ${scene_name} with mode opacity_only..."
-        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos False  --l_22_inv_init_scale 2.0"
+        echo "Processing ${scene_name} with mode opacity_only (l_22_inv_init_scale=${l_22_scale})..."
+        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos False --l_22_inv_init_scale ${l_22_scale}"
     fi
 done
 
@@ -89,9 +98,16 @@ for dir in "$base_dir"*/; do
             continue
         fi
 
+        # Set l_22_inv_init_scale: 2 for cloud, 0.2 for others
+        if [[ "$scene_name" == "cloud" ]]; then
+            l_22_scale=2.5
+        else
+            l_22_scale=0.4
+        fi
+
         output_dir="output/opacity_pos/7dgs_pbr/${scene_name}"
-        echo "Processing ${scene_name} with mode opacity_pos..."
-        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --l_22_inv_init_scale 2.0"
+        echo "Processing ${scene_name} with mode opacity_pos (l_22_inv_init_scale=${l_22_scale})..."
+        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --l_22_inv_init_scale ${l_22_scale}"
     fi
 done
 
@@ -109,9 +125,16 @@ for dir in "$base_dir"*/; do
             continue
         fi
 
+        # Set l_22_inv_init_scale: 2 for cloud, 0.2 for others
+        if [[ "$scene_name" == "cloud" ]]; then
+            l_22_scale=2.5
+        else
+            l_22_scale=0.4
+        fi
+
         output_dir="output/opacity_pos_decouple/7dgs_pbr/${scene_name}"
-        echo "Processing ${scene_name} with mode opacity_pos_decouple..."
-        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --use_opacity_pos_decouple True --l_22_inv_init_scale 2.0"
+        echo "Processing ${scene_name} with mode opacity_pos_decouple (l_22_inv_init_scale=${l_22_scale})..."
+        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --use_opacity_pos_decouple True --l_22_inv_init_scale ${l_22_scale}"
     fi
 done
 
@@ -134,4 +157,45 @@ for dir in "$base_dir"*/; do
         run_experiment "ndgs" "$output_dir" "$dir" "--lambda_opc 0.2"
     fi
 done
+
+# # ============================================
+# # 5. NDGS V2 no position shift mode
+# # ============================================
+# echo "=============================================="
+# echo "Running NDGS V2 (no position shift) mode benchmarks"
+# echo "=============================================="
+
+# for dir in "$base_dir"*/; do
+#     if [ -d "$dir" ]; then
+#         scene_name=$(basename "${dir%/}")
+#         if [[ "$scene_name" == *.zip ]]; then
+#             continue
+#         fi
+
+#         output_dir="output/ndgs_v2_no_pos/7dgs_pbr/${scene_name}"
+#         echo "Processing ${scene_name} with mode ndgs-v2 (no pos)..."
+#         run_experiment "ndgs-v2" "$output_dir" "$dir" "--use_rot_scale_l_triangle True --use_view_dependent_pos False --lambda_opc 0.2"
+#     fi
+# done
+
+# # ============================================
+# # 6. NDGS V2 with position shift mode
+# # ============================================
+# echo "=============================================="
+# echo "Running NDGS V2 (with position shift) mode benchmarks"
+# echo "=============================================="
+
+# for dir in "$base_dir"*/; do
+#     if [ -d "$dir" ]; then
+#         scene_name=$(basename "${dir%/}")
+#         if [[ "$scene_name" == *.zip ]]; then
+#             continue
+#         fi
+
+#         output_dir="output/ndgs_v2_with_pos/7dgs_pbr/${scene_name}"
+#         echo "Processing ${scene_name} with mode ndgs-v2 (with pos)..."
+#         run_experiment "ndgs-v2" "$output_dir" "$dir" "--use_rot_scale_l_triangle True --use_view_dependent_pos True --lambda_opc 0.2"
+#     fi
+# done
+
 echo "Benchmark completed!"
