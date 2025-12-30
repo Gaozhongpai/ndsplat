@@ -9,6 +9,7 @@
 # | opacity_pos          | output/opacity_pos/...            | Opacity + Position conditioning        |
 # | opacity_pos_decouple | output/opacity_pos_decouple/...   | Decoupled position + opacity (λ=0)     |
 # | ndgs                 | output/ndgs/...                   | N-DGS with full Cholesky precision     |
+# | ubs                  | output/ubs/...                    | Unbounded Splatting baseline           |
 # | ndgs_v2_no_pos       | output/ndgs_v2_no_pos/...         | N-DGS V2: v_11 only, no position shift |
 # | ndgs_v2_with_pos     | output/ndgs_v2_with_pos/...       | N-DGS V2: v_11 only, with position shift|
 # | 3dgs                 | output/3dgs/...                   | Standard 3DGS baseline                 |
@@ -68,7 +69,7 @@ for dir in "$base_dir"*/; do
             continue
         fi
 
-        output_dir="output/3dgs/medical_pbr/${scene_name}"
+        output_dir="output/standard/3dgs/medical_pbr/${scene_name}"
         echo "Processing ${scene_name} with mode 3dgs..."
         run_experiment "3dgs" "$output_dir" "$dir" ""
     fi
@@ -89,7 +90,7 @@ for dir in "$base_dir"*/; do
             continue
         fi
 
-        output_dir="output/opacity_only/medical_pbr/${scene_name}"
+        output_dir="output/standard/opacity_only/medical_pbr/${scene_name}"
         echo "Processing ${scene_name} with mode opacity_only..."
         run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos False"
     fi
@@ -110,7 +111,7 @@ for dir in "$base_dir"*/; do
             continue
         fi
 
-        output_dir="output/opacity_pos/medical_pbr/${scene_name}"
+        output_dir="output/standard/opacity_pos/medical_pbr/${scene_name}"
         echo "Processing ${scene_name} with mode opacity_pos..."
         run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True"
     fi
@@ -131,7 +132,7 @@ for dir in "$base_dir"*/; do
             continue
         fi
 
-        output_dir="output/opacity_pos_decouple/medical_pbr/${scene_name}"
+        output_dir="output/standard/opacity_pos_decouple/medical_pbr/${scene_name}"
         echo "Processing ${scene_name} with mode opacity_pos_decouple..."
         run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --use_opacity_pos_decouple True"
     fi
@@ -152,9 +153,30 @@ for dir in "$base_dir"*/; do
             continue
         fi
 
-        output_dir="output/ndgs/medical_pbr/${scene_name}"
+        output_dir="output/standard/ndgs/medical_pbr/${scene_name}"
         echo "Processing ${scene_name} with mode ndgs..."
         run_experiment "ndgs" "$output_dir" "$dir" ""
+    fi
+done
+
+# ============================================
+# 5. UBS mode (unbounded splatting baseline)
+# ============================================
+echo "=============================================="
+echo "Running UBS mode benchmarks"
+echo "=============================================="
+
+for dir in "$base_dir"*/; do
+    if [ -d "$dir" ]; then
+        clean_dir="${dir%/}"
+        scene_name=$(basename "$clean_dir")
+        if [[ "$scene_name" == "README.txt" ]] || [[ "$scene_name" == *.zip ]]; then
+            continue
+        fi
+
+        output_dir="output/standard/ubs/medical_pbr/${scene_name}"
+        echo "Processing ${scene_name} with mode ubs..."
+        run_experiment "ubs" "$output_dir" "$dir" ""
     fi
 done
 

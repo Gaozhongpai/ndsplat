@@ -5,12 +5,12 @@
 # Modes:
 # | Mode                 | Output Dir                        | Description                            |
 # |----------------------|-----------------------------------|----------------------------------------|
-# | opacity_only         | output/opacity_only/...           | Opacity conditioning only (no position)|
-# | opacity_pos          | output/opacity_pos/...            | Opacity + Position conditioning        |
-# | opacity_pos_decouple | output/opacity_pos_decouple/...   | Decoupled position + opacity (λ=0)     |
-# | ndgs                 | output/ndgs/...                   | N-DGS with full Cholesky precision     |
-# | ndgs_v2_no_pos       | output/ndgs_v2_no_pos/...         | N-DGS V2: v_11 only, no position shift |
-# | ndgs_v2_with_pos     | output/ndgs_v2_with_pos/...       | N-DGS V2: v_11 only, with position shift|
+# | opacity_only         | output/standard/opacity_only/...           | Opacity conditioning only (no position)|
+# | opacity_pos          | output/standard/opacity_pos/...            | Opacity + Position conditioning        |
+# | opacity_pos_decouple | output/standard/opacity_pos_decouple/...   | Decoupled position + opacity (λ=0)     |
+# | ndgs                 | output/standard/ndgs/...                   | N-DGS with full Cholesky precision     |
+# | ndgs_v2_no_pos       | output/standard/ndgs_v2_no_pos/...         | N-DGS V2: v_11 only, no position shift |
+# | ndgs_v2_with_pos     | output/standard/ndgs_v2_with_pos/...       | N-DGS V2: v_11 only, with position shift|
 #
 # Note: Rotation conditioning is only available for dynamic scenes (C=4 with time)
 # Note: Scale is NOT view-dependent (use get_scaling directly)
@@ -75,7 +75,7 @@ echo "=============================================="
 for scene_name in "${SCENES[@]}"; do
     dir="${base_dir}${scene_name}"
     if [ -d "$dir" ]; then
-        output_dir="output/opacity_only/360_v2/${scene_name}"
+        output_dir="output/standard/opacity_only/360_v2/${scene_name}"
         echo "Processing ${scene_name} with mode opacity_only..."
         run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos False"
     fi
@@ -91,7 +91,7 @@ echo "=============================================="
 for scene_name in "${SCENES[@]}"; do
     dir="${base_dir}${scene_name}"
     if [ -d "$dir" ]; then
-        output_dir="output/opacity_pos/360_v2/${scene_name}"
+        output_dir="output/standard/opacity_pos/360_v2/${scene_name}"
         echo "Processing ${scene_name} with mode opacity_pos..."
         run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True"
     fi
@@ -107,7 +107,7 @@ echo "=============================================="
 for scene_name in "${SCENES[@]}"; do
     dir="${base_dir}${scene_name}"
     if [ -d "$dir" ]; then
-        output_dir="output/opacity_pos_decouple/360_v2/${scene_name}"
+        output_dir="output/standard/opacity_pos_decouple/360_v2/${scene_name}"
         echo "Processing ${scene_name} with mode opacity_pos_decouple..."
         run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --use_opacity_pos_decouple True"
     fi
@@ -123,7 +123,7 @@ echo "=============================================="
 for scene_name in "${SCENES[@]}"; do
     dir="${base_dir}${scene_name}"
     if [ -d "$dir" ]; then
-        output_dir="output/ndgs/360_v2/${scene_name}"
+        output_dir="output/standard/ndgs/360_v2/${scene_name}"
         echo "Processing ${scene_name} with mode ndgs..."
         run_experiment "ndgs" "$output_dir" "$dir" ""
     fi
@@ -139,7 +139,7 @@ done
 # for scene_name in "${SCENES[@]}"; do
 #     dir="${base_dir}${scene_name}"
 #     if [ -d "$dir" ]; then
-#         output_dir="output/ndgs_v2_no_pos/360_v2/${scene_name}"
+#         output_dir="output/standard/ndgs_v2_no_pos/360_v2/${scene_name}"
 #         echo "Processing ${scene_name} with mode ndgs-v2 (no pos)..."
 #         run_experiment "ndgs-v2" "$output_dir" "$dir" "--use_rot_scale_l_triangle True --use_view_dependent_pos False"
 #     fi
@@ -155,7 +155,7 @@ done
 # for scene_name in "${SCENES[@]}"; do
 #     dir="${base_dir}${scene_name}"
 #     if [ -d "$dir" ]; then
-#         output_dir="output/ndgs_v2_with_pos/360_v2/${scene_name}"
+#         output_dir="output/standard/ndgs_v2_with_pos/360_v2/${scene_name}"
 #         echo "Processing ${scene_name} with mode ndgs-v2 (with pos)..."
 #         run_experiment "ndgs-v2" "$output_dir" "$dir" "--use_rot_scale_l_triangle True --use_view_dependent_pos True"
 #     fi

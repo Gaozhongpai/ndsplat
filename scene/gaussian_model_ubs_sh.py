@@ -1106,7 +1106,7 @@ class GaussianModel:
                 query = torch.cat([view_dir, timestamp], dim=-1)
             else:
                 raise NotImplementedError("Only implemented for 6D or 7D query")
-            means, convs, opacities = self.get_cond_mean_convariance_opacity(query)
+            means, convs, opacities = self.get_cond_mean_covariance_opacity_cholesky(query)
         else:
             means = self.get_mean
             convs = self.get_covariance
@@ -1178,7 +1178,7 @@ class GaussianModel:
                 query = torch.cat([view_dir, timestamp], dim=-1)
             else:
                 raise NotImplementedError("Only implemented for 6D or 7D query")
-            means, convs, opacities = self.get_cond_mean_convariance_opacity(query)
+            means, convs, opacities = self.get_cond_mean_covariance_opacity_cholesky(query)
         else:
             means = self.get_mean
             convs = self.get_covariance
@@ -1342,7 +1342,7 @@ class GaussianModel:
                 query = torch.cat([view_dir, timestamp], dim=-1)
             else:
                 raise NotImplementedError("Only implemented for 6D or 7D query")
-            means, convs, opacities = self.get_cond_mean_convariance_opacity(query)
+            means, convs, opacities = self.get_cond_mean_covariance_opacity_cholesky(query)
         else:
             means = self.get_mean
             convs = self.get_covariance

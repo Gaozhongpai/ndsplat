@@ -5,12 +5,12 @@
 # Modes:
 # | Mode                 | Output Dir                        | Description                            |
 # |----------------------|-----------------------------------|----------------------------------------|
-# | opacity_only         | output/opacity_only/...           | Opacity conditioning only (no position)|
-# | opacity_pos          | output/opacity_pos/...            | Opacity + Position conditioning        |
-# | opacity_pos_decouple | output/opacity_pos_decouple/...   | Decoupled position + opacity (λ=0)     |
-# | ndgs                 | output/ndgs/...                   | N-DGS with full Cholesky precision     |
-# | ndgs_v2_no_pos       | output/ndgs_v2_no_pos/...         | N-DGS V2: v_11 only, no position shift |
-# | ndgs_v2_with_pos     | output/ndgs_v2_with_pos/...       | N-DGS V2: v_11 only, with position shift|
+# | opacity_only         | output/standard/opacity_only/...           | Opacity conditioning only (no position)|
+# | opacity_pos          | output/standard/opacity_pos/...            | Opacity + Position conditioning        |
+# | opacity_pos_decouple | output/standard/opacity_pos_decouple/...   | Decoupled position + opacity (λ=0)     |
+# | ndgs                 | output/standard/ndgs/...                   | N-DGS with full Cholesky precision     |
+# | ndgs_v2_no_pos       | output/standard/ndgs_v2_no_pos/...         | N-DGS V2: v_11 only, no position shift |
+# | ndgs_v2_with_pos     | output/standard/ndgs_v2_with_pos/...       | N-DGS V2: v_11 only, with position shift|
 #
 # Note: Rotation conditioning is only available for dynamic scenes (C=4 with time)
 # Note: Scale is NOT view-dependent (use get_scaling directly)
@@ -71,7 +71,7 @@ for dir in "$base_dir"*/; do
             continue
         fi
 
-        output_dir="output/opacity_only/dnerf/${scene_name}"
+        output_dir="output/standard/opacity_only/dnerf/${scene_name}"
         echo "Processing ${scene_name} with mode opacity_only..."
         run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos False --l_22_inv_init_scale 0.02"
     fi
@@ -91,7 +91,7 @@ for dir in "$base_dir"*/; do
             continue
         fi
 
-        output_dir="output/opacity_pos/dnerf/${scene_name}"
+        output_dir="output/standard/opacity_pos/dnerf/${scene_name}"
         echo "Processing ${scene_name} with mode opacity_pos..."
         run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --l_22_inv_init_scale 0.02"
     fi
@@ -111,7 +111,7 @@ for dir in "$base_dir"*/; do
             continue
         fi
 
-        output_dir="output/opacity_pos_decouple/dnerf/${scene_name}"
+        output_dir="output/standard/opacity_pos_decouple/dnerf/${scene_name}"
         echo "Processing ${scene_name} with mode opacity_pos_decouple..."
         run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --use_opacity_pos_decouple True --l_22_inv_init_scale 0.02"
     fi
@@ -131,7 +131,7 @@ for dir in "$base_dir"*/; do
             continue
         fi
 
-        output_dir="output/ndgs/dnerf/${scene_name}"
+        output_dir="output/standard/ndgs/dnerf/${scene_name}"
         echo "Processing ${scene_name} with mode ndgs..."
         run_experiment "ndgs" "$output_dir" "$dir" "--lambda_opc 0.01"
     fi
@@ -151,7 +151,7 @@ done
 #             continue
 #         fi
 
-#         output_dir="output/ndgs_v2_no_pos/dnerf/${scene_name}"
+#         output_dir="output/standard/ndgs_v2_no_pos/dnerf/${scene_name}"
 #         echo "Processing ${scene_name} with mode ndgs-v2 (no pos)..."
 #         run_experiment "ndgs-v2" "$output_dir" "$dir" "--use_rot_scale_l_triangle True --use_view_dependent_pos False --lambda_opc 0.01"
 #     fi
@@ -171,7 +171,7 @@ done
 #             continue
 #         fi
 
-#         output_dir="output/ndgs_v2_with_pos/dnerf/${scene_name}"
+#         output_dir="output/standard/ndgs_v2_with_pos/dnerf/${scene_name}"
 #         echo "Processing ${scene_name} with mode ndgs-v2 (with pos)..."
 #         run_experiment "ndgs-v2" "$output_dir" "$dir" "--use_rot_scale_l_triangle True --use_view_dependent_pos True --lambda_opc 0.01"
 #     fi
