@@ -162,7 +162,7 @@ def process_all_methods_datasets(root_path):
     return all_summaries
 
 if __name__ == "__main__":
-    output_root = "/code/workspace/6dgs-iclr/output"
+    output_root = "/code/workspace/6dgs-iclr/output/standard"
 
     print(f"Starting metrics extraction from: {output_root}\n")
     summaries = process_all_methods_datasets(output_root)

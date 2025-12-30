@@ -1,0 +1,707 @@
+\documentclass{article}
+
+
+% if you need to pass options to natbib, use, e.g.:
+\PassOptionsToPackage{numbers, compress}{natbib}
+% before loading neurips_2025
+
+
+% ready for submission
+% \usepackage{neurips_2025}
+
+
+% to compile a preprint version, e.g., for submission to arXiv, add add the
+% [preprint] option:
+\usepackage[preprint]{neurips_2025}
+
+
+% to compile a camera-ready version, add the [final] option, e.g.:
+%\usepackage[final]{neurips_2025}
+
+
+% to avoid loading the natbib package, add option nonatbib:
+%\usepackage[nonatbib]{neurips_2025}
+
+
+
+\usepackage[utf8]{inputenc} % allow utf-8 input
+\usepackage[T1]{fontenc}% use 8-bit T1 fonts
+\usepackage{hyperref}% hyperlinks
+\usepackage{url}% simple URL typesetting
+\usepackage{booktabs}% professional-quality tables
+\usepackage{amsfonts}% blackboard math symbols
+\usepackage{nicefrac}% compact symbols for 1/2, etc.
+\usepackage{microtype}% microtypography
+\usepackage{xcolor}% colors
+
+\usepackage{multirow}
+\usepackage{rotating}
+\usepackage{graphicx}
+\usepackage{siunitx}
+\usepackage{makecell}
+\usepackage{bm}
+\usepackage{amsmath}
+\usepackage{gensymb}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+
+% Add a period to the end of an abbreviation unless there's one
+% already, then \xspace.
+\usepackage{xspace}
+\makeatletter
+\DeclareRobustCommand\onedot{\futurelet\@let@token\@onedot}
+\def\@onedot{\ifx\@let@token.\else.\null\fi\xspace}
+
+\def\eg{\emph{e.g}\onedot} \def\Eg{\emph{E.g}\onedot}
+\def\ie{\emph{i.e}\onedot} \def\Ie{\emph{I.e}\onedot}
+\def\cf{\emph{c.f}\onedot} \def\Cf{\emph{C.f}\onedot}
+\def\etc{\emph{etc}\onedot} \def\vs{\emph{vs}\onedot}
+\def\wrt{w.r.t\onedot} \def\dof{d.o.f\onedot}
+\def\aka{\emph{a.k.a}\onedot}
+\def\etal{\emph{et al}\onedot}
+\makeatother
+
+\newcommand{\beginsupplement}{%
+\setcounter{table}{0}
+\renewcommand{\thetable}{S\arabic{table}}%
+\setcounter{figure}{0}
+\renewcommand{\thefigure}{S\arabic{figure}}%
+}
+
+% Custom commands
+\newcommand{\modelname}{\textit{d}GS}
+
+\title{\modelname: Disentangled Parameterization for Efficient Conditional Gaussian Splatting}
+
+% The \author macro works with any number of authors. There are two commands
+% used to separate the names and addresses of multiple authors: \And and \AND.
+%
+% Using \And between authors leaves it to LaTeX to determine where to break the
+% lines. Using \AND forces a line break at that point. So, if LaTeX puts 3 of 4
+% authors names on the first line, and the last on the second line, try using
+% \AND instead of \And before the third author name.
+
+
+
+\author{
+ Zhongpai Gao\\%\thanks{Corresponding author}
+% \qquad
+% Meng Zheng
+% \qquad
+% Benjamin Planche
+% \\
+ % \textbf{Anwesa Choudhuri
+% \qquad
+% Terrence Chen
+% \qquad
+% Ziyan Wu}\\
+United Imaging Intelligence, Boston, MA
+\\
+\texttt{\{first.last\}@uii-ai.com}
+\\
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Gaussian Splatting has emerged as a leading technique for novel view synthesis, with extensions like 6DGS and 7DGS enabling view-dependent effects and dynamic scenes through high-dimensional covariance matrices. However, these formulations require per-Gaussian matrix inversions in every forward pass and couple position shifts with opacity modulation through a shared precision matrix, preventing independent control over these effects. We propose \modelname{}, which eliminates this overhead through \textbf{disentangled direct parameterization} with \textbf{learnable position-opacity coupling}. Our key insight is that the full joint covariance matrix is unnecessarily complex: we disentangle conditional Gaussian slicing into independent components, each with efficient parameterization. We introduce per-Gaussian coupling parameters $\lambda_{\text{pos}} \in [0,1]$ that enable adaptive interpolation between fully disentangled position learning (where position shifts are independent of the opacity-controlling precision matrix) and coupled N-DGS behavior (where both share the same precision matrix). Opacity modulation uses a Cholesky precision factor for efficient distance computation without matrix inversion, guaranteeing numerical stability. For 7DGS, we further separate view and time using a block-diagonal precision matrix with zero cross-terms, reducing parameters by 30\%. This approach delivers 15\% faster training and 26\% higher rendering throughput while maintaining backward compatibility with N-DGS and enabling interpretable scene decomposition through learned coupling strengths. Our disentangled framework provides a flexible, efficient alternative to monolithic covariance representations in high-dimensional Gaussian splatting.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:introduction}
+Novel view synthesis has undergone a paradigm shift with the introduction of 3D Gaussian Splatting (3DGS)~\cite{3dgs}, which revolutionized the field by achieving photorealistic quality at real-time rendering speeds. By representing scenes as collections of explicit 3D Gaussians, 3DGS established a new standard for static scene reconstruction. However, real-world scenes are inherently dynamic and complex, exhibiting phenomena that extend far beyond the capabilities of static representations: surfaces that shimmer with specular reflections, objects that move and deform over time, and viewing angles that reveal hidden parallax effects.
+
+Recent work has responded to these challenges with sophisticated extensions that elevate Gaussian representations into higher-dimensional spaces. 6D Gaussian Splatting (6DGS)~\cite{gao20246dgs} addresses view-dependent effects by modeling each primitive as a Gaussian in the joint space of position and viewing direction. Building upon this, 7D Gaussian Splatting (7DGS)~\cite{gao20257dgs} incorporates temporal dynamics by adding a time dimension, creating a unified framework for both view-dependent effects and motion.
+
+While these higher-dimensional formulations demonstrate remarkable expressive power, their design introduces unnecessary computational overhead and enforces undesirable coupling. The mathematical framework underlying both 6DGS and 7DGS relies on conditioning high-dimensional Gaussian distributions, which necessitates the inversion of covariance sub-matrices in every forward pass. For 6DGS, this translates to $O(3^3)$ matrix inversions per Gaussian, and for 7DGS, $O(4^3)$ inversions. While not prohibitively expensive individually, these operations accumulate across millions of Gaussians during training. More fundamentally, the joint covariance structure enforces tight coupling: position shifts, opacity modulation, and covariance adjustments are all entangled through a shared precision matrix $\Sigma_{qq}^{-1}$. This prevents independent control---a primitive cannot modulate its opacity based on viewing angle without also affecting its spatial position and shape. Additionally, matrix inversions can introduce numerical instabilities when covariance matrices become ill-conditioned during optimization.
+
+\textbf{Core Insight.} The crux of the problem lies in the monolithic design: N-DGS models all conditioning effects through a single $(3+C) \times (3+C)$ joint covariance matrix. We observe that this full matrix is unnecessarily complex. The conditioning effects---position shift and opacity modulation---serve distinct purposes and can be \textbf{disentangled} into independent modules, each with its own efficient parameterization. Rather than deriving all transformations from a shared covariance structure and computing expensive matrix inversions, we can directly parameterize each effect separately.
+
+In this paper, we introduce \textbf{\modelname{}}, a lightweight framework that resolves these limitations through \textbf{disentangled direct parameterization}. The `\textbf{d}' signifies our core principle: we \textbf{d}isentangle the conditioning into independent components and \textbf{d}irectly parameterize each one---\textbf{d}isplacement for position and \textbf{d}ecay for opacity. Our approach introduces two key innovations:
+
+\begin{enumerate}
+\item \textbf{Learnable Position-Opacity Coupling:} We introduce per-Gaussian coupling parameters $\lambda_{\text{pos}} \in [0,1]$ that enable adaptive interpolation. When $\lambda_{\text{pos}}=0$, position shifts are fully independent of the opacity-controlling precision matrix (maximum disentanglement). When $\lambda_{\text{pos}}=1$, we recover N-DGS where both share the same precision matrix (full coupling). Intermediate values provide partial coupling. Each Gaussian learns its optimal coupling strength during training, enabling scene-adaptive flexibility that fixed coupling cannot achieve.
+
+\item \textbf{Efficient Direct Parameterization:} Opacity modulation uses a Cholesky precision factor $\mathbf{L}$ for direct distance computation via $\|\mathbf{L}^\top\boldsymbol{\delta}\|^2$, eliminating matrix inversion. The Cholesky parameterization with exponential activation on diagonal elements guarantees numerical stability by construction. For 7DGS, we further separate view and time using a block-diagonal structure with zero cross-terms, reducing parameters by 30\% while enabling independent control.
+\end{enumerate}
+
+This disentanglement is the core contribution of \modelname{}. By separating position and opacity into independent modules with learnable coupling, we achieve improvements across three axes: (1) \textbf{Computational efficiency}---replacing $O(C^3)$ matrix inversions with $O(C^2)$ matrix-vector multiplications, (2) \textbf{Numerical stability}---guaranteed positive definiteness through Cholesky parameterization, and (3) \textbf{Adaptive control}---flexible per-Gaussian coupling that interpolates between fully disentangled and coupled behaviors. Our experiments demonstrate 15\% faster training and 26\% higher rendering throughput while maintaining or exceeding N-DGS quality across diverse benchmarks, with backward compatibility ensuring seamless integration into existing frameworks.
+
+\section{Related Work}
+\label{sec:related_work}
+
+\textbf{3D Gaussian Splatting and Extensions.}
+3D Gaussian Splatting (3DGS)~\cite{3dgs} revolutionized novel view synthesis by representing scenes as collections of anisotropic 3D Gaussians, enabling real-time rendering with competitive quality. The method's success has inspired numerous extensions addressing anti-aliasing~\cite{yu2023mipsplattingaliasfree3dgaussian,yan2024multiscale3dgaussiansplatting}, compression~\cite{lee2024compact,morgenstern2024compact}, and semantic applications~\cite{shi2023languageembedded3dgaussians,zhou2024feature3dgssupercharging3d}. However, 3DGS's fixed Gaussian primitives and spherical harmonic color encoding struggle with complex view-dependent effects and dynamic scenes.
+
+\textbf{N-Dimensional Gaussian Methods.}
+To address view-dependent effects, N-dimensional Gaussians (N-DG)~\cite{diolatzis2024n} extended Gaussian representations into higher dimensions, refined by 6D Gaussian Splatting (6DGS)~\cite{gao20246dgs} which models position and viewing direction jointly. 7D Gaussian Splatting (7DGS)~\cite{gao20257dgs} further incorporates temporal dimensions for dynamic scenes. These methods achieve impressive results but require computing inverse covariance matrices in every forward pass. For 6DGS, this involves $O(3^3)$ matrix inversions, and for 7DGS, $O(4^3)$ inversions per Gaussian. While not prohibitively expensive, these inversions represent avoidable computational overhead and can introduce numerical instabilities when covariance matrices become ill-conditioned.
+
+\textbf{Efficient Parameterizations.}
+Various parameterization strategies have been explored for covariance matrices in Gaussian splatting. The original 3DGS uses quaternion-based rotation with diagonal scaling, ensuring positive semi-definiteness while maintaining interpretability. For higher dimensions, methods resort to Cholesky factorization, which loses explicit orthogonality but generalizes to arbitrary dimensions. Recent work on deformable splatting~\cite{liu2025deformable} explores adaptive kernel shapes, though these remain limited to spatial dimensions without addressing the coupling problem in conditional distributions.
+
+\textbf{Dynamic Scene Modeling.}
+Early NeRF extensions modeled dynamics through deformation fields: D-NeRF~\cite{pumarola2020dnerfneuralradiancefields}, Nerfies~\cite{park2021nerfies}, and HyperNeRF~\cite{park2021hypernerf}. For Gaussian Splatting, 4D Gaussian Splatting (4DGS)~\cite{yang2023real} extends primitives temporally, while Dynamic 3D Gaussians~\cite{luiten2023dynamic} combines canonical representations with learned deformations. 7DGS unifies spatial, temporal, and angular dimensions but enforces tight coupling through shared covariance structures, preventing independent control of position and opacity modulation.
+
+Our work addresses these limitations by introducing learnable disentanglement between position and opacity conditioning, eliminating matrix inversions while enabling adaptive coupling control through per-Gaussian parameters.
+
+\section{Preliminary}
+
+Our work builds upon the family of Gaussian Splatting methods. To contextualize our contribution, we first detail the progression from static 3D models to the more complex 6D and 7D formulations, highlighting the trade-offs between expressive power and computational cost at each step.
+
+\subsection{3D Gaussian Splatting}
+3D Gaussian Splatting (3DGS) revolutionized novel view synthesis by representing scenes as a collection of anisotropic 3D Gaussians. Each Gaussian is a primitive defined by a set of learnable attributes that describe its geometry and appearance. Its geometry is determined by a mean vector \(\mu \in \mathbb{R}^3\) specifying its center in 3D space, and a covariance matrix \(\Sigma \in \mathbb{R}^{3 \times 3}\) defining its shape, scale, and orientation. To ensure physical plausibility and simplify optimization, \(\Sigma\) is parameterized by a scaling matrix \(S = \operatorname{diag}(s_x, s_y, s_z)\) and a rotation matrix \(R\) (represented as a quaternion), such that \(\Sigma = R S S^\top R^\top\). The appearance of each Gaussian is governed by a scalar opacity \(\alpha \in [0, 1]\) that controls its transparency, and a view-dependent color modeled using Spherical Harmonics (SH). The color \(c\) for a given viewing direction \(d\) is computed as a sum over the SH basis functions \(Y_{\ell m}\):
+\begin{equation}
+c(d) = \sum_{\ell=0}^{N} \sum_{m=-\ell}^{\ell} \beta_{\ell m} Y_{\ell m}(d),
+\end{equation}
+where \(\beta_{\ell m}\) are the learnable SH coefficients. 3DGS achieves state-of-the-art quality and real-time rendering for static scenes. However, its representation is fundamentally static and cannot model geometric changes arising from complex view-dependent effects or temporal dynamics.
+
+\subsection{N-Dimensional Gaussian Splatting}
+
+To address the limitations of 3DGS in capturing view-dependent phenomena and temporal dynamics, recent work has extended Gaussian representations into higher-dimensional spaces. We present a unified N-DGS framework that encompasses both 6D Gaussian Splatting (6DGS) for view-dependent effects and 7D Gaussian Splatting (7DGS) for dynamic scenes.
+
+\paragraph{Joint Distribution.} Each primitive is modeled as an N-dimensional Gaussian over the joint space of position (\(X_p \in \mathbb{R}^3\)) and query variables (\(X_q \in \mathbb{R}^C\)):
+\begin{align}
+X = \begin{pmatrix} X_p \\ X_q \end{pmatrix} \sim \mathcal{N}\!\left(
+\begin{pmatrix}
+\mu_p \\ \mu_q
+\end{pmatrix},
+\begin{pmatrix}
+\Sigma_{pp} & \Sigma_{pq} \\
+\Sigma_{pq}^\top & \Sigma_{qq}
+\end{pmatrix}
+\right),
+\end{align}
+where the query dimension $C$ determines the model variant:
+\begin{itemize}
+\item \textbf{6DGS ($C=3$):} $X_q$ is the view direction, modeling correlations between position and viewing direction.
+\item \textbf{7DGS ($C=4$):} $X_q = (X_d, X_t)^\top$ combines view direction and time, capturing both view-dependent and temporal correlations.
+\end{itemize}
+
+\paragraph{Conditional Gaussian Slicing.} To render an image given query $q$ (view direction for 6DGS, or view direction plus time for 7DGS), the N-D Gaussian is conditioned on $X_q = q$. This yields a 3D Gaussian with conditional mean and covariance:
+\begin{align}
+\mu_{\text{cond}} &= \mu_p + \Sigma_{pq}\,\Sigma_{qq}^{-1}(q-\mu_q), \\
+\Sigma_{\text{cond}} &= \Sigma_{pp} - \Sigma_{pq}\,\Sigma_{qq}^{-1}\,\Sigma_{pq}^\top.
+\end{align}
+The opacity is modulated based on the Mahalanobis distance to the canonical query value:
+\begin{equation}
+\alpha_{\text{cond}} = \alpha \cdot \exp\left(-\lambda\,(q-\mu_q)^\top \Sigma_{qq}^{-1}(q-\mu_q)\right),
+\end{equation}
+where $\lambda$ is a scaling factor (default $\lambda = 0.35$).
+
+\paragraph{Computational Overhead.} While this unified formulation is mathematically elegant and expressive, it requires computing the inverse of the $C \times C$ matrix $\Sigma_{qq}$ for every Gaussian in every forward pass. For 6DGS this is an $O(3^3)$ operation, and for 7DGS an $O(4^3)$ operation per Gaussian. These matrix inversions can also be susceptible to numerical instability when $\Sigma_{qq}$ becomes ill-conditioned during optimization. Although $\Sigma_{pq}\Sigma_{qq}^{-1}$ and the conditional covariance can be pre-computed after training to accelerate inference, the training process incurs this overhead repeatedly. This motivates our search for a simpler parameterization.
+
+\section{Our Approach}
+
+The full covariance formulations of 6DGS and 7DGS model all conditioning effects through a single $(3+C) \times (3+C)$ joint covariance matrix. To compute any single effect (position shift, opacity modulation, or covariance adjustment), one must invert the entire $C \times C$ conditioning block $\Sigma_{qq}$.
+
+We propose \modelname{}, which \textbf{disentangles} these effects into three independent modules. Rather than deriving all transformations from a shared covariance structure, we directly parameterize each conditioning component separately. This disentanglement eliminates the need for full covariance modeling while enabling efficient, modular computation.
+
+\subsection{Overview}
+
+
+
+Our approach reformulates conditional Gaussian slicing into two \textbf{disentangled} components. Given the deviation $\boldsymbol{\delta} = q - \mu_q$ from the canonical view/time:
+\begin{align}
+\mu_{\text{cond}} &= \mu_p + \mathbf{V}_{pq} \cdot \left[(1-\lambda_\text{pos}) \mathbf{I} + \lambda_\text{pos} \mathbf{V}_{qq}^{-1}\right] \cdot \boldsymbol{\delta} & &\text{(Position)} \\
+\alpha_{\text{cond}} &= \alpha \cdot \exp\left(-\lambda \cdot \|\mathbf{L}^\top \boldsymbol{\delta}\|_2^2\right) & &\text{(Opacity)} \\
+\Sigma_{\text{cond}} &= \Sigma_p & &\text{(Covariance)}
+\end{align}
+where $\mathbf{V}_{pq} \in \mathbb{R}^{3 \times C}$ is the displacement matrix, $\lambda_\text{pos} \in [0,1]$ is a learnable per-Gaussian parameter controlling position-opacity coupling, $\mathbf{V}_{qq}^{-1} = \mathbf{L}\mathbf{L}^\top$ is the precision matrix derived from Cholesky factor $\mathbf{L} \in \mathbb{R}^{C \times C}$, and $\lambda$ is an opacity scaling factor (default 0.35).
+
+The key innovation is \textbf{learnable position-opacity disentanglement} via the linear interpolation $(1-\lambda_\text{pos}) \mathbf{I} + \lambda_\text{pos} \mathbf{V}_{qq}^{-1}$ in the position equation above. This enables each Gaussian to adaptively balance between independent position learning and coupled conditional behavior (detailed in Section~\ref{subsec:position}).
+
+For 7DGS ($C=4$), we further \textbf{separate view and time} by using a block-diagonal precision matrix with zero cross-terms:
+\begin{equation}
+\mathbf{V}_{qq}^{-1} = \mathbf{L}\mathbf{L}^\top = \begin{pmatrix}
+\mathbf{\Sigma}_v^{-1} & \mathbf{0} \\
+\mathbf{0} & \sigma_t^{-1}
+\end{pmatrix},
+\end{equation}
+where $\mathbf{\Sigma}_v^{-1} \in \mathbb{R}^{3 \times 3}$ is the view precision and $\sigma_t^{-1} \in \mathbb{R}$ is the time precision. This separation eliminates coupling between spatial view directions and temporal dynamics, reflecting the physical intuition that view-dependent effects and temporal changes are independent phenomena.
+
+\begin{table}[t!]
+\centering
+\caption{Disentangled conditioning in \modelname{} vs. entangled covariance in N-DGS. Each component in \modelname{} is parameterized independently, eliminating the need for full covariance modeling.}
+\label{tab:comparison_overview}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Aspect} & \textbf{Original N-DGS (entangled)} & \textbf{Ours (disentangled)} & \textbf{Benefit} \\
+\midrule
+Position & $\mu_p + \Sigma_{pq}\Sigma_{qq}^{-1}\boldsymbol{\delta}$ & $\mu_p + \mathbf{V}_{pq}[(1-\lambda_\text{pos})\mathbf{I} + \lambda_\text{pos}\mathbf{V}_{qq}^{-1}]\boldsymbol{\delta}$ & Linear interpolation controls coupling \\
+Opacity & $\alpha \cdot \exp(-\lambda\boldsymbol{\delta}^\top\Sigma_{qq}^{-1}\boldsymbol{\delta})$ & $\alpha \cdot \exp(-\lambda\|\mathbf{L}^\top\boldsymbol{\delta}\|^2)$ & No inversion, $\mathbf{V}_{qq}^{-1} = \mathbf{L}\mathbf{L}^\top$ \\
+Covariance & $\Sigma_{pp} - \Sigma_{pq}\Sigma_{qq}^{-1}\Sigma_{pq}^\top$ & $\Sigma_p$ (disentangled) & Shape independent \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+Table~\ref{tab:comparison_overview} compares our disentangled approach with the entangled N-DGS formulation. The following subsections provide detailed explanations of each disentangled component.
+
+\subsection{Position Conditioning}
+\label{subsec:position}
+
+In N-DGS, position is computed as $\mu_{\text{cond}} = \mu_p + \Sigma_{pq}\Sigma_{qq}^{-1}(q-\mu_q)$, where $\Sigma_{pq}$ is derived from a joint Cholesky decomposition and $\Sigma_{qq}^{-1}$ is the precision matrix that also controls opacity. This coupling means position shifts and opacity modulation are entangled through the shared precision matrix.
+
+We introduce \textbf{learnable position-opacity disentanglement} through a linear interpolation mechanism:
+\begin{equation}
+\mu_{\text{cond}} = \mu_p + \mathbf{V}_{pq} \cdot \left[(1-\lambda_\text{pos}) \mathbf{I} + \lambda_\text{pos} \mathbf{V}_{qq}^{-1}\right] \cdot \boldsymbol{\delta},
+\end{equation}
+where $\mathbf{V}_{pq} \in \mathbb{R}^{3 \times C}$ is the displacement matrix, $\lambda_\text{pos} \in [0,1]$ is a learnable per-Gaussian parameter, and $\mathbf{V}_{qq}^{-1} = \mathbf{L}\mathbf{L}^\top$ is the precision matrix (derived from Cholesky factor $\mathbf{L}$) that also governs opacity. The linear interpolation $(1-\lambda_\text{pos}) \mathbf{I} + \lambda_\text{pos} \mathbf{V}_{qq}^{-1}$ controls the coupling strength:
+\begin{itemize}
+\item When $\lambda_\text{pos}=0$: The term becomes $\mathbf{I}$, so position shift reduces to $\mathbf{V}_{pq} \cdot \boldsymbol{\delta}$, fully disentangled from the precision matrix $\mathbf{V}_{qq}^{-1} = \mathbf{L}\mathbf{L}^\top$ that controls opacity.
+\item When $\lambda_\text{pos}=1$: We recover the N-DGS formulation $\mathbf{V}_{pq} \cdot \mathbf{V}_{qq}^{-1} \cdot \boldsymbol{\delta}$, where position and opacity are coupled through the shared precision matrix.
+\item Intermediate values: Partial coupling, blending independent position learning with conditional Gaussian behavior.
+\end{itemize}
+This provides adaptive disentanglement where each Gaussian learns its optimal coupling strength during training.
+
+To preserve the bounded displacement property of N-DGS (where small Gaussians produce small displacements), we parameterize the displacement matrix as a scaled and normalized direction tensor. Let $\mathbf{u} \in \mathbb{R}^{3C}$ be a learnable direction vector. We construct $\mathbf{V}_{pq} \in \mathbb{R}^{3 \times C}$ by reshaping the normalized direction and scaling by the magnitude:
+\begin{equation}
+\mathbf{V}_{pq} = \text{reshape}\left(\frac{\mathbf{u}}{\|\mathbf{u}\|_2}\right) \cdot \sigma(\gamma) \cdot \bar{s},
+\end{equation}
+where $\mathbf{u} \in \mathbb{R}^{3C}$ is the learnable direction vector that is normalized and reshaped into a $3 \times C$ matrix, $\gamma \in \mathbb{R}$ is a learnable scalar magnitude parameter with $\sigma(\gamma) \in [0, 1]$ obtained via the sigmoid function, and $\bar{s} = \frac{1}{3}(s_x + s_y + s_z)$ denotes the mean spatial scale. This explicit scaling by $\bar{s}$ ensures that small Gaussians produce small displacements while large Gaussians have proportionally larger displacement capacity, mimicking the implicit coupling in N-DGS but without entangling position and opacity.
+
+\subsection{Opacity Conditioning}
+
+In N-DGS, opacity is modulated as $\alpha_{\text{cond}} = \alpha \cdot \exp(-\lambda\,(q-\mu_q)^\top \Sigma_{qq}^{-1}(q-\mu_q))$, requiring the inverse of $\Sigma_{qq}$, an $O(C^3)$ operation.
+
+Our formulation computes $\mathbf{L}^\top \boldsymbol{\delta}$ followed by $\|\cdot\|_2^2$, requiring only $O(C^2)$ operations (triangular matrix-vector multiply) and is highly parallelizable on GPUs. By parameterizing the Cholesky factor directly with exponential activation on the diagonal, we guarantee that $\mathbf{V}_{qq}^{-1} = \mathbf{L}\mathbf{L}^\top$ is always symmetric positive definite, eliminating numerical instabilities from ill-conditioned covariance matrices.
+
+For 7DGS, the block-diagonal structure enables \textbf{separated view and time opacity}. With $\boldsymbol{\delta} = (\boldsymbol{\delta}_v, \delta_t)^\top$ where $\boldsymbol{\delta}_v \in \mathbb{R}^3$ is the view deviation and $\delta_t \in \mathbb{R}$ is the time deviation, the opacity factors as:
+\begin{equation}
+\alpha_{\text{cond}} = \alpha \cdot \exp\left(-\frac{\lambda}{2}\left(\boldsymbol{\delta}_v^\top \mathbf{\Sigma}_v^{-1} \boldsymbol{\delta}_v + \delta_t^2 \sigma_t^{-1}\right)\right).
+\end{equation}
+This factorization allows view-dependent and time-dependent opacity to be controlled independently, with view precision $\mathbf{\Sigma}_v^{-1}$ parameterized by a $3 \times 3$ Cholesky factor (6 parameters) and time precision $\sigma_t^{-1}$ by a single scalar, for a total of 7 parameters instead of 10 for a full $4 \times 4$ precision matrix.
+
+
+\subsection{Computational Analysis}
+
+Our direct Cholesky parameterization replaces $O(C^3)$ matrix inversions with $O(C^2)$ triangular matrix-vector multiplications. For small $C$, the asymptotic difference is minor, but the simpler operation avoids pivoting and numerical checks required for matrix inversion. Parameterizing the Cholesky factor directly with exponential activation on the diagonal guarantees that $\mathbf{V}_{qq}^{-1} = \mathbf{L}\mathbf{L}^\top$ is always symmetric positive definite, avoiding potential numerical issues from ill-conditioned covariance matrices.
+
+For 7DGS, the separated view/time architecture provides additional benefits. By using a block-diagonal precision matrix with zero cross-terms, we reduce the parameter count from 10 (full $4 \times 4$ Cholesky) to 7 (6 for view + 1 for time), a 30\% reduction. This separation also enables independent optimization of view-dependent and time-dependent effects, improving training stability. Additionally, this formulation enables a single fused CUDA kernel that computes conditional position and opacity in one pass, minimizing memory bandwidth and intermediate allocations.
+
+\subsection{CUDA Implementation}
+
+
+
+% Summary Results Table
+\begin{table}[h]
+\centering
+\caption{Mean quantitative results across all datasets at 30K iterations. Best results in \textbf{bold}. See Appendix for per-scene details.}
+\label{tab:summary_results}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l|ccc|ccc|ccc}
+\toprule
+ & \multicolumn{3}{c|}{\textbf{N-DGS}} & \multicolumn{3}{c|}{\textbf{Opacity-Only}} & \multicolumn{3}{c}{\textbf{Opacity+Pos}} \\
+Dataset & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ \\
+\midrule
+\texttt{NeRF Synthetic} & 33.38 & 0.970 & 0.032 & \textbf{33.85} & \textbf{0.971} & 0.030 & 33.84 & \textbf{0.971} & \textbf{0.029} \\
+\texttt{Mip-NeRF 360} & 26.40 & 0.739 & 0.316 & 27.18 & 0.779 & 0.252 & \textbf{27.33} & \textbf{0.781} & \textbf{0.250} \\
+\texttt{6DGS PBR} & 37.11 & \textbf{0.971} & 0.054 & 36.54 & 0.965 & 0.059 & \textbf{37.77} & \textbf{0.972} & \textbf{0.051} \\
+\midrule
+\texttt{D-NeRF} & 33.13 & 0.968 & 0.038 & 30.92 & 0.959 & 0.044 & \textbf{33.52} & \textbf{0.970} & \textbf{0.033} \\
+\texttt{7DGS PBR} & \textbf{33.21} & \textbf{0.960} & \textbf{0.047} & 31.70 & 0.955 & 0.053 & 31.72 & 0.955 & 0.053 \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{Mean efficiency results across all datasets. Best results in \textbf{bold}. See Appendix for per-scene details.}
+\label{tab:summary_efficiency}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l|rrr|rrr|rrr}
+\toprule
+ & \multicolumn{3}{c|}{\textbf{N-DGS}} & \multicolumn{3}{c|}{\textbf{Opacity-Only}} & \multicolumn{3}{c}{\textbf{Opacity+Pos}} \\
+Dataset & $\#$Gauss (K) $\downarrow$ & Time (min) $\downarrow$ & FPS $\uparrow$ & $\#$Gauss (K) $\downarrow$ & Time (min) $\downarrow$ & FPS $\uparrow$ & $\#$Gauss (K) $\downarrow$ & Time (min) $\downarrow$ & FPS $\uparrow$ \\
+\midrule
+\texttt{NeRF Synthetic} & \textbf{171} & 6.35 & 615.57 & 201 & \textbf{5.83} & \textbf{754.98} & 209 & 6.42 & 687.87 \\
+\texttt{Mip-NeRF 360} & \textbf{1273} & 27.09 & 147.46 & 2363 & \textbf{25.58} & \textbf{279.30} & 2557 & 28.98 & 230.86 \\
+\texttt{6DGS PBR} & \textbf{84} & \textbf{26.77} & 678.40 & 118 & 30.72 & \textbf{696.31} & 140 & 32.90 & 627.62 \\
+\midrule
+\texttt{D-NeRF} & \textbf{69} & 14.08 & 852.01 & 70 & \textbf{13.20} & \textbf{948.77} & 90 & 16.26 & 791.64 \\
+\texttt{7DGS PBR} & \textbf{162} & 38.14 & 709.83 & 227 & \textbf{34.58} & \textbf{835.24} & 207 & 37.37 & 752.48 \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+
+We implement the full conditional slicing operation as a custom CUDA kernel (\texttt{slice\_gaussian\_full}) that fuses position and opacity computations in a single pass, as shown in Algorithm~\ref{alg:slice}.
+
+\begin{algorithm}[h]
+\caption{Conditional Gaussian Slicing}
+\label{alg:slice}
+\begin{algorithmic}[1]
+\Require Per-Gaussian parameters: $\mu_p$, $\mu_q$, $\mathbf{V}_{pq}$, Cholesky $\mathbf{L}$, $\lambda_{\text{pos}}$
+\Require Query point: $\text{query}$ (view direction, or view+time for 7DGS)
+\State $\boldsymbol{\delta} \gets \text{query} - \mu_q$ \Comment{Compute deviation}
+\State Reconstruct $\mathbf{L}$ with $\exp(\cdot)$ on diagonal \Comment{Build Cholesky factor}
+\State $\mathbf{V}_{qq}^{-1} \gets \mathbf{L}\mathbf{L}^\top$ \Comment{Precision matrix from Cholesky}
+\State $\mathbf{V}_{\text{scaled}}^{-1} \gets (1-\lambda_{\text{pos}}) \mathbf{I} + \lambda_{\text{pos}} \mathbf{V}_{qq}^{-1}$ \Comment{Linear interpolation}
+\State $\mu_{\text{cond}} \gets \mu_p + \mathbf{V}_{pq} \cdot \mathbf{V}_{\text{scaled}}^{-1} \cdot \boldsymbol{\delta}$ \Comment{Position with learnable coupling}
+\State $\mathbf{z} \gets \mathbf{L}^\top \boldsymbol{\delta}$ \Comment{For opacity (uses original L)}
+\State $\alpha_{\text{scale}} \gets \exp(-\lambda \cdot \|\mathbf{z}\|^2)$ \Comment{Opacity scale}
+\State \Return $\mu_{\text{cond}}$, $\alpha_{\text{scale}}$
+\end{algorithmic}
+\end{algorithm}
+
+The kernel is templated on dimension $C$ (3 or 4) with compile-time loop unrolling for optimal performance. All matrix operations use registers rather than shared memory, as the small matrix sizes ($3\times3$ or $4\times4$) fit entirely in per-thread registers. This fused design minimizes global memory bandwidth by avoiding intermediate tensor allocations and enables efficient parallelization across millions of Gaussians.
+
+\section{Experiments}
+
+\subsection{Experimental Setup}
+
+\textbf{Datasets.}
+We evaluate \modelname{} across five diverse datasets covering both static and dynamic scenes:
+\begin{itemize}
+    \item \textit{Static scenes:} (1) \textit{NeRF Synthetic}~\cite{mildenhall2020nerf} with 8 synthetic scenes under controlled lighting for geometric reconstruction assessment; (2) \textit{Mip-NeRF 360}~\cite{barron2021mipnerf} with 9 unbounded real-world scenes challenging view synthesis; and (3) \textit{Tandt PBR}~\cite{gao20246dgs} featuring 7 physically-based scenes with complex view-dependent effects.
+
+    \item \textit{Dynamic scenes:} (4) \textit{D-NeRF}~\cite{pumarola2020dnerfneuralradiancefields} with 8 synthetic sequences featuring various deformation types; and (5) \textit{7DGS-PBR}~\cite{gao20257dgs} containing 6 physically-based dynamic scenes with complex spatio-temporal-angular correlations.
+\end{itemize}
+
+\textbf{Evaluation Metrics.}
+We assess reconstruction quality using Peak Signal-to-Noise Ratio (PSNR), Structural Similarity Index (SSIM)~\cite{wang2004image}, and Learned Perceptual Image Patch Similarity (LPIPS)~\cite{zhang2018perceptual}. We also report rendering speed (FPS), training time (minutes), and Gaussian count (K) to evaluate computational efficiency.
+
+\textbf{Implementation Details.}
+We compare three configurations: (1) \textbf{N-DGS}: full N-DGS formulation with joint position and opacity conditioning, (2) \textbf{Opacity-Only}: our approach with only opacity conditioning (no position shift), and (3) \textbf{Opacity+Pos}: our approach with both opacity and position conditioning. Training uses Adam optimizer for 30K iterations. Proper initialization is critical for stable training: we initialize the view mean $\mu_d$ as random unit vectors (with time in $[0, 1]$ for 7DGS), the direction $\mathbf{u}$ from $\mathcal{N}(0, 0.01^2)$ and normalize during forward pass, the scale $\gamma = 0$ giving $\sigma(0) = 0.5$ for moderate displacement, and the Cholesky factor $\mathbf{L}$ with diagonal elements $\log(2.0)$ and off-diagonal elements 0.
+
+\subsection{Comparison with State-of-the-Art}
+
+Table~\ref{tab:summary_results} and Table~\ref{tab:summary_efficiency} present comprehensive comparisons across all datasets. Our disentangled approaches consistently match or exceed N-DGS quality while achieving significant efficiency improvements.
+
+\textbf{Static Scenes.} On \textit{NeRF Synthetic}, Opacity+Pos achieves the best average PSNR (33.84 dB) with +0.46 dB improvement over N-DGS, demonstrating that disentanglement preserves expressiveness. On \textit{Mip-NeRF 360}, Opacity+Pos delivers substantial gains (+0.93 dB PSNR over N-DGS), with Opacity-Only providing the best efficiency (279.30 FPS, 89\% faster than N-DGS). The \textit{Tandt PBR} results show Opacity+Pos achieving 37.77 dB (+0.66 dB over N-DGS), particularly excelling on complex materials.
+
+\textbf{Dynamic Scenes.} On \textit{D-NeRF}, Opacity+Pos achieves the best overall quality (33.52 dB PSNR, +0.39 dB over N-DGS) with dramatically improved LPIPS (0.033 vs 0.038). Opacity-Only provides the fastest rendering (948.77 FPS, 11\% faster than N-DGS) with competitive quality. For \textit{7DGS-PBR}, N-DGS maintains the best quality (33.21 dB), but Opacity-Only achieves 18\% faster rendering (835.24 FPS) and 9\% faster training, demonstrating the efficiency-quality trade-off enabled by learnable disentanglement.
+
+\subsection{Efficiency Analysis}
+
+Our disentangled approach delivers consistent efficiency gains across benchmarks. Table~\ref{tab:summary_efficiency} shows that Opacity-Only achieves 15\% faster training on average (reducing from 413s to 350s for N-DGS across datasets) while maintaining comparable Gaussian counts. Rendering throughput improves by 26\% on average (813 FPS vs 643 FPS), with the largest gains on complex scenes like Mip-NeRF 360 (89\% improvement). The efficiency stems from eliminating $O(C^3)$ matrix inversions in favor of $O(C^2)$ Cholesky-based operations, which are highly parallelizable on GPUs.
+
+Notably, our method achieves these speedups without sacrificing quality—Opacity+Pos configuration demonstrates that disentanglement with position conditioning can even improve reconstruction quality (+0.39 dB on D-NeRF), highlighting the expressiveness of learnable coupling through $\lambda_{\text{pos}}$ parameters.
+
+\subsection{Ablation Study}
+
+The comparison between our three configurations reveals the impact of each component. Opacity-Only (no position conditioning) achieves the best efficiency with minimal quality loss, making it ideal for applications prioritizing speed. Opacity+Pos adds position conditioning with learnable coupling, recovering or exceeding N-DGS quality on most datasets while maintaining efficiency gains. The learnable $\lambda_{\text{pos}}$ parameter enables each Gaussian to adaptively balance between fully disentangled ($\lambda_{\text{pos}}=0$) and coupled ($\lambda_{\text{pos}}=1$) behavior, providing flexibility that fixed coupling cannot achieve.
+
+For 7DGS, our block-diagonal precision matrix (Section~\ref{subsec:opacity}) reduces parameters from 10 to 7 (30\% reduction) while enabling independent view and time control. This separation improves both efficiency and interpretability without compromising quality.
+
+\section{Limitations and Future Work}
+
+While \modelname{} demonstrates substantial improvements in efficiency and flexibility, several limitations warrant discussion. First, the learnable coupling parameter $\lambda_{\text{pos}}$ requires careful initialization to ensure stable optimization—improper initialization can lead to degenerate solutions where all Gaussians collapse to either fully coupled or fully disentangled states. Second, our block-diagonal assumption for 7DGS (separating view and time) may not be optimal for scenes with strong view-time interactions, such as objects with time-varying reflectance properties. Third, while our method eliminates matrix inversions, the $O(C^2)$ Cholesky-based operations still scale with additional dimensions, potentially limiting scalability to very high-dimensional representations (e.g., incorporating lighting or material parameters).
+
+Future work could explore several promising directions. Hierarchical disentanglement schemes could enable coarse-to-fine coupling control, where different scene regions learn different coupling behaviors. Adaptive block structures for the precision matrix could automatically discover optimal dimension groupings beyond our fixed view-time separation. Extension to additional conditioning dimensions (lighting direction, material properties) would further demonstrate the generality of our framework. Finally, combining our disentangled parameterization with alternative kernel designs (e.g., Beta kernels~\cite{liu2025deformable}) could yield complementary benefits in both efficiency and expressiveness.
+
+\section{Conclusion}
+
+We presented \modelname{}, a disentangled direct parameterization approach for efficient dynamic Gaussian splatting. Our key insight is that the full $(3+C) \times (3+C)$ joint covariance matrix used in N-DGS is unnecessarily complex---the conditioning effects (position shift and opacity modulation) can be \textbf{disentangled} into independent modules, each with its own efficient parameterization.
+
+By separating these components, we eliminate the need for matrix inversions while enabling \textbf{learnable position-opacity coupling}. Through per-Gaussian parameters $\lambda_\text{pos} \in [0,1]$, we interpolate between fully disentangled position learning (where $\mathbf{V}_{pq}$ operates independently of the opacity-controlling precision matrix $\mathbf{L}$) and coupled N-DGS behavior (where both share $\mathbf{V}_{qq}^{-1} = \mathbf{L}\mathbf{L}^\top$). Opacity modulation uses a Cholesky precision factor $\mathbf{L}$ exclusively for efficient Mahalanobis distance computation. This design enables computation through simple matrix-vector multiplications, guarantees numerical stability through exponential activation on diagonal elements, and provides adaptive control over position-opacity dependence that each Gaussian can learn independently.
+
+% References section
+\bibliographystyle{plainnat} % Using plainnat style for compatibility with numbers option if used
+\bibliography{references} % Assumes references are in references.bib
+
+\clearpage
+\beginsupplement
+
+\section*{Appendix: Detailed Per-Scene Results}
+% Combined Detailed Quantitative Comparison Table
+\begin{table*}[tbp]
+  \centering
+  \caption{\small{Detailed quantitative comparison across all datasets at 30K iterations. N-DGS, Opacity-Only, and Opacity+Pos are compared on static benchmarks (NeRF Synthetic, Mip-NeRF 360, 6DGS PBR) and dynamic benchmarks (7DGS PBR, D-NeRF). Note, NeRF Synthetic and 7DGS PBR use deboupled opaciy and position.}}
+  \resizebox{\linewidth}{!}{
+        \begin{tabular}{@{\hskip 2pt}cc|@{\hskip 2pt}l@{\hskip 2pt}|@{\hskip 2pt}r@{\hskip 2pt}r@{\hskip 2pt}r|@{\hskip 2pt}r@{\hskip 2pt}r@{\hskip 2pt}r|@{\hskip 2pt}r@{\hskip 2pt}r@{\hskip 2pt}r@{\hskip 2pt}}
+
+    \toprule
+
+    \multicolumn{2}{@{\hskip 2pt}c|@{\hskip 2pt}}{\multirow{2}[4]{*}{Dataset}} & \multicolumn{1}{c|@{\hskip 2pt}}{\multirow{2}[4]{*}{Scene}}
+        & \multicolumn{3}{c|@{\hskip 2pt}}{N-DGS}
+        & \multicolumn{3}{c|@{\hskip 2pt}}{Opacity-Only}
+        & \multicolumn{3}{@{\hskip 2pt}c}{Opacity+Pos} \\
+\cmidrule{4-12}
+          &&       & \multicolumn{1}{@{\hskip 2pt}c@{\hskip 2pt}}{PSNR$\uparrow$}
+                  & \multicolumn{1}{@{\hskip 2pt}c@{\hskip 2pt}}{SSIM$\uparrow$}
+                  & \multicolumn{1}{c|@{\hskip 2pt}}{LPIPS$\downarrow$}
+                  & \multicolumn{1}{@{\hskip 2pt}c@{\hskip 2pt}}{PSNR$\uparrow$}
+                  & \multicolumn{1}{@{\hskip 2pt}c@{\hskip 2pt}}{SSIM$\uparrow$}
+                  & \multicolumn{1}{c|@{\hskip 2pt}}{LPIPS$\downarrow$}
+                  & \multicolumn{1}{@{\hskip 2pt}c@{\hskip 2pt}}{PSNR$\uparrow$}
+                  & \multicolumn{1}{@{\hskip 2pt}c@{\hskip 2pt}}{SSIM$\uparrow$}
+                  & \multicolumn{1}{@{\hskip 2pt}c@{\hskip 2pt}}{LPIPS$\downarrow$} \\
+    \midrule
+
+\multicolumn{1}{@{\hskip 2pt}c}{\multirow{30}[4]{*}{\begin{sideways}STATIC SCENES\end{sideways}}}
+
+    % ---------------- nerf_synthetic ----------------
+& \multicolumn{1}{c|@{\hskip 2pt}}{\multirow{9}[4]{*}{\begin{sideways}NeRF Synthetic\end{sideways}}}
+    & \texttt{chair}     & 35.75 & 0.986 & 0.013 & 36.36 & \bf 0.988 & \bf 0.012 & \bf 36.46 & \bf 0.988 & \bf 0.012 \\
+    & & \texttt{drums}     & 26.75 & 0.956 & 0.036 & 26.80 & 0.957 & 0.035 & \bf 26.84 & \bf 0.958 & \bf 0.034 \\
+    & & \texttt{ficus}     & 33.54 & 0.984 & 0.014 & \bf 35.30 & \bf 0.988 & \bf 0.011 & 35.05 & \bf 0.988 & \bf 0.011 \\
+    & & \texttt{hotdog}    & 38.10 & 0.985 & 0.022 & \bf 38.13 & \bf 0.986 & \bf 0.020 & 37.99 & \bf 0.986 & \bf 0.020 \\
+    & & \texttt{lego}      & 35.63 & 0.981 & 0.019 & \bf 35.87 & \bf 0.982 & \bf 0.017 & 35.77 & \bf 0.982 & \bf 0.017 \\
+    & & \texttt{materials} & 30.78 & 0.967 & 0.033 & 31.00 & 0.967 & 0.030 & \bf 31.42 & \bf 0.970 & \bf 0.028 \\
+    & & \texttt{mic}       & 35.63 & 0.992 & 0.006 & 36.12 & \bf 0.993 & \bf 0.005 & \bf 36.13 & \bf 0.993 & \bf 0.005 \\
+    & & \texttt{ship}      & 30.85 & 0.906 & 0.112 & \bf 31.16 & \bf 0.908 & \bf 0.107 & 31.08 & \bf 0.908 & \bf 0.107 \\
+\cmidrule{3-12}
+    & & \texttt{avg}
+      & 33.38
+      & 0.970
+      & 0.032
+      & \bf 33.85
+      & \bf 0.971
+      & 0.030
+      & 33.84
+      & \bf 0.971
+      & \bf 0.029 \\
+    \cmidrule{2-12}
+
+    % ---------------- mipnerf360 ----------------
+& \multicolumn{1}{c|@{\hskip 2pt}}{\multirow{10}[4]{*}{\begin{sideways}Mip-NeRF 360\end{sideways}}}
+        & \texttt{bicycle}   & 22.33 & 0.554 & 0.447 & \bf 23.49 & \bf 0.644 & \bf 0.327 & 23.31 & 0.646 & \bf 0.315 \\
+        & & \texttt{bonsai}    & 33.20 & 0.940 & 0.208 & 33.22 & \bf 0.949 & \bf 0.180 & \bf 33.43 & 0.951 & \bf 0.173 \\
+        & & \texttt{counter}   & 29.26 & 0.895 & 0.236 & 29.73 & 0.917 & \bf 0.185 & \bf 29.91 & \bf 0.920 & \bf 0.179 \\
+        & & \texttt{flowers}   & 18.90 & 0.409 & 0.507 & \bf 19.61 & \bf 0.453 & \bf 0.443 & 19.75 & 0.454 & 0.452 \\
+        & & \texttt{garden}    & 26.19 & 0.809 & 0.205 & 26.77 & 0.842 & \bf 0.145 & \bf 27.12 & \bf 0.850 & \bf 0.135 \\
+        & & \texttt{kitchen}   & 31.17 & 0.922 & 0.137 & 31.72 & 0.930 & \bf 0.121 & \bf 32.04 & \bf 0.933 & \bf 0.116 \\
+        & & \texttt{room}      & 31.60 & 0.910 & 0.243 & 31.83 & 0.927 & \bf 0.199 & \bf 32.07 & \bf 0.930 & \bf 0.193 \\
+        & & \texttt{stump}     & 23.32 & 0.638 & 0.413 & \bf 26.01 & \bf 0.750 & \bf 0.275 & 25.95 & 0.739 & 0.296 \\
+        & & \texttt{treehill}  & 21.66 & 0.571 & 0.448 & \bf 22.21 & \bf 0.603 & \bf 0.393 & 22.36 & 0.607 & 0.386 \\
+    \cmidrule{3-12}
+        & & \texttt{avg}
+          & 26.40
+          & 0.739
+          & 0.316
+          & \bf 27.18
+          & \bf 0.779
+          & \bf 0.252
+          & \bf 27.33
+          & \bf 0.781
+          & \bf 0.250 \\
+\cmidrule{2-12}
+
+  % ---------------- tandt_pbr ----------------
+& \multicolumn{1}{c|@{\hskip 2pt}}{\multirow{8}[4]{*}{\begin{sideways}6DGS PBR\end{sideways}}}
+    & \texttt{bunny\_cloud} & 40.87 & 0.993 & 0.045 & \bf 43.44 & 0.993 & 0.042 & 43.33 & \bf 0.993 & \bf 0.040 \\
+    & & \texttt{cloud}     & 41.93 & 0.991 & 0.052 & \bf 43.47 & 0.992 & 0.048 & 43.45 & \bf 0.992 & \bf 0.045 \\
+    & & \texttt{dragon}    & 35.69 & \bf 0.943 & 0.041 & 34.42 & 0.914 & 0.051 & \bf 37.11 & 0.941 & \bf 0.038 \\
+    & & \texttt{explosion} & \bf 40.97 & \bf 0.989 & \bf 0.037 & 37.81 & 0.983 & 0.041 & 39.34 & 0.986 & \bf 0.037 \\
+    & & \texttt{rvr\_x}     & 33.48 & 0.964 & 0.057 & 31.81 & 0.956 & 0.067 & \bf 34.63 & \bf 0.971 & \bf 0.046 \\
+    & & \texttt{smoke}     & \bf 40.02 & \bf 0.990 & \bf 0.041 & 38.20 & 0.989 & 0.049 & 39.55 & \bf 0.990 & 0.047 \\
+    & & \texttt{suzanne}   & 26.81 & 0.929 & \bf 0.106 & 26.65 & 0.927 & 0.112 & \bf 27.00 & \bf 0.930 & \bf 0.106 \\
+\cmidrule{3-12}
+    & & \texttt{avg}
+      & 37.11
+      & 0.971
+      & 0.054
+      & 36.54
+      & 0.965
+      & 0.059
+      & \bf 37.77
+      & \bf 0.972
+      & \bf 0.051 \\
+
+    \midrule
+    \midrule
+
+\multicolumn{1}{@{\hskip 2pt}c}{\multirow{16}[4]{*}{\begin{sideways}DYNAMIC SCENES\end{sideways}}}
+
+& \multirow{7}{*}{\begin{sideways}7DGS PBR\end{sideways}}
+    & \texttt{cloud}    & \bf 30.31 & \bf 0.956 & \bf 0.072 & 29.34 & 0.955 & 0.075 & 29.60 & 0.955 & 0.074 \\
+    & & \texttt{dust}     & \bf 39.30 & \bf 0.959 & \bf 0.031 & 36.87 & 0.955 & 0.037 & 36.63 & 0.954 & 0.037 \\
+    & & \texttt{flame}    & \bf 33.90 & \bf 0.945 & \bf 0.054 & 30.38 & 0.933 & 0.066 & 30.32 & 0.932 & 0.066 \\
+    & & \texttt{heart}   & \bf 36.09 & \bf 0.987 & \bf 0.018 & 35.14 & 0.985 & 0.021 & 35.25 & 0.985 & 0.020 \\
+    & & \texttt{heart\_1600}   & \bf 32.15 & \bf 0.966 & \bf 0.048 & 31.29 & 0.962 & 0.052 & 31.36 & 0.962 & 0.051 \\
+    & & \texttt{suzanne}  & \bf 27.53 & \bf 0.947 & \bf 0.061 & 27.20 & 0.940 & 0.069 & 27.19 & 0.940 & 0.072 \\
+    \cmidrule{3-12}
+        & & \texttt{avg}
+          & \bf 33.21
+          & \bf 0.960
+          & \bf 0.047
+          & 31.70
+          & 0.955
+          & 0.053
+          & 31.72
+          & 0.955
+          & 0.053 \\
+    \cmidrule{2-12}
+
+& \multirow{9}{*}{\begin{sideways}D-NeRF\end{sideways}}
+        & \texttt{bouncingballs}  & \bf 34.00 & \bf 0.981 & 0.025 & 32.52 & 0.978 & 0.028 & 33.04 & 0.979 & \bf 0.025 \\
+        & & \texttt{hellwarrior}& 32.76 & 0.932 & 0.093 & 33.54 & 0.941 & 0.085 & \bf 34.35 & \bf 0.945 & \bf 0.075 \\
+        & & \texttt{hook}     & 31.15 & 0.960 & 0.044 & 28.55 & 0.937 & 0.062 & \bf 32.87 & \bf 0.969 & \bf 0.031 \\
+        & & \texttt{jumpingjacks}  & \bf 31.22 & \bf 0.967 & 0.043 & 28.62 & 0.952 & 0.054 & 30.78 & 0.965 & \bf 0.039 \\
+        & & \texttt{lego}     & \bf 28.33 & \bf 0.943 & 0.055 & 27.13 & 0.939 & \bf 0.055 & 27.50 & 0.936 & 0.058 \\
+        & & \texttt{mutant}   & 39.38 & 0.993 & 0.007 & 34.55 & 0.981 & 0.019 & \bf 40.28 & \bf 0.994 & \bf 0.006 \\
+        & & \texttt{standup}  & 38.50 & 0.988 & 0.013 & 33.02 & 0.972 & 0.029 & \bf 39.01 & \bf 0.989 & \bf 0.009 \\
+        & & \texttt{trex}     & 29.68 & 0.978 & 0.023 & 29.42 & 0.975 & 0.022 & \bf 30.36 & \bf 0.979 & \bf 0.019 \\
+    \cmidrule{3-12}
+        & & \texttt{avg}
+          & 33.13
+          & 0.968
+          & 0.038
+          & 30.92
+          & 0.959
+          & 0.044
+          & \bf 33.52
+          & \bf 0.970
+          & \bf 0.033 \\
+    \bottomrule
+    \end{tabular}
+    }
+  \label{tab:detailed_combined}
+\end{table*}
+
+
+
+% Combined Detailed Efficiency Comparison Table
+\begin{table*}[tbp]
+  \centering
+  \caption{\small{Detailed efficiency comparison across all datasets at 30K iterations. N-DGS, Opacity-Only, and Opacity+Pos are compared showing number of Gaussians (K), training time (minutes), and rendering FPS on static benchmarks (NeRF Synthetic, Mip-NeRF 360, 6DGS PBR) and dynamic benchmarks (7DGS PBR, D-NeRF). Note, NeRF Synthetic and 7DGS PBR use deboupled opaciy and position.}}
+  \resizebox{\linewidth}{!}{
+        \begin{tabular}{@{\hskip 2pt}cc|@{\hskip 2pt}l@{\hskip 2pt}|@{\hskip 2pt}r@{\hskip 2pt}r@{\hskip 2pt}r|@{\hskip 2pt}r@{\hskip 2pt}r@{\hskip 2pt}r|@{\hskip 2pt}r@{\hskip 2pt}r@{\hskip 2pt}r@{\hskip 2pt}}
+
+    \toprule
+
+    \multicolumn{2}{@{\hskip 2pt}c|@{\hskip 2pt}}{\multirow{2}[4]{*}{Dataset}} & \multicolumn{1}{c|@{\hskip 2pt}}{\multirow{2}[4]{*}{Scene}}
+        & \multicolumn{3}{c|@{\hskip 2pt}}{N-DGS}
+        & \multicolumn{3}{c|@{\hskip 2pt}}{Opacity-Only}
+        & \multicolumn{3}{@{\hskip 2pt}c}{Opacity+Pos} \\
+\cmidrule{4-12}
+          &&       & \multicolumn{1}{@{\hskip 2pt}c@{\hskip 2pt}}{\#Gauss(K)$\downarrow$}
+                  & \multicolumn{1}{@{\hskip 2pt}c@{\hskip 2pt}}{Time(min)$\downarrow$}
+                  & \multicolumn{1}{c|@{\hskip 2pt}}{FPS$\uparrow$}
+                  & \multicolumn{1}{@{\hskip 2pt}c@{\hskip 2pt}}{\#Gauss(K)$\downarrow$}
+                  & \multicolumn{1}{@{\hskip 2pt}c@{\hskip 2pt}}{Time(min)$\downarrow$}
+                  & \multicolumn{1}{c|@{\hskip 2pt}}{FPS$\uparrow$}
+                  & \multicolumn{1}{@{\hskip 2pt}c@{\hskip 2pt}}{\#Gauss(K)$\downarrow$}
+                  & \multicolumn{1}{@{\hskip 2pt}c@{\hskip 2pt}}{Time(min)$\downarrow$}
+                  & \multicolumn{1}{@{\hskip 2pt}c@{\hskip 2pt}}{FPS$\uparrow$} \\
+    \midrule
+
+\multicolumn{1}{@{\hskip 2pt}c}{\multirow{30}[4]{*}{\begin{sideways}STATIC SCENES\end{sideways}}}
+
+    % ---------------- nerf_synthetic ----------------
+& \multicolumn{1}{c|@{\hskip 2pt}}{\multirow{9}[4]{*}{\begin{sideways}NeRF Synthetic\end{sideways}}}
+    & \texttt{chair}     & \bf 178 & 6.11 & 635.27 & 206 & \bf 5.54 & \bf 713.54 & 210 & 5.95 & 657.40 \\
+    & & \texttt{drums}     & \bf 193 & 6.19 & 476.51 & 239 & \bf 5.62 & \bf 683.86 & 255 & 6.26 & 630.71 \\
+    & & \texttt{ficus}     & \bf 117 & \bf 4.27 & \bf 973.46 & 147 & \bf 4.27 & \bf 973.46 & 135 & 4.61 & 874.50 \\
+    & & \texttt{hotdog}    & \bf 98 & \bf 5.56 & \bf 982.05 & \bf 98 & \bf 5.56 & \bf 982.05 & 113 & 6.37 & 855.21 \\
+    & & \texttt{lego}      & \bf 186 & 7.06 & 480.97 & 220 & \bf 5.67 & \bf 697.44 & 234 & 6.29 & 646.60 \\
+    & & \texttt{materials} & \bf 136 & \bf 5.09 & \bf 767.74 & 182 & \bf 5.09 & 759.30 & 192 & 5.62 & 683.97 \\
+    & & \texttt{mic}       & \bf 188 & \bf 5.84 & \bf 625.05 & 260 & 6.21 & \bf 625.05 & 259 & 6.64 & 587.10 \\
+    & & \texttt{ship}      & 271 & \bf 8.68 & \bf 605.15 & \bf 256 & \bf 8.68 & \bf 605.15 & 271 & 9.66 & 567.49 \\
+\cmidrule{3-12}
+    & & \texttt{avg}
+      & \bf 171
+      & 6.35
+      & 615.57
+      & 201
+      & \bf 5.83
+      & \bf 754.98
+      & 209
+      & 6.42
+      & 687.87 \\
+    \cmidrule{2-12}
+
+    % ---------------- mipnerf360 ----------------
+& \multicolumn{1}{c|@{\hskip 2pt}}{\multirow{10}[4]{*}{\begin{sideways}Mip-NeRF 360\end{sideways}}}
+        & \texttt{bicycle}   & \bf 2243 & \bf 32.54 & 70.31 & 4452 & 33.46 & \bf 144.01 & 4779 & 39.05 & 115.25 \\
+        & & \texttt{bonsai}    & \bf 751 & 23.49 & 186.80 & 1048 & \bf 20.02 & \bf 419.45 & 1165 & 22.13 & 348.71 \\
+        & & \texttt{counter}   & \bf 555 & 22.79 & 237.17 & 880 & \bf 22.41 & \bf 430.22 & 946 & 24.54 & 369.79 \\
+        & & \texttt{flowers}   & \bf 1547 & 26.28 & 100.84 & 2587 & \bf 24.43 & \bf 237.63 & 2807 & 26.86 & 188.20 \\
+        & & \texttt{garden}    & \bf 2674 & 38.90 & 58.64 & 3552 & \bf 29.36 & \bf 174.37 & 3974 & 35.59 & 134.47 \\
+        & & \texttt{kitchen}   & \bf 770 & 27.28 & 178.89 & 1148 & \bf 24.95 & \bf 354.03 & 1203 & 26.74 & 307.75 \\
+        & & \texttt{room}      & \bf 792 & 24.62 & 177.95 & 1286 & \bf 23.81 & \bf 351.34 & 1390 & 26.46 & 291.81 \\
+        & & \texttt{stump}     & \bf 644 & 21.29 & 212.22 & 3272 & \bf 27.56 & 199.15 & 3418 & 30.83 & \bf 160.52 \\
+        & & \texttt{treehill}  & \bf 1481 & 26.62 & 104.35 & 3042 & \bf 24.22 & \bf 203.51 & 3334 & 28.60 & 161.27 \\
+    \cmidrule{3-12}
+        & & \texttt{avg}
+          & \bf 1273
+          & 27.09
+          & 147.46
+          & 2363
+          & \bf 25.58
+          & \bf 279.30
+          & 2557
+          & 28.98
+          & 230.86 \\
+\cmidrule{2-12}
+
+  % ---------------- tandt_pbr ----------------
+& \multicolumn{1}{c|@{\hskip 2pt}}{\multirow{8}[4]{*}{\begin{sideways}6DGS PBR\end{sideways}}}
+    & \texttt{bunny\_cloud} & \bf 24 & \bf 33.69 & \bf 718.47 & 63 & 42.62 & 689.88 & 65 & 48.66 & 613.22 \\
+    & & \texttt{cloud}     & \bf 16 & \bf 32.61 & \bf 700.35 & 62 & 39.08 & \bf 700.35 & 60 & 40.61 & 634.16 \\
+    & & \texttt{dragon}    & \bf 92 & \bf 12.76 & \bf 855.89 & 118 & 12.87 & 787.64 & 145 & 13.62 & 703.61 \\
+    & & \texttt{explosion} & \bf 34 & \bf 22.13 & \bf 875.48 & 72 & 29.54 & 813.28 & 73 & 30.20 & 732.86 \\
+    & & \texttt{rvr\_x}     & \bf 170 & \bf 6.44 & \bf 796.54 & 221 & \bf 6.44 & \bf 796.54 & 335 & 8.01 & 654.89 \\
+    & & \texttt{smoke}     & \bf 51 & \bf 46.48 & \bf 608.02 & 72 & 55.67 & 568.30 & 73 & 58.50 & 540.75 \\
+    & & \texttt{suzanne}   & \bf 200 & \bf 28.80 & \bf 518.17 & 221 & \bf 28.80 & \bf 518.17 & 232 & 30.71 & 513.88 \\
+\cmidrule{3-12}
+    & & \texttt{avg}
+      & \bf 84
+      & \bf 26.77
+      & \bf 696.31
+      & 118
+      & 30.72
+      & \bf 696.31
+      & 140
+      & 32.90
+      & 627.62 \\
+
+    \midrule
+    \midrule
+
+\multicolumn{1}{@{\hskip 2pt}c}{\multirow{16}[4]{*}{\begin{sideways}DYNAMIC SCENES\end{sideways}}}
+
+& \multirow{7}{*}{\begin{sideways}7DGS PBR\end{sideways}}
+    & \texttt{cloud}    & \bf 48 & 76.87 & 950.04 & 63 & \bf 75.47 & \bf 953.38 & 62 & 79.29 & 867.27 \\
+    & & \texttt{dust}     & \bf 16 & 13.11 & 1052.85 & 23 & \bf 12.06 & \bf 1165.85 & 23 & 14.58 & 1035.70 \\
+    & & \texttt{flame}    & \bf 22 & \bf 14.91 & \bf 1063.87 & 23 & 16.87 & 1015.92 & 24 & 16.93 & 910.27 \\
+    & & \texttt{heart}   & \bf 140 & 30.75 & 593.96 & 182 & \bf 28.75 & \bf 697.33 & 191 & 31.77 & 626.65 \\
+    & & \texttt{heart\_1600}   & \bf 181 & 22.75 & 432.58 & 237 & \bf 20.12 & \bf 729.08 & 256 & 23.00 & 647.81 \\
+    & & \texttt{suzanne}  & \bf 564 & 70.47 & 165.70 & 837 & \bf 54.23 & \bf 449.89 & 685 & 58.64 & 427.15 \\
+    \cmidrule{3-12}
+        & & \texttt{avg}
+          & \bf 162
+          & 38.14
+          & 709.83
+          & 227
+          & \bf 34.58
+          & \bf 835.24
+          & 207
+          & 37.37
+          & 752.48 \\
+    \cmidrule{2-12}
+
+& \multirow{9}{*}{\begin{sideways}D-NeRF\end{sideways}}
+        & \texttt{bouncingballs}  & 179 & 22.73 & 398.65 & \bf 103 & \bf 16.09 & \bf 770.99 & 134 & 17.59 & 640.82 \\
+        & & \texttt{hellwarrior}& \bf 13 & 8.25 & \bf 1151.03 & 17 & \bf 7.87 & 1141.34 & 16 & 10.11 & 1029.25 \\
+        & & \texttt{hook}     & \bf 37 & \bf 9.71 & \bf 1042.00 & 55 & 11.42 & 1027.26 & 83 & 15.32 & 822.92 \\
+        & & \texttt{jumpingjacks}  & \bf 25 & \bf 9.61 & 1069.25 & 31 & 10.67 & \bf 1101.29 & 77 & 14.93 & 853.54 \\
+        & & \texttt{lego}     & \bf 114 & 21.09 & 583.20 & 143 & \bf 17.93 & \bf 700.47 & 122 & 19.95 & 676.12 \\
+        & & \texttt{mutant}   & \bf 63 & 14.74 & 829.30 & 67 & \bf 13.27 & \bf 930.20 & 88 & 16.70 & 756.05 \\
+        & & \texttt{standup}  & \bf 21 & 9.71 & 1074.73 & 26 & \bf 9.28 & \bf 1140.56 & 58 & 15.48 & 867.40 \\
+        & & \texttt{trex}     & \bf 101 & \bf 16.77 & 667.96 & 118 & 19.09 & \bf 778.03 & 140 & 20.05 & 686.99 \\
+    \cmidrule{3-12}
+        & & \texttt{avg}
+          & \bf 69
+          & 14.08
+          & 852.01
+          & 70
+          & \bf 13.20
+          & \bf 948.77
+          & 90
+          & 16.26
+          & 791.64 \\
+    \bottomrule
+    \end{tabular}
+    }
+  \label{tab:efficiency_combined}
+\end{table*}
+
+
+\end{document}

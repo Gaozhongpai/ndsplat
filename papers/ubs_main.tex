@@ -1,0 +1,635 @@
+
+\documentclass{article} % For LaTeX2e
+\usepackage{iclr2026_conference,times}
+
+% Optional math commands from https://github.com/goodfeli/dlbook_notation.
+\input{math_commands.tex}
+\let\titleold\title
+\renewcommand{\title}[1]{\titleold{#1}\newcommand{\thetitle}{#1}}
+\def\maketitlesupplementary
+   {
+   \newpage
+       % \twocolumn[
+        \centering
+        \Large
+        \textbf{\thetitle}\\
+        \vspace{0.1em}Supplementary Material \\
+        \vspace{0.1em}
+       % ] %< twocolumn
+   }
+
+\newcommand{\red}[1]{{\color{red}#1}}
+\newcommand{\todo}[1]{{\color{red}#1}}
+\newcommand{\TODO}[1]{\textbf{\color{red}[TODO: #1]}}
+% \usepackage{tabularx,array}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{graphicx}
+\usepackage{arydshln}
+\usepackage{lineno}
+\usepackage[utf8]{inputenc} % allow utf-8 input
+\usepackage[T1]{fontenc}    % use 8-bit T1 fonts
+% \usepackage{hyperref}       % hyperlinks
+\usepackage[pagebackref=true,breaklinks=true,colorlinks=true,urlcolor=magenta,bookmarks=false,citecolor=blue]{hyperref}
+\usepackage{url}            % simple URL typesetting
+\usepackage{booktabs}       % professional-quality tables
+\usepackage{amsfonts}       % blackboard math symbols
+\usepackage{nicefrac}       % compact symbols for 1/2, etc.
+\usepackage{microtype}      % microtypography
+
+\usepackage{multirow}
+\usepackage{rotating}
+\usepackage{siunitx}
+\usepackage{makecell}
+\usepackage{bm}
+\usepackage{amsmath}
+\usepackage{gensymb}
+\usepackage{siunitx}
+\usepackage{enumitem}
+\usepackage{colortbl}
+% \usepackage[table]{xcolor}
+% http://ctan.org/pkg/xcolor
+
+\newcommand{\zgnote}[1]{\textcolor{blue}{\textbf{ZG: #1}}}
+\newcommand{\bpnote}[1]{\textcolor{orange}{\textbf{BP: #1}}}
+\newcommand{\mznote}[1]{\textcolor{green}{\textbf{MZ: #1}}}
+\newcommand{\acnote}[1]{\textcolor{purple}{\textbf{AC: #1}}}
+\newcommand{\zwnote}[1]{\textcolor{cyan}{\textbf{ZW: #1}}}
+\newcommand{\tcnote}[1]{\textcolor{magenta}{\textbf{TC: #1}}}
+
+\usepackage{xspace}
+\makeatletter
+\DeclareRobustCommand\onedot{\futurelet\@let@token\@onedot}
+\def\@onedot{\ifx\@let@token.\else.\null\fi\xspace}
+
+\renewcommand{\textfraction}{0.05}         % allow pages with little text
+\renewcommand{\topfraction}{0.95}          % 1-col floats
+\renewcommand{\dbltopfraction}{0.95}       % 2-col floats
+\renewcommand{\floatpagefraction}{0.8}     % float-only page needs ≥80%
+\renewcommand{\dblfloatpagefraction}{0.8}  % for 2-col float pages
+\setlength{\textfloatsep}{6pt plus 2pt minus 2pt}
+\setlength{\dbltextfloatsep}{6pt plus 2pt minus 2pt}
+
+\def\eg{\emph{e.g}\onedot} \def\Eg{\emph{E.g}\onedot}
+\def\ie{\emph{i.e}\onedot} \def\Ie{\emph{I.e}\onedot}
+\def\cf{\emph{c.f}\onedot} \def\Cf{\emph{C.f}\onedot}
+\def\etc{\emph{etc}\onedot} \def\vs{\emph{vs}\onedot}
+\def\wrt{w.r.t\onedot} \def\dof{d.o.f\onedot}
+\def\aka{\emph{a.k.a}\onedot}
+\def\etal{\emph{et al}\onedot}
+\makeatother
+
+
+\title{Universal Beta Splatting}
+
+% Authors must not appear in the submitted version. They should be hidden
+% as long as the \iclrfinalcopy macro remains commented out below.
+% Non-anonymous submissions will be rejected without review.
+\author{Rong Liu\textsuperscript{1,2}\thanks{This work was done during Rong Liu’s internship at United Imaging Intelligence, Boston, MA, USA.},\;
+Zhongpai Gao\textsuperscript{2}\thanks{Corresponding author.},\;
+Benjamin Planche\textsuperscript{2},\;
+Meida Chen\textsuperscript{1},\;\\
+\textbf{Van Nguyen Nguyen\textsuperscript{2},\;
+Meng Zheng\textsuperscript{2},\;
+Anwesa Choudhuri\textsuperscript{2}},\;\\
+\textbf{Terrence Chen\textsuperscript{2},\;
+Yue Wang\textsuperscript{1},\;
+Andrew Feng\textsuperscript{1},\;
+Ziyan Wu\textsuperscript{2}}\\[0.5em]
+\textsuperscript{1}University of Southern California, Los Angeles, CA, USA\\
+\textsuperscript{2}United Imaging Intelligence, Boston, MA, USA\\
+}
+
+% The \author macro works with any number of authors. There are two commands
+% used to separate the names and addresses of multiple authors: \And and \AND.
+%
+% Using \And between authors leaves it to \LaTeX{} to determine where to break
+% the lines. Using \AND forces a linebreak at that point. So, if \LaTeX{}
+% puts 3 of 4 authors names on the first line, and the last on the second
+% line, try using \AND instead of \And before the third author name.
+
+
+
+\newcommand{\fix}{\marginpar{FIX}}
+\newcommand{\new}{\marginpar{NEW}}
+
+\newif\ifshowedits
+\newcommand{\addeditor}[3]{%
+  \definecolor{#1color}{rgb}{#3}
+  \expandafter\newcommand\csname #1\endcsname[1]{%
+  \ifshowedits
+    {\color{#1color} ##1}%
+  \else
+    {##1}%
+  \fi
+  }%
+  \expandafter\newcommand\csname #1rmk\endcsname[1]{%
+  \ifshowedits
+    {\color{#1color} {\bf [#2: ##1]}}
+  \fi
+  }%
+  \expandafter\newcommand\csname #1rpl\endcsname[2]{%
+  \ifshowedits
+    {{\color{#1color} ##1} \sout{##2}}
+  \else
+    {##1}
+  \fi
+  }%
+}
+
+
+% \iclrfinalcopy % Uncomment for camera-ready version, but NOT for submission.
+
+% User commands
+\begin{document}
+\addeditor{rong}{RL}{0.0, 0.0, 0.8}
+\addeditor{zhongpai}{ZP}{0.7, 0.0, 0.7}
+\addeditor{ziyan}{ZW}{0.0, 0.5, 0.0}
+\addeditor{benjamin}{BP}{0.8, 0.4, 0.1}
+\addeditor{meng}{MZ}{0.5, 0.4, 0.1}
+\addeditor{anwesa}{AC}{0.3, 0.8, 0.1}
+\addeditor{nguyen}{VN}{0.9, 0.1, 0.9}
+\showeditstrue
+% \showeditsfalse
+
+\maketitle
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.99\linewidth]{figs/teaser.png}
+    \caption{Visualization of UBS rendering quality. For static real-world scenes (left), UBS achieves superior rendering of reflective and specular materials compared to 3DGS \citep{3dgs}. For dynamic volumetric scenes (right), UBS maintains high visual fidelity in complex spatio-temporal scenarios where 4DGS \citep{yang2023real} produces blurring artifacts.}
+    \label{fig:teaser}
+    \vspace{-0.5em}
+\end{figure}
+\noindent\hrulefill
+\begin{abstract}
+We introduce Universal Beta Splatting (UBS), a unified framework that generalizes 3D Gaussian Splatting to N-dimensional anisotropic Beta kernels for explicit radiance field rendering. Unlike fixed Gaussian primitives, Beta kernels enable controllable dependency modeling across spatial, angular, and temporal dimensions within a single representation. Our unified approach captures complex light transport effects, handles anisotropic view-dependent appearance, and models scene dynamics without requiring auxiliary networks or specific color encodings. UBS maintains backward compatibility by approximating to Gaussian Splatting as a special case, guaranteeing plug-in usability and lower performance bounds. The learned Beta parameters naturally decompose scene properties without explicit supervision: spatial (surface vs. texture), angular (diffuse vs. specular), and temporal (static vs. dynamic). Our CUDA-accelerated implementation achieves real-time rendering while consistently outperforming existing methods across static, view-dependent, and dynamic benchmarks, establishing Beta kernels as a scalable universal primitive for radiance field rendering. 
+% Our project website is available at \href{https://rongliu-leo.github.io/universal-beta-splatting/}{https://rongliu-leo.github.io/universal-beta-splatting/}.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:introduction}
+
+Real-time photorealistic rendering of complex scenes remains a fundamental challenge in computer vision and graphics. While Neural Radiance Fields (NeRF) \citep{mildenhall2021nerf} achieve exceptional visual quality through continuous volumetric representations, their reliance on dense ray sampling imposes prohibitive computational costs. 3D Gaussian Splatting (3DGS) \citep{3dgs} addresses efficiency through explicit primitive-based rendering, achieving real-time performance with competitive fidelity. However, Gaussian kernels limit representational capacity: their fixed bell-shaped profiles struggle with sharp boundaries, while view-dependent effects require auxiliary spherical harmonic encodings that fragment the representation. Dynamic scene extensions \citep{yang2024deformable, luiten2023dynamic} further increase complexity through additional deformation networks.
+
+Recent advances partially address these limitations through specialized designs. Deformable Beta Splatting (DBS) \citep{liu2025deformable} improves geometric fidelity using spatially adaptive Beta kernels, but remains limited to 3D spatial dimensions and still requires separate Spherical Beta functions for view-dependent color. $N$-dimensional Gaussian extensions like 6DGS \citep{gao20246dgs} and 7DGS \citep{gao20257dgs} incorporate view and temporal dimensions through conditional distributions, enabling them to capture scattering effects and dynamic changes. However, these approaches remain constrained by the Gaussian kernel's symmetric profile across dimensions—preventing independent control of spatial sharpness, angular specularity, and temporal dynamics.
+
+The core insight is that different scene properties require different kernel behaviors. Spatial geometry benefits from adaptive sharpness—flat for surfaces, peaked for textures. Angular appearance spans from diffuse to specular responses. Temporal dynamics range from static (constant support) to rapid motion (localized activation). While Gaussian kernels couple all dimensions with identical bell-shaped profiles, real scenes exhibit independent variations across space, angle, and time.
+
+We introduce Universal Beta Splatting (UBS), a unified framework that generalizes radiance field rendering to $N$-dimensional anisotropic Beta kernels. Unlike fixed Gaussian profiles, Beta kernels provide per-dimension shape control through learnable parameters, enabling each dimension to adopt its optimal form. This allows a single primitive type to simultaneously model spatial geometry, view-dependent appearance, and temporal dynamics while maintaining computational efficiency. 
+
+Our approach addresses three technical challenges: (1) spatial-orthogonal Cholesky parameterization preserving orthonormal spatial structure while enabling flexible cross-dimensional correlations, (2) Beta-modulated conditional slicing transforming high-dimensional primitives into renderable 3D representations with dimension-specific anisotropy, and (3) fully accelerated CUDA implementation ensuring real-time performance.
+
+Crucially, UBS maintains backward compatibility: when Beta parameters equal zero, the kernel approximates to Gaussian, recovering 3DGS, 6DGS, or 7DGS depending on dimensionality. This ensures seamless drop-in replacement with guaranteed performance lower bounds. Beyond rendering improvements, learned Beta parameters naturally decompose scenes into interpretable components without explicit supervision: spatial parameters separate geometry from textures, angular parameters distinguish diffuse from specular, and temporal parameters isolate static from dynamic elements.
+
+We validate UBS across static, view-dependent, and dynamic benchmarks, achieving state-of-the-art visual quality—improving PSNR by up to +8.27 dB on static scenes and +2.78 dB on dynamic scenes compared to corresponding Gaussian baselines. Our contributions are:
+\begin{itemize}[left=0pt, labelsep=0.5em, noitemsep, topsep=0pt, partopsep=0pt, parsep=0pt]
+    \item \textbf{Universal Beta Splatting:} A unified $N$-dimensional representation with per-dimension shape control, enabling simultaneous modeling of spatial, angular, and temporal properties through anisotropic Beta kernels with spatial-orthogonal Cholesky parameterization.
+    
+    \item \textbf{Efficient CUDA implementation:} Fully accelerated differentiable rendering with custom kernels achieving real-time performance.
+    
+    \item \textbf{Interpretable scene decomposition:} Emergent separation of geometric, appearance, and motion components through learned Beta parameters without supervision.
+    
+    \item \textbf{Backward compatibility:} Reduction to approximate existing methods as special cases, ensuring plug-in usability with performance lower bounds while enabling substantial improvements.
+\end{itemize}
+
+\section{Related Work}
+\label{sec:related_work}
+
+\textbf{Neural Radiance Fields and Gaussian Splatting.}
+Neural Radiance Fields (NeRF) \citep{mildenhall2021nerf} revolutionized novel view synthesis through continuous volumetric representations. While extensions like Instant-NGP \citep{M_ller_2022}, Mip-NeRF \citep{barron2021mipnerf}, and Zip-NeRF \citep{barron2023zipnerfantialiasedgridbasedneural} improved training speed and quality, NeRF methods remain limited by slow inference and inability to model off-ray transport phenomena.
+
+3D Gaussian Splatting (3DGS) \citep{3dgs} achieved real-time rendering through explicit anisotropic Gaussian primitives. Extensions address anti-aliasing \citep{yu2023mipsplattingaliasfree3dgaussian, yan2024multiscale3dgaussiansplatting}, compression \citep{lee2024compact, morgenstern2024compact}, and semantic applications \citep{shi2023languageembedded3dgaussians,zhou2024feature3dgssupercharging3d,peng20253dvisionlanguagegaussiansplatting,xiong2025splatfeaturesolver}. However, 3DGS's spherical harmonic encoding struggles with complex view-dependent effects. To better capture view dependence, $N$-dimensional Gaussians (N-DG) \citep{diolatzis2024n} extended to higher dimensions, refined by 6D Gaussian Splatting (6DGS) \citep{gao20246dgs} using conditional slicing. While elegant, Gaussian distributions cannot produce sharp angular cutoffs without many small primitives, limiting efficiency for specular materials.
+
+\textbf{Alternative Kernel Designs.}
+% Recent work explores kernels beyond Gaussians: GES \citep{hamdi2024gesgeneralizedexponentialsplatting} uses generalized exponentials for edge representation; Deformable Beta Splatting (DBS) \citep{liu2025deformable} introduces adaptive Beta kernels with learnable shape parameters; 3D Convex Splatting \citep{held20243dconvexsplattingradiance} handles flat surfaces; 3D Student Splatting \citep{zhu20253dstudentsplattingscooping} leverages heavier-tailed distributions; and Gabor Splats \citep{zhou20253dgabsplat3dgaborsplatting} captures high-frequency details. While these improve specific aspects, they remain confined to 3D spatial modeling without addressing view-dependent or temporal dimensions.
+\textcolor{red}{
+Recent work explores kernels beyond standard 3D Gaussians. Several methods modify the kernel shape to better capture geometric structure: GES \citep{hamdi2024gesgeneralizedexponentialsplatting}, TNT-GS \citep{liu2025tnt}, Quadratic Gaussian Splatting \citep{zhang2025quadratic}, 3D Half-Gaussian Splatting \citep{li20253d}, and Disc-GS \citep{qu2024disc} propose generalized exponentials, truncated, second-order, half, and discontinuity-aware Gaussian splats. Other approaches expand the distribution family, including Deformable Beta Splatting (DBS) \citep{liu2025deformable}, 3D Student Splatting \citep{zhu20253dstudentsplattingscooping}, and Gabor Splats \citep{zhou20253dgabsplat3dgaborsplatting} for sharper edges or heavier-tailed behavior. For appearance modeling, Textured Gaussians \citep{chao2025textured} enrich per-splat color detail. Beyond volumetric kernels, 3D Convex Splatting \citep{held20243dconvexsplattingradiance}, Triangle Splatting \citep{held2025triangle}, and Deformable Radial Kernel Splatting \citep{huang2025deformable} introduce other geometric primitives as alternatives to ellipsoids. While these methods improve specific aspects of spatial reconstruction, they remain confined to 3D spatial kernels, without extending to unified high-dimensional splatting that jointly models spatial, angular, or temporal dimensions.
+}
+
+\textbf{Dynamic Neural Radiance Fields and Gaussian Splatting.}
+Early NeRF extensions modeled dynamics through deformation fields: D-NeRF \citep{pumarola2020dnerfneuralradiancefields} learns canonical-to-deformed mappings, Nerfies \citep{park2021nerfies} handles non-rigid deformations, HyperNeRF \citep{park2021hypernerf} models topological changes, and HexPlane \citep{cao2023hexplane} uses factorized representations.
+
+For Gaussian Splatting, 4D Gaussian Splatting (4DGS) \citep{yang2023real} extends primitives temporally for real-time dynamic rendering. Dynamic 3D Gaussians \citep{luiten2023dynamic} and related works \citep{wu20244d, yang2024deformable} combine canonical representations with learned deformations. 7D Gaussian Splatting (7DGS) \citep{gao20257dgs} unifies spatial, temporal, and angular dimensions without separate deformation networks. Despite this unification, Gaussian's symmetric profile enforces smooth transitions—a single primitive cannot simultaneously represent sharp spatial edges, abrupt temporal motion, and narrow specular highlights.
+
+Our Universal Beta Splatting addresses these limitations through controllable Beta kernels with per-dimension parameters, enabling dimension-specific adaptation and computational efficiency.
+
+\section{Preliminary}
+\label{sec:preliminary}
+
+\textbf{3D Gaussian Splatting (3DGS).}
+3DGS \citep{3dgs} represents scenes as collections of anisotropic 3D Gaussians parameterized by position $\bm{\mu} \in \mathbb{R}^3$, opacity $o$, rotation quaternion $\bm{q}$, scale $\bm{s}$, and color features $\bm{f}$. The covariance matrix $\bm{\Sigma} = \bm{R}\bm{S}\bm{S}^\top\bm{R}^\top$ is constructed from rotation and scale matrices. 
+\textcolor{red}{To render an image, each 3D Gaussian ellipsoid is projected into the 2D image plane using the viewing transformation $\bm{W}$. This yields a 2D mean $\bm{\mu}^\prime \in \mathbb{R}^2$ and a 2D covariance matrix $\bm{\Sigma}^\prime = \bm{JW\Sigma W^\top J^\top}$, where $\bm{J}$ is the Jacobian of the projection. For a pixel location $\bm{x} \in \mathbb{R}^2$, the Mahalanobis distance to the projected splat is
+    \begin{equation}
+        r_i(\bm{x}) = (\bm{x} - \bm{\mu}_i^\prime)^\top \bm{\Sigma}_i^{\prime^{-1}} (\bm{x} - \bm{\mu}_i^\prime).
+    \end{equation}
+    }
+\textcolor{red}{The Gaussian contribution to the pixel is then computed using a Gaussian kernel multiplied by opacity:
+ \begin{equation}
+        \sigma(\bm{x}) = \mathcal{G}(\bm{x};\bm{\mu},\bm{\Sigma}) \cdot o=e^{-\frac{1}{2}r_i(\bm{x})} \cdot o.
+    \end{equation}
+}
+\textcolor{red}{Finally, after sorting the primitives in front-to-back order, the pixel color is obtained using standard alpha compositing:
+\begin{equation}
+\bm{C}(\bm{x}) = \sum_{i=1}^N c_i \sigma_i(\bm{x}) \prod_{j=1}^{i-1}(1-\sigma_j(\bm{x})).
+\end{equation}
+}
+% \begin{equation}
+% \bm{C}(\bm{x}) = \sum_{i=1}^N c_i o_i \mathcal{G}\big(r_i(\bm{x})\big) \prod_{j=1}^{i-1}\Big(1-o_j\mathcal{G}\big(r_j(\bm{x})\big)\Big).
+% \end{equation}
+
+\textbf{Deformable Beta Splatting (DBS).}
+\textcolor{red}{DBS \citep{liu2025deformable} replaces Gaussian kernels with adaptive and bounded Beta kernels, defining density as $\sigma(\bm{x}) = \mathcal{B}(\bm{x};\bm{\mu},\bm{\Sigma},b) \cdot o$, where
+\begin{equation}
+\mathcal{B}(\bm{x};\bm{\mu},\bm{\Sigma},b) = (1 - r(\bm{x}))^{\beta(b)}, \quad \beta(b) = 4\exp(b), \quad b \in \mathbb{R}, \quad r(\bm{x}) \in [0, 1).
+\end{equation}}
+
+\textcolor{red}{The Beta kernel closely approximates a scaled Gaussian when initialization. As training progresses, the learnable parameter $b$ allows the kernel shape to adapt: negative $b$ produces flatter profiles with sharper boundaries suitable for solid geometry, while positive $b$ yields sharper peaks that better capture high-frequency details. This adaptability enables DBS to model diverse geometric structures more effectively than fixed Gaussian kernels. Appendix~\ref{app:Theoretical Foundation and Analysis} includes more background and motivation.}
+
+\textbf{N-Dimensional Gaussian.}
+\textcolor{red}{6DGS \citep{gao20246dgs} and 7DGS \citep{gao20257dgs} extend 3DGS through conditional distributions. The key idea is to model a joint distribution over spatial and non-spatial dimensions (view/time), then condition on the query to obtain a view-specific or time-specific 3D Gaussian for rendering. 6DGS incorporates viewing direction into a 6D joint distribution:}
+\begin{equation}
+X = \begin{pmatrix} X_p \\ X_d \end{pmatrix} \sim \mathcal{N}\!\left(
+\begin{pmatrix}
+\bm{\mu}_p \\ \bm{\mu}_d
+\end{pmatrix},
+\begin{pmatrix}
+\bm{\Sigma}_p & \bm{\Sigma}_{pd} \\
+\bm{\Sigma}_{pd}^\top & \bm{\Sigma}_d
+\end{pmatrix}
+\right).
+\end{equation}
+Conditioning on view $d$ yields conditional covariance $\bm{\Sigma}_{\text{cond}} = \bm{\Sigma}_p - \bm{\Sigma}_{pd}\bm{\Sigma}_d^{-1}\bm{\Sigma}_{pd}^\top$, conditional mean $\bm{\mu}_{\text{cond}} = \bm{\mu}_p + \bm{\Sigma}_{pd}\bm{\Sigma}_d^{-1}(d-\bm{\mu}_d)$, and modulated opacity $o_{\text{cond}} = o \cdot \exp(-\lambda(d-\bm{\mu}_d)^\top\bm{\Sigma}_d^{-1}(d-\bm{\mu}_d))$.
+
+7DGS adds temporal dimension $X_t$ for dynamic scenes, with conditioning on both time and view producing spatio-temporal-angular modulation. These methods establish high-dimensional representations but remain limited by fixed Gaussian profiles that cannot independently control cross-dimensional dependencies—a limitation UBS addresses through adaptive Beta kernels.
+
+\section{Method}
+\label{sec:method}
+
+In this section, we introduce Universal Beta Splatting (UBS), a unified framework that extends explicit radiance field rendering to $N$-dimensional anisotropic Beta kernels.
+%We describe its four key components: $N$-dimensional Beta kernels with per-dimension shape control (Sec.~\ref{sec:method_n_beta_kernal}), spatial-orthogonal parameterization preserving geometric structure (Sec.~\ref{sec:method_spatial_ortho_chlesky}), Beta-modulated conditional slicing for rendering, and kernel-agnostic optimization (Sec.~\ref{sec:method_beta_modulated}), and finally show its compatibility with existing frameworks and universal interpretability (Sec.~\ref{sec:method_universal_compatibility}).
+
+% We introduce Universal Beta Splatting (UBS), a unified framework that extends explicit radiance field rendering to $N$-dimensional anisotropic Beta kernels. Our approach addresses the fundamental limitations of Gaussian primitives through four key components: $N$-dimensional Beta kernels with per-dimension shape control, spatial-orthogonal parameterization preserving geometric structure, Beta-modulated conditional slicing for rendering, and kernel-agnostic optimization.
+
+\begin{figure}
+    \centering
+    \includegraphics[width=0.99\linewidth]{figs/pipeline3.pdf}
+    % \vspace{-0.5em}
+    \caption{Visualization of decomposition. Our learned Beta parameters provide interpretable scene decomposition \textcolor{red}{across spatial, angular, and temporal dimensions} without explicit supervision.}
+    \label{fig:pipeline}
+    % \vspace{-1em}
+\end{figure}
+
+\subsection{N-Dimensional Beta Kernel}
+\label{sec:method_n_beta_kernal}
+\textcolor{red}{The core innovation of UBS is the $N$-dimensional anisotropic Beta kernel that generalizes the DBS density function to higher dimensions:}
+\begin{equation}
+\sigma(\bm{x}, \bm{q}) = \mathcal{B}\bigl(\bm{x}, \bm{q};\,\bm{\mu},\,\bm{\Sigma},\,\bm{b}\bigr) \cdot o,
+\end{equation}
+where $\bm{x}\in\mathbb{R}^3$ represents spatial coordinates, the query $\bm{q}\in\mathbb{R}^{N-3}$ encodes additional dimensions (view direction, time, \etc), $\bm{\mu}\in\mathbb{R}^{N}$ is the mean vector, $\bm{\Sigma}\in\mathbb{R}^{N\times N}$ is the covariance matrix, $\bm{b}\in\mathbb{R}^{N-2}$ controls the Beta shape parameters across dimensions (Betas are shared in spatial domain), and $o \in [0,1]$ is the opacity. The shape parameters $\bm{b}$ are transformed to ensure positive Beta exponents: $\beta_i = 4\exp(b_i)$, enabling each dimension to adopt optimal kernel forms—from flat (negative $b_i$) to peaked (positive $b_i$).
+
+In addition to the primitive shape, each kernel primitive also carries an RGB color $\bm{c}\in[0,1]^3$. Crucially, because the Beta kernel can natively incorporate view and temporal dimensions through $\bm{q}$, no auxiliary color encoding is required to model view-dependent appearance or dynamics. This unified representation significantly reduces the per-primitive parameter count: for static scenes, UBS achieves a 41\% parameter reduction compared to 3DGS, and for dynamic scenes, UBS uses 73\% fewer parameters than 4DGS, as detailed in Table~\ref{tab:parameter_comparison} in the Appendix \ref{app:efficiency}. In contrast, existing methods rely on auxiliary encodings: 3DGS, 6DGS, and 7DGS employ 48-parameter spherical harmonics, 4DGS requires 144-parameter 4D spherical harmonics, and DBS needs additional spherical Beta functions for color modeling.
+
+To maintain valid spatial geometry and guarantee backward compatibility while preserving high-dimensional expressiveness, we partition the $N$-dimensional space as:
+\begin{equation}
+\bm{\mu}=
+\begin{pmatrix}
+\bm{\mu}_x \\
+\bm{\mu}_q           
+\end{pmatrix}, \quad
+\bm{\Sigma}=
+\begin{pmatrix}
+\bm{\Sigma}_x      &\bm{\Sigma}_{xq} \\
+\bm{\Sigma}_{qx} & \bm{\Sigma}_q          
+\end{pmatrix},
+\end{equation}
+where subscript $x$ denotes spatial components and $q$ denotes the additional dimensions. This partitioning allows conditioning on non-spatial dimensions to obtain renderable 3D representations.
+
+\subsection{Spatial-Orthogonal Cholesky Parameterization}
+\label{sec:method_spatial_ortho_chlesky}
+
+While mean vectors, beta shapes, and colors are straightforward to parameterize, the covariance matrix requires additional care as it must be symmetric and positive semi-definite. In 3DGS, this is achieved by factorizing the covariance as $\bm{\Sigma} = \bm{R}\,\text{diag}(\bm{s})^2\,\bm{R}^\top$, where $\bm{R}$ is a rotation matrix parameterized by quaternions and $\bm{s}$ are per-axis scales. However, quaternions do not generalize to higher dimensions ($N>3$). $N$-dimensional Gaussian methods therefore resort to Cholesky factorization $\bm{\Sigma} = \bm{L}\bm{L}^\top$, which loses explicit orthogonality and often leads to suboptimal solutions in the spatial subspace.
+
+To address this limitation, we introduce the \textit{Spatial-Orthogonal Cholesky} parameterization that preserves rotation-scale structure in the spatial subspace while enabling flexible cross-dimensional correlations. For $N = 3 + C$ dimensions, we construct:
+\begin{equation}
+\bm{L} = \begin{pmatrix}
+\bm{R}_x\,\text{diag}(\bm{s}_x) & \bm{0} \\
+\bm{L}_{qx} & \bm{L}_{q}
+\end{pmatrix},
+\end{equation}
+where $\bm{R}_x \in \text{SO}(3)$ is the spatial rotation computed via first-order Taylor approximation $\bm{R}_x \approx \bm{I} + \bm{A}_x$ of the matrix exponential (with $\bm{A}_x$ skew-symmetric), $\bm{s}_x$ are spatial scales, $\bm{s}_q$ are scales for other dimensions, and $\bm{L}_{qx}$ encodes cross-correlations. As shown in Table \ref{tab:rotation_comparison} (Appendix~\ref{app:spatial-orthogonal}), this first-order approximation provides nearly identical fidelity while greatly reducing computation. The covariance $\bm{\Sigma} = \bm{L}\bm{L}^\top$ maintains explicit 3D geometric structure while allowing expressive correlations across view and time. \textcolor{red}{More theoretical and empirical analysis are available in Appendix~\ref{app:spatial-orthogonal}.}
+
+\subsection{Beta-Modulated Conditional Slicing}
+\label{sec:method_beta_modulated}
+In $N$-dimensional Gaussians, all dimensions are coupled: when the input view or time changes, the primitive is inevitably dragged along—it shifts in space, stretches in shape, and fades in opacity. To break this constraint, we introduce Beta-Modulated Conditional Slicing.
+
+To render at query condition $\bm{q}$, we condition the $N$-dimensional Beta kernel to obtain a 3D spatial representation. We introduce Beta modulation to the standard conditional Gaussian formulation:
+
+\textbf{Beta Parameters.} We define per-dimension Beta exponents with spatial parameter sharing: $\bm{\beta} = [\beta_x, \beta_x, \beta_x, \beta_{q_1}, \ldots, \beta_{q_C}]$ where $\beta_x = 4\exp(b_x)$ is shared across the first three spatial dimensions and $\beta_{q_i} = \exp(b_{q_i})$ are individual parameters for the $C$ non-spatial dimensions. We share the spatial Beta parameter across all three spatial dimensions to ensure that splatted kernels maintain consistent spatial geometry. This design choice prevents inconsistent spatial artifacts while still allowing per-dimension control in angular and temporal domains.
+
+\textbf{Beta-Modulated Conditioning.} The conditional mean and covariance incorporate dimension-specific Beta modulation:
+\begin{align}
+\bm{\mu}_{x\mid q} &= \bm{\mu}_x + \bm{\Sigma}_{xq}\,\bm{\Sigma}_q^{-1}\,\text{diag}(\bm{\tilde{\beta}}_q)\,(\bm{q}-\bm{\mu}_q), \\
+\bm{\Sigma}_{x\mid q} &= \bm{\Sigma}_x - \bm{\Sigma}_{xq}\,\bm{\Sigma}_q^{-1}\,\text{diag}(\bm{\tilde{\beta}}_q)\,\bm{\Sigma}_{qx},
+\end{align}
+where $\text{diag}(\bm{\tilde{\beta}}_q) = \text{diag}([\beta_{q_1}, \ldots, \beta_{q_C}]_{\leq1})$ applies dimension-specific Beta modulation to the non-spatial conditioning terms while preserving isotropic spatial structure.
+
+\textbf{Beta-Modulated Opacity.} We adopt a factorized opacity with inherent multidimensional support:
+\begin{align}
+d_i^{\text{raw}} = (\hat{\bm{L}}_{q}^{-1}(\bm{q}-\bm{\mu}_q))^2_i, \quad
+d_i &= \tanh{(\frac{d_i^{\text{raw}}}{2})} \in[0,1),\quad 
+o(\bm{q}) = o \prod_{i=1}^{C} (1- d_i)^{4\beta_{q_i}},
+\end{align}
+where $\hat{\bm{L}}_{q}$ denotes the Cholesky factor of $\bm{\Sigma}_q$, such that $\hat{\bm{L}}_{q}^{-1}\hat{\bm{L}}_{q}^{-\top}=\bm{\Sigma}_q^{-1}$. Then $\tanh$ maps per-dimension Mahalanobis distance $d_i^{\text{raw}}$ into a bounded value $d_i \in [0,1)$, satisfying the Beta kernel input definition. The modulated product form allows independent control over each non-spatial dimension's contribution.
+
+\textbf{Final Beta-Splat Density.} The conditioned 3D Beta kernel becomes:
+\begin{equation}
+\sigma(\bm{x}, \bm{q}) = \mathcal{B}\!\left(\bm{x};\, \bm{\mu}_{x\mid q},\, \bm{\Sigma}_{x\mid q},\, b_x\right) \cdot o(\bm{q}),
+\end{equation}
+where the spatial Beta $b_x$ controls the 3D kernel shape uniformly across all spatial dimensions.
+
+\subsection{Universal Compatibility and Interpretability}
+\label{sec:method_universal_compatibility}
+
+\textbf{Adaptive Specialization.} UBS naturally specializes for different applications through its query dimensions: (1) $\bm{q} = \bm{d}$ (view direction, $N=6$) for view-dependent rendering with anisotropic BRDF modeling, denoted as UBS-6D; (2) $\bm{q} = [t, \bm{d}]$ (time + view, $N=7$) for dynamic scenes capturing spatio-temporal-angular correlations, denoted as UBS-7D; and (3) seamless extension to higher dimensions for additional modalities like lighting or material properties.
+
+\textbf{Universal Compatibility.} UBS provides backward compatibility by design, reducing to existing methods under specific parameter settings. For $N=3$ (pure spatial), UBS reduces to Deformable Beta Splatting with $\sigma(\bm{x}) = \mathcal{B}(\bm{x}; \bm{\mu}_x, \bm{\Sigma}_x, b_x) \cdot o$, and further approximates to standard 3DGS when $b_x = 0$ (Gaussian limit). For higher dimensions with all Beta parameters zero ($\bm{b} = \bm{0}$), UBS approximates corresponding Gaussian methods: 6DGS for view-dependent rendering ($N=6$) and 7DGS for dynamic scenes ($N=7$). This guaranteed compatibility ensures UBS serves as a seamless drop-in replacement while providing performance lower bounds.
+
+\textbf{Interpretable Decomposition.} Beyond compatibility, learned Beta parameters provide interpretable scene decomposition without explicit supervision. Spatial parameters distinguish geometry types: negative $b_x$ produces flat kernels for smooth surfaces, while positive $b_x$ creates peaked kernels for fine textures. Angular parameters separate appearance models: negative $b_d$ yields broad responses for diffuse surfaces, while positive $b_d$ generates sharp peaks for specular reflections. Temporal parameters isolate motion patterns: negative $b_t$ maintains broad support for static elements, while positive $b_t$ provides localized activation for dynamic components, as illustrated in Figure \ref{fig:pipeline}. This decomposition enables applications like relighting and motion analysis without requiring separate encodings or auxiliary networks.
+
+\subsection{Optimization and Implementation}
+
+For primitive management, we adopt the kernel-agnostic MCMC optimization from DBS \citep{liu2025deformable}, which provides stable, distribution-preserving updates independent of kernel form.
+
+\textbf{Loss Function.} We optimize with reconstruction losses and regularization:
+\begin{align}
+\mathcal{L} &= (1 - \lambda_{\text{SSIM}}) \mathcal{L}_1 + \lambda_{\text{SSIM}} \mathcal{L}_{\text{SSIM}} + \lambda_o \sum_i |o_i| + \lambda_\Sigma \sum_i ||\bm{s}_i||_1,
+\end{align}
+where opacity regularization $\lambda_o$ ensures valid MCMC densification and scale penalty $\lambda_\Sigma$ encourages primitive relocation. Spatial noise injection $\bm{\mu}_x \leftarrow \bm{\mu}_x - \lambda_{\text{lr}} \nabla_{\bm{\mu}} \mathcal{L} + \lambda_\epsilon \epsilon$ promotes exploration.
+
+\textbf{Densification.} Cloned primitive opacity follows $o' = 1 - \sqrt[N]{1 - o}$ to preserve distribution. Under opacity regularization, adjusting opacity maintains density distribution regardless of kernel type.
+
+\textbf{CUDA Implementation.} We provide fused CUDA kernels for Beta evaluation, conditional slicing, and spatial-orthogonal operations. The pipeline maintains compatibility with existing frameworks: $N$-dimensional kernels are conditioned to 3D then rasterized using standard splatting. This modular design enables real-time performance while allowing future integration with acceleration techniques like FlashGS \citep{feng2024flashgs} and extended camera models from 3DGUT \citep{wu20253dgut}.
+
+\section{Experiments}
+\subsection{Experimental Setup}
+
+\textbf{Datasets.}
+We evaluate UBS across five diverse datasets covering both static and dynamic scenes:
+\begin{itemize}[left=0pt, labelsep=0.5em, noitemsep, topsep=0pt, partopsep=0pt, parsep=0pt]
+    \item \textit{Static:} we use (1) \textit{NeRF Synthetic} \citep{mildenhall2021nerf} with 8 synthetic scenes under controlled lighting for geometric reconstruction assessment; (2) \textit{Mip-NeRF 360} \citep{barron2021mipnerf} sharing 9 unbounded real-world scenes challenging anti-aliasing and view synthesis; and (3) \textit{6DGS-PBR} \citep{gao20246dgs} featuring 7 physically-based scenes with complex view-dependent effects including volumetric scattering, translucent materials, subsurface scattering, and medical volumetrics.
+    
+    \item \textit{Dynamic:} we evaluate on: (4) \textit{D-NeRF} \citep{pumarola2020dnerfneuralradiancefields} with 8 synthetic sequences featuring various deformation types; and (5) \textit{7DGS-PBR} \citep{gao20257dgs} containing 6 physically-based dynamic scenes with complex spatio-temporal-angular correlations including cardiac motion, daylight transitions, animated volumetric effects, and translucent deformations.
+\end{itemize}
+
+\textbf{Evaluation Metrics.}
+We assess reconstruction quality using standard metrics: Peak Signal-to-Noise Ratio (PSNR), Structural Similarity Index Measure (SSIM) \citep{wang2004image}, and Learned Perceptual Image Patch Similarity (LPIPS) \citep{zhang2018perceptual}. Additionally, we report rendering speed (FPS) and training time to evaluate computational efficiency. All metrics are computed on held-out test views following standard evaluation protocols.
+
+\textbf{Implementation Details.}
+UBS is implemented in PyTorch with custom CUDA kernels for Beta kernel evaluation and conditional slicing operations. We conduct on a single NVIDIA RTX 4090 24GB GPU for static and ablation experiments and a single NVIDIA Tesla V100 16GB GPU for dynamic experiments to be consistent 7DGS. Training employs the Adam optimizer for 30K iterations with learning rates of $1.6 \times 10^{-4}$ for positions, $5 \times 10^{-2}$ for opacity, $5 \times 10^{-3}$ for scales, and $1 \times 10^{-3}$ for other parameters. The regularization weights are set to $\lambda_o = 0.01$, $\lambda_\Sigma=0.01$, and $\lambda_\epsilon=1$. For $N$-dimensional cases, we randomly initialize temporal and directional means ($\mu_t$, $\bm{\mu}_d$) within [0, 1]. Beta parameters are initialized to zero, corresponding to the Gaussian limit for guaranteed convergence. For dynamic scenes, we use a batch size of 4 to maintain consistency with 4DGS and 7DGS baselines. Unlike these methods which evaluate on test sets every 500 iterations and report best results in their papers, we report at the final iteration (30K) to demonstrate convergence stability.
+
+% \subsection{Comparison with Baselines}
+\subsection{Comparison with the State of the Art}
+Table \ref{tab:static-result} compares our UBS with 3DGS \citep{3dgs}, 4DGS \citep{yang2023real}, 6DGS \citep{gao20246dgs}, and 7DGS \citep{gao20257dgs} on both static and dynamic benchmarks.
+
+\textbf{Static Scenes.} Our method UBS-6D consistently achieves superior reconstruction quality across all datasets while maintaining competitive training efficiency on three static scene benchmarks:
+\input{tabs/static_and_dynamic}
+
+\begin{figure}[tbp]
+    \centering
+    % --- Static scenes image ---
+    \includegraphics[width=0.92\linewidth]{figs/qualitative.png}
+    \caption{Qualitative comparison of methods for static and dynamic scenes.}
+    \label{fig:qualitative}
+    % \vspace{-1em}
+\end{figure}
+
+\begin{itemize}[left=0pt, labelsep=0.5em, noitemsep, topsep=0pt, partopsep=0pt, parsep=0pt]
+\item \textit{NeRF Synthetic:} UBS-6D achieves 34.92 dB PSNR, improving by +1.13 dB over 3DGS and +1.32 dB over 6DGS. Despite lacking strong view-dependent effects, the dataset benefits from Beta kernels' geometric adaptivity, with notable improvements on scenes requiring diverse surface representations (\texttt{ficus}: +1.41 dB over 3DGS, \texttt{materials}: +2.40 dB over 3DGS).
+
+\item \textit{Mip-NeRF 360:} UBS-6D reaches 28.66 dB PSNR, surpassing 3DGS by +1.23 dB and 6DGS by +2.31 dB. The real-world unbounded scenes showcase UBS's effectiveness on complex lighting conditions, with substantial gains on indoor environments (\texttt{counter}: +2.43 dB over 3DGS, \texttt{bonsai}: +3.00 dB over 3DGS).
+
+\item \textit{6DGS-PBR:} UBS-6D demonstrates the most significant improvements with 40.10 dB PSNR (+12.70 dB over 3DGS, +3.42 dB over 6DGS average). The physically-based scenes with volumetric scattering and translucency particularly benefit from per-dimension Beta control: volumetric effects like \texttt{cloud} improve by +5.81 dB over 6DGS, while complex materials like \texttt{bunny} achieve a remarkable +8.27 dB improvement over 6DGS.
+\end{itemize}
+
+Overall, UBS-6D demonstrates exceptional performance on challenging view-dependent scenarios in \textit{6DGS-PBR}. In addition, UBS-6D establishes new state-of-the-art results on \textit{NeRF Synthetic} and \textit{Mip-NeRF 360} shown in Table \ref{tab:sota} in Appendix~\ref{app:comparisons}.
+
+\textbf{Dynamic Scenes.} We compare our method UBS-7D with 4DGS and 7DGS on 2 dynamic benchmarks. Note that we consider the base 7DGS without MLP networks for adaptive Gaussian refinement (AGR) to ensure fair comparison and isolate the benefits of our primitive design from auxiliary networks:
+
+\begin{itemize}[left=0pt, labelsep=0.5em, noitemsep, topsep=0pt, partopsep=0pt, parsep=0pt]
+\item \textit{7DGS-PBR:} UBS-7D achieves 33.00 dB PSNR, outperforming 4DGS by +5.26 dB and 7DGS by +1.25 dB. The physically-based dynamic scenes with spatio-temporal-angular correlations show substantial improvements, particularly on complex volumetric dynamics (\texttt{dust}: +2.32 dB over 7DGS) and cardiac motion sequences (\texttt{heart1}: +2.78 dB over 7DGS).
+
+\item \textit{D-NeRF:} UBS-7D reaches 33.35 dB PSNR (+1.26 dB over 4DGS, +0.51 dB over 7DGS). The synthetic monocular sequences benefit from Beta kernels' ability to model diverse temporal behaviors, with notable gains on scenes requiring both spatial detail and temporal precision (\texttt{mutant}: +1.54 dB over 7DGS, \texttt{h.warrior}: +1.51 dB over 7DGS).
+\end{itemize}
+
+The consistent improvements across PSNR, SSIM, and LPIPS metrics confirm that UBS's enhanced representational capacity translates to comprehensive quality gains. Figure \ref{fig:qualitative} demonstrates that UBS achieves better visual quality in both static and dynamic scenes compared with baseline methods. \textcolor{red}{Additional quantitative benchmark comparisons are provided in Appendix~\ref{app:comparisons}.}
+
+\textcolor{red}{
+\textbf{Efficiency Analysis.} Beyond reconstruction quality, UBS demonstrates superior computational efficiency through its streamlined primitive design and optimized CUDA implementation. Table~\ref{tab:efficiency-main} summarizes the efficiency comparison across all benchmarks, with detailed per-scene results provided in Table~\ref{tab:efficiency-result} in the Appendix~\ref{app:efficiency}. For static scenes, UBS-6D achieves significantly faster training than 6DGS on NeRF Synthetic (8.7 vs 12.7 minutes, 31.5\% reduction) and Mip-NeRF 360 (25.2 vs 81.9 minutes, 69.2\% reduction) with competitive memory usage. On 6DGS-PBR, UBS-6D requires longer training time (27.7 vs 22.2 minutes) due to our use of higher primitive counts (300K vs 68K) to fully exploit Beta kernels' representational capacity for complex volumetric effects. For dynamic scenes, UBS-7D delivers substantial training time reductions of 48.7\% on 7DGS-PBR (59.9 vs 116.7 minutes) and 17.0\% on D-NeRF (42.1 vs 50.7 minutes), both compared to 7DGS. These efficiency gains stem from our unified Beta kernel approach, which eliminates auxiliary spherical harmonic encodings while enabling efficient CUDA-accelerated conditional slicing operations.
+}
+\input{tabs/efficiency_main}
+
+\subsection{Ablation Study}
+We conduct ablations on representative samples of static scenes in \textit{6DGS-PBR}~\citep{gao20246dgs} dataset (\texttt{ficus}, \texttt{bonsai}) and of dynamic scenes in \textit{7DGS-PBR}~\citep{gao20257dgs} dataset (\texttt{cloud}, \texttt{lego}) to validate our design choices and efficient CUDA implementation (Table~\ref{tab:ablation}).
+
+\textbf{Spatial-Orthogonal Parameterization.} Pure rotation-scale parameterization and full Cholesky without spatial orthogonality reduce quality by 0.29 dB and 0.56 dB, respectively, confirming the importance of preserving the spatial $\text{SO}(3)$ structure and maintaining flexibility of other dimensions. \textbf{Beta-Modulated Conditioning.} Removing Beta modulation decreases performance by 0.53 dB, with larger drops on dynamic scenes (\texttt{lego}: $-1.25$ dB), validating dimension-specific shape control for decoupling spatial-angular-temporal responses.  \textbf{Beta-Modulated Opacity.} Disabling Beta-modulated opacity causes the most significant degradation ($-3.52$ dB average), particularly on volumetric scenes (\texttt{cloud}: $-6.68$ dB), proving the gated product form opacity crucial for anisotropic falloff. \textbf{CUDA Acceleration.} Custom CUDA kernels reduce training time by 58\% (12.9 vs 30.7 minutes) and improve rendering speed by 26\% (196.2 vs 155.8 FPS), enhancing real-time performance through fused Beta evaluation and conditional slicing operations. 
+
+These studies confirm each component's contribution to UBS's performance, with the complete model showing consistent gains across diverse scenarios while maintaining computational efficiency.
+
+\input{tabs/ablation}
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+We presented Universal Beta Splatting (UBS), a unified framework extending radiance field rendering to $N$-dimensional anisotropic Beta kernels. By replacing fixed Gaussian profiles with adaptive per-dimension shape control, UBS simultaneously models spatial geometry, view-dependent appearance, and temporal dynamics within a single primitive. Our spatial-orthogonal parameterization and Beta-modulated conditional slicing enable independent dimensional control while preserving geometric consistency. Experiments demonstrate significant improvements—up to +8.27 dB PSNR on volumetric scenes and 48.7\% faster training on dynamic sequences—while maintaining backward compatibility by approximating Gaussian methods. The learned Beta parameters provide interpretable scene decomposition without explicit supervision, and our CUDA implementation achieves real-time rendering, establishing Beta kernels as practical universal primitives for radiance fields.
+
+
+% \TODO{Add limitations here}
+
+\bibliographystyle{iclr2026_conference}
+\bibliography{references} 
+
+\clearpage
+\def\maketitlesupplementary
+   {
+   \newpage
+       % \twocolumn[
+        {\centering
+        \Large
+        \textbf{\thetitle}\\
+        \vspace{0.3em}Supplementary Material \\
+        \vspace{0.5em}
+       % ] %< twocolumn
+       }
+   }
+\maketitlesupplementary
+
+\appendix
+
+\section{More Comparisons}
+\label{app:comparisons}
+
+\subsection{Comparison with State-of-the-art Methods}
+
+Table~\ref{tab:sota} presents a comprehensive comparison of UBS-6D with state-of-the-art neural rendering methods on the Mip-NeRF360 \citep{barron2021mipnerf} and NeRF Synthetic \citep{mildenhall2021nerf} benchmarks. Our method achieves the highest PSNR on both datasets, demonstrating the effectiveness of adaptive Beta kernels over fixed Gaussian profiles. 
+% Notably, UBS-6D surpasses the previous best method (DBS) by 0.06 dB on Mip-NeRF360 and 0.28 dB on NeRF Synthetic, while maintaining competitive SSIM and LPIPS scores. 
+The consistent improvements across both synthetic and real-world scenes validate the universal applicability of our Beta kernel framework.
+
+\input{tabs/sota}
+
+Table~\ref{tab:n3v} reports a quantitative comparison of UBS-7D against state-of-the-art kernel-based methods on the real-world N3V dataset \citep{li2022neural}. UBS-7D achieves the best overall average PSNR of 32.22 dB, outperforming Ex4DGS (32.11 dB) and 7DGS (31.59 dB), while winning in 4 out of 6 scenes. This demonstrates the unified Beta primitive's effectiveness in capturing complex temporal dynamics and appearance variations in real-world dynamic content. Earlier methods 4DGS (30.19 dB) and 4DGaussians (28.63 dB) show significantly larger performance gaps, validating the advantage of our N-D anisotropic kernel design for challenging 4D reconstruction tasks.
+
+\input{tabs/n3v}
+
+
+\subsection{\textcolor{red}{Comparisons on the 6DGS-PBR dataset}}
+
+Table~\ref{tab:6dgspbr} compares UBS-6D (Ours) with 3DGS~\citep{3dgs}, DBS~\citep{liu2025deformable}, and 6DGS~\citep{gao20246dgs} on the 6DGS-PBR dataset. UBS-6D consistently achieves the best performance across all seven scenes, surpassing all baselines in reconstruction accuracy and perceptual quality.
+On average, UBS-6D achieves \textbf{40.10 dB} PSNR, \textbf{0.979} SSIM, and \textbf{0.039} LPIPS, outperforming 6DGS by +3.4 dB PSNR and DBS by +8.8 dB, with comparable training efficiency (27.7 min vs.\ 22.2/22.4 min). The clear gap between 6DGS/UBS-6D and 3DGS/DBS arises from the presence of \textit{conditional slicing}, which allows the mean and covariance to adapt with viewing conditions. In contrast, 3DGS and DBS rely on static spatial kernels, limiting their ability to capture these view-dependent effects. By combining high-dimensional Beta kernels with conditional slicing, UBS-6D attains complex visual effects and photorealism while maintaining competitive runtime.
+
+
+\input{tabs/6dgs-pbr}
+\section{Efficiency Analysis}
+\label{app:efficiency}
+
+\subsection{Per-Primitive Parameter Analysis}
+Table~\ref{tab:parameter_comparison} provides a detailed breakdown of parameter counts per primitive across different splatting methods. UBS achieves significant parameter efficiency by eliminating the need for auxiliary color encodings through its native high-dimensional representation.
+\input{tabs/primitive}
+
+For static scenes, 3DGS requires 59 parameters per primitive: 11 for geometry (\texttt{pos}: 3, \texttt{scale}: 3, \texttt{rotation}: 4, \texttt{opacity}: 1) and 48 for spherical harmonic color encoding (16 coefficients $\times$ 3 RGB channels). 6DGS increases this to 76 parameters by expanding the covariance representation to 28 parameters while maintaining the same 48-parameter SH encoding. In contrast, UBS-6D requires only 35 parameters: 32 for $N$-dimensional geometry (\texttt{pos}: 3, \texttt{dir}: 3, \texttt{spatial-orthogonal covariance}: 21, \texttt{beta shapes}: 4, \texttt{opacity}: 1) and just 3 for direct RGB color, achieving a 41\% parameter reduction compared to 3DGS.
+
+For dynamic scenes, the parameter efficiency becomes even more pronounced. 4DGS requires 161 parameters per primitive: 17 for 4D geometry (\texttt{pos}: 3, \texttt{time}: 1, \texttt{4D-scale}: 4, \texttt{4D-rotation}: 8, \texttt{opacity}: 1) and 144 for temporal spherical harmonics (48 coefficients $\times$ 3 RGB channels). 7DGS reduces this to 84 parameters: 36 for geometry (\texttt{pos}: 3, \texttt{time}: 1, \texttt{dir}: 3, \texttt{7D covariance}: 28, \texttt{opacity}: 1) and 48 for standard SH encoding. UBS-7D achieves the most compact representation with only 44 parameters: 41 for unified 7D geometry (\texttt{pos}: 3, \texttt{time}: 1, \texttt{dir}: 3, \texttt{spatial-orthogonal covariance}: 28, \texttt{beta shapes}: 5, \texttt{opacity}: 1) and 3 for direct RGB color, representing a 73\% parameter reduction compared to 4DGS.
+
+This dramatic parameter efficiency stems from UBS's ability to natively encode view-dependent and temporal variations within the kernel itself, eliminating the need for separate spherical harmonic or temporal color encodings. The Beta kernel's inherent anisotropy across dimensions captures complex appearance variations that would otherwise require dozens of harmonic coefficients, making UBS both more expressive and more parameter-efficient than existing methods.
+
+\subsection{\textcolor{red}{Computational Efficiency}}
+\input{UBS/tabs/efficiency}
+\input{tabs/nerf_synthetic_capacity}
+
+
+Table~\ref{tab:efficiency-result} presents a comprehensive efficiency comparison between UBS and baseline methods. For static scenes, UBS-6D achieves 31\% faster training than 6DGS on NeRF Synthetic (8.7 vs 12.7 minutes) with 43\% memory reduction (40.1 vs 69.8 MB) and 345.7 FPS rendering. On Mip-NeRF 360, UBS achieves the lowest memory usage (409.0 MB, 47\% and 30\% reduction vs 3DGS and 6DGS) with 100.4 FPS. On 6DGS-PBR, UBS achieves comparable training times (27.7 vs 22.2 minutes for 6DGS) with 290.2 FPS. For dynamic scenes, UBS-7D reduces training time by 53\% and 49\% compared to 4DGS and 7DGS on 7DGS-PBR (59.9 vs 127.2 and 116.7 minutes) with 359.6 FPS, and by 20\% and 17\% on D-NeRF (42.1 vs 52.6 and 50.7 minutes) with 368.2 FPS. The efficiency gains stem from UBS's unified Beta kernel design, which eliminates auxiliary spherical harmonic encodings. Moreover, unlike previous Gaussian methods that rely on heuristic densification and pruning, UBS employs MCMC-based optimization that allows direct control over primitive count, enabling flexible speed-quality trade-offs as demonstrated in Table~\ref{tab:nerf_synthetic_capacity}.
+
+
+Table~\ref{tab:nerf_synthetic_capacity} demonstrates this flexibility by analyzing the speed-quality trade-off across varying primitive capacities (100K, 200K, 300K) on NeRF Synthetic. Results reveal that reducing primitives from 300K to 100K decreases quality by only 0.47 dB PSNR (34.89 to 34.42 dB) while significantly improving rendering speed by 56\% (345.7 to 540.3 FPS) and reducing memory by 67\% (40.1 to 13.4 MB). This demonstrates that UBS can be optimized for speed-critical applications by adaptively adjusting primitive counts to balance quality and efficiency.
+
+
+
+
+\section{\textcolor{red}{Spatial-Orthogonal Cholesky Parameterization}}
+\label{app:spatial-orthogonal}
+
+\input{tabs/rotation}
+
+Our spatial-orthogonal Cholesky parameterization (Equation 6 in the main paper) addresses a fundamental challenge in $N$-dimensional radiance field rendering: how to parameterize covariance matrices that simultaneously preserve interpretable 3D spatial structure while enabling flexible cross-dimensional correlations. This section provides theoretical justification for our design and empirical validation of our rotation parameterization choice.
+
+\subsection{\textcolor{red}{Theoretical Analysis}}
+
+\paragraph{Design Requirements.}
+For the covariance matrix $\bm{\Sigma} \in \mathbb{R}^{N \times N}$ in $N$-dimensional primitives, we require a parameterization that: (1) guarantees positive semi-definiteness (PSD), (2) preserves 3D spatial interpretability (rotation + scale structure), (3) enables cross-dimensional correlations with non-spatial dimensions (view, time), (4) generalizes to arbitrary $N$ dimensions, and (5) computes efficiently during optimization.
+
+Existing approaches fall short of these requirements. Quaternion-based rotation parameterization (used in 3DGS) provides excellent spatial interpretability but does not generalize beyond 3D. Pure Cholesky factorization generalizes to arbitrary dimensions but loses explicit spatial rotation structure, leading to suboptimal geometric representation (Table~\ref{tab:rotation_comparison} shows 0.22 dB PSNR drop). Naive matrix exponential approaches preserve orthogonality and generalize to $N$-D but incur prohibitive computational costs (3h+ training time).
+
+\paragraph{Construction.}
+We construct the covariance through a hybrid Cholesky factorization $\bm{\Sigma} = \bm{L}\bm{L}^\top$ with structured lower-triangular matrix:
+\begin{equation}
+\bm{L} = \begin{pmatrix} \bm{R}_x \text{diag}(\bm{s}_x) & \bm{0} \\ \bm{L}_{qx} & \bm{L}_{q} \end{pmatrix},
+\end{equation}
+where $\bm{R}_x \in SO(3)$ is the spatial rotation matrix, $\bm{s}_x \in \mathbb{R}^3$ are spatial scales, $\bm{s}_q \in \mathbb{R}^C$ are non-spatial scales for $C$ additional dimensions, and $\bm{L}_{qx} \in \mathbb{R}^{C \times 3}$ encodes cross-dimensional correlations. This yields:
+\begin{equation}
+\bm{\Sigma} = \begin{pmatrix} \bm{R}_x \text{diag}(\bm{s}_x)^2 \bm{R}_x^\top & \bm{R}_x \text{diag}(\bm{s}_x) \bm{L}_{qx}^\top \\ \bm{L}_{qx} \text{diag}(\bm{s}_x) \bm{R}_x^\top & \bm{L}_{qx} \bm{L}_{qx}^\top + \bm{L}_{q}\bm{L}_{q}^\top \end{pmatrix}.
+\end{equation}
+
+\paragraph{Skew-Symmetric Rotation Parameterization.}
+For the spatial rotation matrix $\bm{R}_x \in SO(3)$, we employ a skew-symmetric matrix parameterization. A skew-symmetric matrix $\bm{A}_x \in \mathbb{R}^{3 \times 3}$ satisfies $\bm{A}_x = -\bm{A}_x^\top$, which in 3D has the explicit form:
+\begin{equation}
+\bm{A}_x = \begin{pmatrix} 0 & -\omega_3 & \omega_2 \\ \omega_3 & 0 & -\omega_1 \\ -\omega_2 & \omega_1 & 0 \end{pmatrix}, \quad \bm{\omega} = (\omega_1, \omega_2, \omega_3)^\top \in \mathbb{R}^3,
+\end{equation}
+where $\bm{\omega}$ represents the learnable rotation parameters. The rotation matrix is obtained via the matrix exponential map:
+\begin{equation}
+\bm{R}_x = \exp(\bm{A}_x) = \sum_{k=0}^{\infty} \frac{\bm{A}_x^k}{k!} = \bm{I} + \bm{A}_x + \frac{\bm{A}_x^2}{2!} + \frac{\bm{A}_x^3}{3!} + \cdots,
+\end{equation}
+which mathematically guarantees orthogonality ($\bm{R}_x^\top \bm{R}_x = \bm{I}$) and unit determinant ($\det(\bm{R}_x) = 1$), ensuring $\bm{R}_x \in SO(3)$. For computational efficiency, we use the first-order Taylor approximation:
+\begin{equation}
+\bm{R}_x \approx \bm{I} + \bm{A}_x,
+\end{equation}
+which maintains approximate orthogonality for small $\|\bm{\omega}\|$ while avoiding the expensive matrix exponential computation. This approximation initializes with $\bm{\omega} = \bm{0}$ (identity rotation) and progressively learns rotation during optimization.
+
+\paragraph{Mathematical Properties.}
+Our parameterization satisfies all design requirements: \textbf{(1) PSD:} Guaranteed by Cholesky properties ($\bm{\Sigma} = \bm{L}\bm{L}^\top$). \textbf{(2) Spatial Interpretability:} The spatial block $\bm{\Sigma}_x = \bm{R}_x \text{diag}(\bm{s}_x)^2 \bm{R}_x^\top$ exactly recovers 3DGS parameterization. \textbf{(3) Cross-Correlations:} Off-diagonal block $\bm{\Sigma}_{xq} = \bm{R}_x \text{diag}(\bm{s}_x) \bm{L}_{qx}^\top$ enables view-dependent spatial deformation. \textbf{(4) Generalization:} Holds for arbitrary $N = 3 + C$ dimensions. \textbf{(5) Efficiency:} Spatial rotation $\bm{R}_x$ uses skew-symmetric first-order Taylor approximation $\bm{R}_x \approx \bm{I} + \bm{A}_x$, avoiding expensive matrix exponential while maintaining approximate orthogonality.
+
+\subsection{Empirical Analysis}
+
+Having established the structure, we now validate our choice of spatial rotation parameterization through systematic comparison. We evaluate six strategies on the \texttt{bicycle} scene from Mip-NeRF 360 using UBS-3D (pure spatial Beta splatting), focusing on the 3D spatial rotation subspace.
+
+Table~\ref{tab:rotation_comparison} presents our findings across different parameterization strategies:
+
+\textbf{Quaternion.} The traditional 3DGS approach using quaternion rotation and diagonal scaling achieves competitive PSNR (25.50 dB) and the lowest parameter count (7 parameters: 3 position + 3 scale + 1 quaternion magnitude after normalization). However, this approach does not generalize to higher dimensions ($N > 3$), making it unsuitable for our $N$-dimensional framework.
+
+\textbf{Cholesky Decomposition.} Pure Cholesky factorization $\bm{\Sigma} = \bm{L}\bm{L}^\top$ offers faster training (1h14m) and generalizes to arbitrary dimensions with $N$($N$+1)/2 parameters. However, it suffers from a 0.22 dB PSNR drop compared to quaternions, as it lacks explicit orthogonality constraints that help maintain geometric consistency in the spatial subspace.
+
+\textbf{Skew-Symmetric Matrix Methods.} Constructing spatial rotation matrices through $\bm{R} = \exp(\bm{A})$ where $\bm{A}$ is skew-symmetric preserves orthogonality and generalizes to higher dimensions. The naive implementation requiring full matrix exponentiation is prohibitively slow (3h6m), but approximation methods offer significant improvements. The Cayley transform $\bm{R} = (\bm{I} - \bm{A})^{-1}(\bm{I} + \bm{A})$ reduces training to 1h16m with 25.52 dB PSNR. Taylor approximations provide the best balance: the 1st order Taylor approximation $\bm{R} \approx \bm{I} + \bm{A}$ achieves both the fastest training time (1h) and the highest PSNR (25.54 dB), making it optimal for spatial rotation parameterization.
+
+
+
+\textbf{Our Choice - Spatial-Orthogonal Cholesky.} Based on these results, we select the skew-symmetric approach with 1st order Taylor approximation for spatial rotation parameterization, as it provides the best combination of training speed (1h) and reconstruction quality (25.54 dB). For our full UBS framework, we adopt a hybrid spatial-orthogonal approach: skew-symmetric 1st order Taylor for the 3D spatial rotation subspace (preserving geometric interpretability and optimal performance) combined with Cholesky factors for modeling cross-dimensional correlations between spatial and non-spatial dimensions (view, time). This design achieves the optimal trade-off between performance, generalizability, and computational efficiency across all UBS variants.
+
+The analysis confirms that the skew-symmetric 1st order Taylor approximation provides the best spatial rotation parameterization, enabling our spatial-orthogonal design to maintain geometric consistency in the spatial subspace while allowing flexible correlations with additional dimensions in the full $N$-dimensional UBS framework.
+
+\section{Theoretical Foundation and Analysis}
+\label{app:Theoretical Foundation and Analysis}
+
+\paragraph{Fundamental Limitations of Gaussian Kernels}
+
+$N$-dimensional Gaussian kernels suffer from inherent dimensional coupling that prevents modeling of independent scene properties. In methods like 6DGS and 7DGS, all dimensions are coupled through the joint Gaussian distribution: when the input view direction or time changes, the primitive is inevitably affected across all dimensions—it shifts in space, changes shape, and modulates opacity simultaneously. This coupling stems from two fundamental constraints of the Gaussian kernel:
+
+\textbf{1. Fixed Bell-Shaped Profile:} The Gaussian kernel maintains its characteristic bell-shaped exponential decay $\exp(-r^2/2\sigma^2)$ across all dimensions. This fixed functional form cannot produce flat responses needed for view-independent or temporally-static elements. For example, in 6DGS, a primitive cannot remain view-independent because the Gaussian's bell-shaped profile in the angular dimensions will always modulate opacity based on viewing direction, even when the scene element should appear constant across views.
+
+\textbf{2. Symmetric Dimensional Coupling:} The multivariate Gaussian distribution enforces symmetric relationships between dimensions through its covariance structure. When conditioned on viewing direction or time, the resulting 3D Gaussian inevitably shifts its spatial mean, changes its spatial covariance, and modulates its opacity according to the angular or temporal distance from the mean. This prevents primitives from exhibiting independence—a spatially-localized texture cannot remain fixed while only its angular response varies, or a static object cannot maintain constant appearance while dynamic elements change around it.
+
+These limitations force inefficient representations where many coupled primitives must approximate what should be expressible by fewer independent primitives. 
+
+In contrast, UBS's Beta kernels enable per-dimension shape control: spatial dimensions can adopt flat profiles for view-independent geometry while angular dimensions use peaked responses for specular highlights, and temporal dimensions can remain nearly constant for static elements while varying sharply for dynamic components. This dimensional independence allows each primitive to model complex anisotropic phenomena efficiently—a single UBS primitive can simultaneously represent a static spatial surface with view-dependent reflectance, whereas Gaussian methods require multiple coupled primitives that cannot cleanly separate these properties.
+
+\paragraph{Universal Beta Kernels: Mathematical Properties.}
+UBS addresses these limitations through the $N$-dimensional Beta kernel:
+\begin{equation}
+\mathcal{B}(\bm{x};\bm{\mu},\bm{\Sigma},\bm{b}) = \prod_{i=1}^N \left(1 - d_i(\bm{x})\right)^{\beta_i}, \quad d_i \in [0,1),
+\end{equation}
+where $d_i(\bm{x})$ represents the bounded distance measure obtained through $d_i = \max(\tanh(\frac{d_i^{\text{raw}}}{2}), 0)$ with $d_i^{\text{raw}}$ being the Mahalanobis distance component along dimension $i$. The tanh and max transformations ensure $d_i \in [0,1)$, satisfying the Beta kernel input requirement. The shape parameter $\beta_i = 4\exp(b_i)$ controls the kernel profile.
+
+\begin{figure*}[tbp]
+    \centering
+    \includegraphics[width=0.99\linewidth]{figs/kernel.pdf}
+    \caption{Adaptive Beta kernels.}
+    \label{fig:kernel}
+\end{figure*}
+
+The Beta kernel exhibits three key properties:
+
+\textbf{Property 1 (Shape Adaptivity):} The shape parameter $b_i$ directly controls kernel behavior through $\beta_i = 4\exp(b_i)$:
+\begin{itemize}[leftmargin=2em]
+\item $b_i < 0$: Flatter kernel profile ($\beta_i < 4$, broader support)
+\item $b_i = 0$: Gaussian-like profile ($\beta_i = 4$, standard bell curve)  
+\item $b_i > 0$: More peaked kernel profile ($\beta_i > 4$, sharper localization)
+\end{itemize}
+When $b_i = -5$, we have $\beta_i = 4e^{-5} \approx 0.027$ and the kernel becomes nearly constant $(1-d_i)^{0.027} \approx 1$. When $b_i = 5$, $\beta_i = 4e^{5} \approx 594$ and the kernel becomes highly peaked. These practical ranges ($b_i \in [-5, 5]$) are sufficient to span from flat to sharp kernel profiles, as shown in Figure \ref{fig:kernel}.
+
+\textbf{Property 2 (Per-Dimension Shape Control):} The gated product form enables independent shape control for each dimension through its own $b_i$:
+\begin{equation}
+\mathcal{B}(\bm{x}) = \prod_{i=1}^N \left(1 - d_i(\bm{x})\right)^{4\exp(b_i)},
+\end{equation}
+Unlike Gaussian kernels where all dimensions share the same bell-shaped functional form (only varying in scale), Beta kernels allow each dimension to adopt fundamentally different shapes: dimension $i$ can be nearly flat ($b_i = -3$) while dimension $j$ is highly peaked ($b_j = 3$). This per-dimension shape control, combined with cross-dimensional correlations through $\bm{\Sigma}$, enables efficient representation of complex anisotropic phenomena.
+
+\textbf{Property 3 (Backward Compatibility):} When $b_i = 0$, we have $\beta_i = 4\exp(0) = 4$, and the Beta kernel approximates a Gaussian:
+\begin{equation}
+(1-d)^{4} \approx \exp(-4.5d^2) \quad \text{for } d \in [0,1),
+\end{equation}
+guaranteeing that UBS subsumes Gaussian methods as special cases when $\bm{b} = \bm{0}$. This ensures seamless compatibility with existing Gaussian-based methods.
+
+
+
+
+
+
+\end{document}
