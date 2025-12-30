@@ -868,23 +868,6 @@ class GaussianModel:
 
         return num_gs
 
-    def get_scaling(self):
-        """
-        Get 3D scales from ND Gaussian for densification.
-        Extracts spatial scales for compatibility with 6dgs-iclr training.
-        """
-        # Return first 3 dimensions of scales (spatial scales)
-        return self.get_scale[:, :3]
-
-    def get_rotation_scale(self):
-        """
-        Get rotation and scale for densification operations.
-        Compatible with 6dgs-iclr densify_and_split.
-        """
-        rotation = self.get_rotation
-        scale = self.get_scale
-        return rotation, scale
-
     @property
     def get_scaling_cond(self):
         """
