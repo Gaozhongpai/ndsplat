@@ -229,7 +229,6 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
         batch_visibility_filters = []
         batch_radii = []
         batch_viewspace_tensors = []  # Store viewspace tensors from each view
-        shift_reg_loss = None  # Initialize before loop, may be set inside
 
         for _ in range(pipe.mv):
             # Pick a random Camera
@@ -256,25 +255,7 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
             if opt.densification_strategy == "mcmc":
                 if opt.densify_from_iter < iteration < opt.mcmc_densify_until_iter:
                     loss += opt.opacity_reg * torch.abs(gaussians.get_opacity).mean()
-                    # Scale regularization: use get_scale (raw scale params) for efficiency
-                    # Note: get_scaling in NDGS is expensive (requires SVD), so use get_scale instead
-                    if hasattr(gaussians, 'get_scale'):
-                        # NDGS/UBS: use raw scale parameters (first 3 for spatial)
-                        loss += opt.scale_reg * torch.abs(gaussians.get_scale[:, :3]).mean()
-                    elif hasattr(gaussians, 'get_scaling'):
-                        # DGS-full/3DGS: use standard get_scaling
-                        loss += opt.scale_reg * torch.abs(gaussians.get_scaling[:, :3]).mean()
-
-            # NDGS position shift regularization: constrain position shift to be within spatial scale
-            # This is essentially FREE since m_cond is already computed in forward pass
-            if "ndgs" in mode and opt.shift_reg > 0 and "m_cond" in render_pkg:
-                m_cond = render_pkg["m_cond"]
-                shift_magnitude = (m_cond - gaussians.get_xyz).norm(dim=-1)  # [N]
-                spatial_scale = gaussians.get_scale[:, :3].mean(dim=1)  # [N] mean of xyz scales
-                shift_ratio = shift_magnitude / (spatial_scale + 1e-6)
-                # Penalize shifts that exceed max_shift_ratio (default 1.0 = spatial scale)
-                shift_reg_loss = torch.nn.functional.relu(shift_ratio - opt.max_shift_ratio).mean()
-                # loss += opt.shift_reg * shift_reg_loss
+                    loss += opt.scale_reg * torch.abs(gaussians.get_scaling[:, :3]).mean()
 
             # Normalize by number of views (matching 7DGS-ICCV behavior)
             loss = loss / pipe.mv
@@ -322,7 +303,7 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
                 progress_bar.close()
 
             # Log and save
-            n_patient_change = training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render_wrapper, (pipe, background, mode), log_file, best_psnr_info, shift_reg_loss)
+            n_patient_change = training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render_wrapper, (pipe, background, mode), log_file, best_psnr_info)
 
             # Patient-based lambda_opc training (NDGS mode with learnable_lambda_opc)
             # Now works for both 6D and 7D (removed input_dim==7 restriction)
@@ -598,7 +579,7 @@ def prepare_output_and_logger(args):
         print("Tensorboard not available: not logging progress")
     return tb_writer, log_file
 
-def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, log_file=None, best_psnr_info=None, shift_reg_loss=None):
+def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, log_file=None, best_psnr_info=None):
     if tb_writer:
         tb_writer.add_scalar('train_loss_patches/l1_loss', Ll1.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/total_loss', loss.item(), iteration)
@@ -609,9 +590,6 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
         torch.cuda.empty_cache()
         validation_configs = ({'name': 'test', 'cameras' : scene.getTestCameras()},
                               {'name': 'train', 'cameras' : [scene.getTrainCameras()[idx % len(scene.getTrainCameras())] for idx in range(5, 30, 5)]})
-
-        if shift_reg_loss is not None:
-            print(f"\n[ITER {iteration}] Shift Reg Loss: {shift_reg_loss.item():.6f}")
 
         test_psnr_value = None  # Track test PSNR for best checkpoint
         for config in validation_configs:

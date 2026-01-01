@@ -268,6 +268,11 @@ class GaussianModel:
         return self.scale_activation(self._scale)
 
     @property
+    def get_scaling(self):
+        # Return first 3 dimensions of scales (spatial scales)
+        return self.get_scale[:, :3]
+
+    @property
     def get_l_triangle(self):
         """Get activated l_triangle parameters (works for both parametrizations)."""
         return self.l_triangle_activation(self._l_triangle)
@@ -313,7 +318,7 @@ class GaussianModel:
             return torch.ones_like(self._opacity) * 0.35
 
     @property
-    def get_scaling(self):
+    def get_scaling_cond(self):
         v = self.get_pc_v
 
         # Slice the 6D covariance matrix
@@ -933,7 +938,7 @@ class GaussianModel:
         selected_pts_mask = torch.where(torch.norm(grads, dim=-1) >= grad_threshold, True, False)
 
         # Only clone small Gaussians - compute scale for CURRENT state
-        scale = self.get_scaling
+        scale = self.get_scaling_cond
         selected_pts_mask = torch.logical_and(
             selected_pts_mask,
             torch.max(scale[:, :3], dim=1).values <= self.percent_dense * scene_extent
@@ -968,7 +973,7 @@ class GaussianModel:
 
         if max_screen_size:
             big_points_vs = self.max_radii2D > max_screen_size
-            big_points_ws = self.get_scaling[:, :3].max(dim=1).values > 0.1 * extent
+            big_points_ws = self.get_scaling_cond[:, :3].max(dim=1).values > 0.1 * extent
             prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
         self.prune_points(prune_mask)
 
@@ -1113,7 +1118,7 @@ class GaussianModel:
         grad_qualifiers_abs = torch.where(torch.norm(grads_abs, dim=-1) >= grad_abs_thresh, True, False)
 
         # Size-based split/clone decision
-        scale = self.get_scaling
+        scale = self.get_scaling_cond
         clone_qualifiers = torch.max(scale[:, :3], dim=1).values <= percent_dense * extent
         split_qualifiers = torch.max(scale[:, :3], dim=1).values > percent_dense * extent
 
@@ -1136,7 +1141,7 @@ class GaussianModel:
         prune_mask = (self.get_opacity < min_opacity).squeeze()
         if max_screen_size:
             big_points_vs = self.max_radii2D > max_screen_size
-            big_points_ws = self.get_scaling[:, :3].max(dim=1).values > 0.1 * extent
+            big_points_ws = self.get_scaling_cond[:, :3].max(dim=1).values > 0.1 * extent
             prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
 
         # FastGS pruning strategy: use pruning_score to guide removal

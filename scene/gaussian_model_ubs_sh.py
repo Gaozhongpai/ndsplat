@@ -869,6 +869,15 @@ class GaussianModel:
         return num_gs
 
     @property
+    def get_scaling(self):
+        """
+        Get 3D scales from ND Gaussian for densification.
+        Extracts spatial scales for compatibility with 6dgs-iclr training.
+        """
+        # Return first 3 dimensions of scales (spatial scales)
+        return self.get_scale[:, :3]
+    
+    @property
     def get_scaling_cond(self):
         """
         Alternative scaling method using conditional covariance from 6D Gaussian.

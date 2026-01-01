@@ -146,10 +146,6 @@ class OptimizationParams(ParamGroup):
         self.opacity_reg = 0.01  # Opacity regularization weight for MCMC
         self.scale_reg = 0.01  # Scale regularization weight for MCMC
 
-        # NDGS position shift regularization (constrains position shift to stay within spatial scale)
-        self.shift_reg = 0.0  # Weight for position shift regularization (0 = disabled, try 0.01-0.1)
-        self.max_shift_ratio = 2.0  # Maximum position shift ratio relative to spatial scale
-
         # FastGS-specific parameters (only used when densification_strategy="fastgs")
         # Adapted from FastGS (arXiv:2511.04283) for multi-view consistent densification
         self.fastgs_loss_thresh = 0.3  # Threshold for high-error pixel detection
