@@ -213,6 +213,7 @@ class GaussianModel:
 
         # Bounded v_12 parameterization for position shift
         self._v_12_direction = torch.empty(0)  # [N, 3*C] - will be normalized
+        self.v_12_activaton = torch.tanh  # Bounded to [-1, 1]
         self._v_12_scale = torch.empty(0)  # [N, 1] - sigmoid gives [0,1]
 
         # L_22_inv: [N, C*(C+1)/2] Cholesky of V_22^{-1} (precision matrix)
@@ -372,17 +373,66 @@ class GaussianModel:
         """
         if not self.use_view_dependent_pos:
             return None
-        C = self._v_12_direction.shape[1] // 3
         v_12_dir = F.normalize(self._v_12_direction, dim=1)
-        v_12_dir = v_12_dir.view(-1, 3, C)
 
         spatial_scale = self.get_scaling.mean(dim=1, keepdim=True)
         v_12_magnitude = torch.sigmoid(self._v_12_scale) * self.max_pos_shift
+        v_12_scaled = v_12_dir * (v_12_magnitude * spatial_scale)
 
-        v_12_scaled = v_12_dir * (v_12_magnitude * spatial_scale).unsqueeze(-1)
+        return v_12_scaled # self._v_12_direction  
 
-        return v_12_scaled.view(-1, 3 * C)
+    @property
+    def get_v_12_v2(self):
+        """
+        Get effective v_12 (position-view regression matrix) with bounded magnitude.
 
+        NOTE: v_12 is actually v_regr (regression matrix) in the mathematical formulation.
+        After the decoupling change, position shift is computed as:
+            x_cond = x + v_12 @ (query - view_mean)
+
+        Previously it was:
+            x_cond = x + v_12 @ V_22_inv @ (query - view_mean)
+
+        So v_12 now directly acts as the regression matrix (v_regr), independent of V_22_inv.
+        This makes position conditioning completely separate from opacity conditioning.
+
+        Same parameterization as dgs_diag: direction (normalized) + magnitude (bounded by spatial scale).
+
+        EXPERIMENTAL: Now multiplying by inverse of L_22_inv diagonal to test consistency with N-DGS.
+        """
+        if not self.use_view_dependent_pos:
+            return None
+        # Repeat each scale component C times to get (N, 3*C)
+        # For C=3 (6DGS): [sx, sy, sz] -> [sx, sx, sx, sy, sy, sy, sz, sz, sz]
+        # For C=4 (7DGS): [sx, sy, sz] -> [sx, sx, sx, sx, sy, sy, sy, sy, sz, sz, sz, sz]
+        
+        C = self._v_12_direction.shape[1] // 3
+        spatial_scale_expanded = self.get_scaling.repeat_interleave(C, dim=1)  # (N, 3*C)
+        # spatial_scale_expanded = self.get_scaling.mean(dim=1, keepdim=True)
+
+        return self.v_12_activaton(self._v_12_direction) * spatial_scale_expanded # * s_inv_diag_expanded # (N, 3*C)
+
+    @property
+    def get_v_12_v3(self): ## ablation version
+        """
+        Get effective v_12 (position-view regression matrix) with bounded magnitude.
+
+        NOTE: v_12 is actually v_regr (regression matrix) in the mathematical formulation.
+        After the decoupling change, position shift is computed as:
+            x_cond = x + v_12 @ (query - view_mean)
+
+        Previously it was:
+            x_cond = x + v_12 @ V_22_inv @ (query - view_mean)
+
+        So v_12 now directly acts as the regression matrix (v_regr), independent of V_22_inv.
+        This makes position conditioning completely separate from opacity conditioning.
+
+        Same parameterization as dgs_diag: direction (normalized) + magnitude (bounded by spatial scale).
+        """
+        if not self.use_view_dependent_pos:
+            return None
+        return self._v_12_direction  
+    
     @property
     def get_L_22_inv(self):
         """

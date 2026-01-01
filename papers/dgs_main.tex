@@ -124,15 +124,17 @@ Despite their expressive power, these N-dimensional formulations suffer from two
 
 \textbf{Our Insight.} The full N-dimensional joint covariance matrix (where $N = 3 + C$, with 3 spatial dimensions plus $C$ conditioning dimensions for view/time) is unnecessarily complex. Position shifts and opacity modulation serve distinct purposes and can be \textbf{disentangled} into independent modules, each with efficient direct parameterization. Rather than deriving all effects from a shared covariance and computing matrix inversions, we parameterize each component separately with learnable coupling between them. This design mirrors \textit{factorized attention} mechanisms: view/time act as \textit{queries} that independently modulate \textit{values} (position and opacity), creating sparse pathways instead of the dense coupling in N-DGS. This factorization enables extensibility to additional queries (lighting, materials) and values (rotation, color) without combinatorial complexity.
 
-We introduce \textbf{\modelname{}}, a disentangled parameterization for efficient conditional Gaussian splatting. The `\textbf{d}' signifies our principle: \textbf{d}isentangle conditioning into independent components with \textbf{d}irect parameterization---\textbf{d}isplacement matrices for position and \textbf{d}ecay factors for opacity. Our key innovations are:
+We introduce \textbf{\modelname{}}, a disentangled parameterization for efficient conditional Gaussian splatting. The `\textbf{d}' signifies our principle: \textbf{d}isentangle conditioning into independent components with \textbf{d}irect parameterization: \textbf{d}isplacement matrices for position and \textbf{d}ecay factors for opacity. Our key innovations are:
 
 \begin{enumerate}[leftmargin=*]
-\item \textbf{Learnable Position-Opacity Coupling:} Per-Gaussian parameters $\lambda_{\text{pos}} \in [0,1]$ enable adaptive interpolation between fully independent position learning ($\lambda_{\text{pos}}=0$) and coupled N-DGS behavior ($\lambda_{\text{pos}}=1$). Each Gaussian learns its optimal coupling during training, providing scene-adaptive flexibility.
+\item \textbf{Direct Opacity Precision:} Opacity decay is directly parameterized via a Cholesky-factored precision matrix for efficient distance computation, eliminating matrix inversion while guaranteeing numerical stability.
 
-\item \textbf{Direct Cholesky Parameterization:} Opacity uses a Cholesky precision factor $\mathbf{L}$ for efficient distance computation via $\|\mathbf{L}^\top\boldsymbol{\delta}\|^2$, eliminating matrix inversion while guaranteeing numerical stability through exponential activation on diagonal elements. For 7DGS, block-diagonal structure separates view and time, reducing parameters by 30\%.
+\item \textbf{Scaled Position Displacement:} Position displacement is directly parameterized by element-wise multiplying spatial scales with bounded learnable parameters. This ensures tight, symmetric displacement bounds across all spatial dimensions, avoiding the asymmetries that arise from N-DGS's implicit Cholesky coupling structure.
+
+\item \textbf{Learnable Position-Opacity Coupling:} Per-Gaussian coupling parameters enable adaptive interpolation between fully independent position learning and coupled N-DGS behavior. Each Gaussian learns its optimal coupling strength during training, providing scene-adaptive flexibility.
 \end{enumerate}
 
-This disentanglement delivers three benefits: (1) \textbf{Efficiency}---$O(C^2)$ operations replace $O(C^3)$ inversions, (2) \textbf{Stability}---guaranteed positive definiteness eliminates ill-conditioning, and (3) \textbf{Interpretability}---learned coupling reveals which regions benefit from entangled versus independent conditioning. Experiments show up to 17\% higher rendering throughput while matching or exceeding N-DGS quality, with full backward compatibility for seamless integration.
+Experiments demonstrate that our method matches or exceeds N-DGS quality across all benchmarks while achieving up to 17\% higher rendering throughput.
 
 \section{Related Work}
 \label{sec:related_work}
@@ -178,9 +180,9 @@ X = \begin{pmatrix} X_p \\ X_q \end{pmatrix} \sim \mathcal{N}\!\left(
 \end{align}
 At query $q$, conditioning yields a 3D Gaussian with parameters:
 \begin{align}
+\alpha_{\text{cond}} &= \alpha \cdot \exp\left(-\lambda\,(q-\mu_q)^\top \Sigma_{qq}^{-1}(q-\mu_q)\right),\\
 \mu_{\text{cond}} &= \mu_p + \Sigma_{pq}\,\Sigma_{qq}^{-1}(q-\mu_q), \\
-\Sigma_{\text{cond}} &= \Sigma_{pp} - \Sigma_{pq}\,\Sigma_{qq}^{-1}\,\Sigma_{pq}^\top, \\
-\alpha_{\text{cond}} &= \alpha \cdot \exp\left(-\lambda\,(q-\mu_q)^\top \Sigma_{qq}^{-1}(q-\mu_q)\right),
+\Sigma_{\text{cond}} &= \Sigma_{pp} - \Sigma_{pq}\,\Sigma_{qq}^{-1}\,\Sigma_{pq}^\top, 
 \end{align}
 where $\lambda$ is a scaling factor (default 0.35). This formulation requires inverting $\Sigma_{qq}$ ($O(C^3)$ operations) for every Gaussian in every forward pass, causing computational overhead and potential numerical instability during training. This motivates our simpler parameterization.
 
@@ -192,12 +194,10 @@ We propose \modelname{}, which \textbf{disentangles} these effects into three in
 
 \subsection{Overview}
 
-
-
 Our approach reformulates conditional Gaussian slicing into two \textbf{disentangled} components. Given the deviation $\boldsymbol{\delta} = q - \mu_q$ from the canonical view/time:
 \begin{align}
-\mu_{\text{cond}} &= \mu_p + \mathbf{V}_{pq} \cdot \tilde{\mathbf{V}}_{qq}^{-1} \cdot \boldsymbol{\delta} & &\text{(Position)} \\
 \alpha_{\text{cond}} &= \alpha \cdot \exp\left(-\lambda \cdot \|\mathbf{L}^\top \boldsymbol{\delta}\|_2^2\right) & &\text{(Opacity)} \\
+\mu_{\text{cond}} &= \mu_p + \mathbf{V}_{pq} \cdot \tilde{\mathbf{V}}_{qq}^{-1} \cdot \boldsymbol{\delta} & &\text{(Position)} \\
 \Sigma_{\text{cond}} &= \Sigma_{pp} & &\text{(Covariance)}
 \end{align}
 where $\mathbf{V}_{pq} \in \mathbb{R}^{3 \times C}$ is the displacement matrix, $\lambda_\text{pos} \in [0,1]$ is a learnable per-Gaussian parameter controlling position-opacity coupling, $\mathbf{V}_{qq}^{-1} = \mathbf{L}\mathbf{L}^\top$ is the precision matrix derived from Cholesky factor $\mathbf{L} \in \mathbb{R}^{C \times C}$, and $\lambda$ is a global opacity scaling hyperparameter (default 0.35) that controls the rate of opacity decay with distance. The scaled precision matrix $\tilde{\mathbf{V}}_{qq}^{-1}$ is defined as:
@@ -210,30 +210,42 @@ The key innovation is \textbf{learnable position-opacity coupling} via the scale
 For 7DGS ($C=4$), we further \textbf{separate view and time} by using a block-diagonal precision matrix with zero cross-terms:
 \begin{equation}
 \mathbf{V}_{qq}^{-1} = \mathbf{L}\mathbf{L}^\top = \begin{pmatrix}
-\mathbf{\Sigma}_v^{-1} & \mathbf{0} \\
-\mathbf{0} & \sigma_t^{-1}
+\mathbf{\Sigma}_{vv}^{-1} & \mathbf{0} \\
+\mathbf{0} & \boldsymbol{\sigma}_t^{-1}
 \end{pmatrix},
 \end{equation}
-where $\mathbf{\Sigma}_v^{-1} \in \mathbb{R}^{3 \times 3}$ is the view precision and $\sigma_t^{-1} \in \mathbb{R}$ is the time precision. This separation eliminates coupling between spatial view directions and temporal dynamics, reflecting the physical intuition that view-dependent effects and temporal changes are independent phenomena.
+where $\mathbf{\Sigma}_{vv}^{-1} \in \mathbb{R}^{3 \times 3}$ is the view precision and $\boldsymbol{\sigma}_t^{-1} \in \mathbb{R}$ is the time precision. This separation eliminates coupling between spatial view directions and temporal dynamics, reflecting the physical intuition that view-dependent effects and temporal changes are independent phenomena.
 
 \begin{table}[t!]
 \centering
-\caption{Comparison between N-DGS (entangled) and \modelname{} (learnable coupling). Our approach parameterizes position and opacity independently with learnable coupling via $\tilde{\mathbf{V}}_{qq}^{-1}$, eliminating matrix inversions while enabling adaptive per-Gaussian interpolation between fully disentangled ($\lambda_{\text{pos}}=0$) and coupled ($\lambda_{\text{pos}}=1$) behavior.}
+\caption{Comparison between N-DGS (entangled) and \modelname{} (learnable coupling). Our approach parameterizes opacity and position independently, eliminating matrix inversions. The scaled precision $\tilde{\mathbf{V}}_{qq}^{-1}$ in position computation enables learnable coupling strength.}
 \label{tab:comparison_overview}
 \resizebox{\columnwidth}{!}{%
 \begin{tabular}{@{}llll@{}}
 \toprule
 \textbf{Aspect} & \textbf{N-DGS (entangled)} & \textbf{\modelname{} (learnable coupling)} & \textbf{Benefit} \\
 \midrule
-Position & $\mu_p + \Sigma_{pq}\Sigma_{qq}^{-1}\boldsymbol{\delta}$ & $\mu_p + \mathbf{V}_{pq}\tilde{\mathbf{V}}_{qq}^{-1}\boldsymbol{\delta}$ & Scaled precision $\tilde{\mathbf{V}}_{qq}^{-1}$ controls coupling \\
 Opacity & $\alpha \cdot \exp(-\lambda\boldsymbol{\delta}^\top\Sigma_{qq}^{-1}\boldsymbol{\delta})$ & $\alpha \cdot \exp(-\lambda\|\mathbf{L}^\top\boldsymbol{\delta}\|^2)$ & No inversion, $\mathbf{V}_{qq}^{-1} = \mathbf{L}\mathbf{L}^\top$ \\
+Position & $\mu_p + \Sigma_{pq}\Sigma_{qq}^{-1}\boldsymbol{\delta}$ & $\mu_p + \mathbf{V}_{pq}\tilde{\mathbf{V}}_{qq}^{-1}\boldsymbol{\delta}$ & Scaled precision $\tilde{\mathbf{V}}_{qq}^{-1}$ controls coupling \\
 Covariance & $\Sigma_{pp} - \Sigma_{pq}\Sigma_{qq}^{-1}\Sigma_{pq}^\top$ & $\Sigma_{pp}$ (disentangled) & Shape independent \\
 \bottomrule
 \end{tabular}%
 }
 \end{table}
 
-Table~\ref{tab:comparison_overview} compares our approach with the entangled N-DGS formulation. The key insight is that the scaled precision matrix $\tilde{\mathbf{V}}_{qq}^{-1}$ enables learnable coupling, allowing each Gaussian to adaptively balance between independent and coupled behavior. The following subsections detail how this learnable coupling is implemented for position and opacity conditioning.
+Table~\ref{tab:comparison_overview} compares our approach with the entangled N-DGS formulation. The key insight is that the scaled precision matrix $\tilde{\mathbf{V}}_{qq}^{-1}$ enables learnable coupling, allowing each Gaussian to adaptively balance between independent and coupled behavior. The following subsections detail how this learnable coupling is implemented for opacity and position conditioning.
+
+\subsection{Opacity Conditioning}
+
+In N-DGS, opacity is modulated as $\alpha_{\text{cond}} = \alpha \cdot \exp(-\lambda\,(q-\mu_q)^\top \Sigma_{qq}^{-1}(q-\mu_q))$, requiring the inverse of $\Sigma_{qq}$, an $O(C^3)$ operation.
+
+Our formulation computes $\mathbf{L}^\top \boldsymbol{\delta}$ followed by $\|\cdot\|_2^2$, requiring only $O(C^2)$ operations (triangular matrix-vector multiply) and is highly parallelizable on GPUs. By parameterizing the Cholesky factor directly with exponential activation on the diagonal, we guarantee that $\mathbf{V}_{qq}^{-1} = \mathbf{L}\mathbf{L}^\top$ is always symmetric positive definite, eliminating numerical instabilities from ill-conditioned covariance matrices.
+
+For 7DGS, the block-diagonal structure enables \textbf{separated view and time opacity}. With $\boldsymbol{\delta} = (\boldsymbol{\delta}_v, \delta_t)^\top$ where $\boldsymbol{\delta}_v \in \mathbb{R}^3$ is the view deviation and $\delta_t \in \mathbb{R}$ is the time deviation, the opacity factors as:
+\begin{equation}
+\alpha_{\text{cond}} = \alpha \cdot \exp\left(-\lambda\left(\boldsymbol{\delta}_v^\top \mathbf{\Sigma}_{vv}^{-1} \boldsymbol{\delta}_v + \delta_t^2 \boldsymbol{\sigma}_t^{-1}\right)\right).
+\end{equation}
+This factorization allows view-dependent and time-dependent opacity to be controlled independently, with view precision $\mathbf{\Sigma}_{vv}^{-1}$ parameterized by a $3 \times 3$ Cholesky factor (6 parameters) and time precision $\boldsymbol{\sigma}_t^{-1}$ by a single scalar, for a total of 7 parameters instead of 10 for a full $4 \times 4$ precision matrix.
 
 \subsection{Position Conditioning}
 \label{subsec:position}
@@ -252,23 +264,11 @@ where $\mathbf{V}_{pq} \in \mathbb{R}^{3 \times C}$ is the displacement matrix, 
 \end{itemize}
 This provides adaptive disentanglement where each Gaussian learns its optimal coupling strength during training.
 
-To preserve the bounded displacement property of N-DGS (where small Gaussians produce small displacements), we parameterize the displacement matrix as a scaled and normalized direction tensor. Let $\mathbf{u} \in \mathbb{R}^{3C}$ be a learnable direction vector. We construct $\mathbf{V}_{pq} \in \mathbb{R}^{3 \times C}$ by reshaping the normalized direction and scaling by the magnitude:
+Following N-DGS's design principle that displacement should scale with spatial extent (so small Gaussians produce small displacements), we parameterize the displacement matrix with bounded activation and explicit per-dimension spatial scaling. We directly learn $\mathbf{V}_{pq} \in \mathbb{R}^{3 \times C}$ as:
 \begin{equation}
-\mathbf{V}_{pq} = \bar{s} \cdot \sigma(\gamma) \cdot \hat{\mathbf{u}},
+\mathbf{V}_{pq} = \mathbf{S} \odot \tanh(\boldsymbol{\Theta}_{pq}),
 \end{equation}
-where $\bar{s} = \frac{1}{3}(s_x + s_y + s_z)$ denotes the mean spatial scale, $\sigma(\gamma) \in [0, 1]$ is a learnable magnitude weight obtained via the sigmoid function on parameter $\gamma \in \mathbb{R}$, and $\hat{\mathbf{u}} = \mathbf{u}/\|\mathbf{u}\|_2$ is the normalized direction vector reshaped into a $3 \times C$ matrix. This factorization bounds displacement magnitude to $[0, \bar{s}]$, ensuring that small Gaussians produce small displacements while large Gaussians have proportionally larger displacement capacity, mimicking the implicit coupling in N-DGS but without entangling position and opacity.
-
-\subsection{Opacity Conditioning}
-
-In N-DGS, opacity is modulated as $\alpha_{\text{cond}} = \alpha \cdot \exp(-\lambda\,(q-\mu_q)^\top \Sigma_{qq}^{-1}(q-\mu_q))$, requiring the inverse of $\Sigma_{qq}$, an $O(C^3)$ operation.
-
-Our formulation computes $\mathbf{L}^\top \boldsymbol{\delta}$ followed by $\|\cdot\|_2^2$, requiring only $O(C^2)$ operations (triangular matrix-vector multiply) and is highly parallelizable on GPUs. By parameterizing the Cholesky factor directly with exponential activation on the diagonal, we guarantee that $\mathbf{V}_{qq}^{-1} = \mathbf{L}\mathbf{L}^\top$ is always symmetric positive definite, eliminating numerical instabilities from ill-conditioned covariance matrices.
-
-For 7DGS, the block-diagonal structure enables \textbf{separated view and time opacity}. With $\boldsymbol{\delta} = (\boldsymbol{\delta}_v, \delta_t)^\top$ where $\boldsymbol{\delta}_v \in \mathbb{R}^3$ is the view deviation and $\delta_t \in \mathbb{R}$ is the time deviation, the opacity factors as:
-\begin{equation}
-\alpha_{\text{cond}} = \alpha \cdot \exp\left(-\lambda\left(\boldsymbol{\delta}_v^\top \mathbf{\Sigma}_v^{-1} \boldsymbol{\delta}_v + \delta_t^2 \sigma_t^{-1}\right)\right).
-\end{equation}
-This factorization allows view-dependent and time-dependent opacity to be controlled independently, with view precision $\mathbf{\Sigma}_v^{-1}$ parameterized by a $3 \times 3$ Cholesky factor (6 parameters) and time precision $\sigma_t^{-1}$ by a single scalar, for a total of 7 parameters instead of 10 for a full $4 \times 4$ precision matrix.
+where $\mathbf{S} \in \mathbb{R}^{3 \times C}$ is formed by repeating each spatial scale component $(s_x, s_y, s_z)$ along each row: $\mathbf{S}_{i,:} = (s_i, s_i, \ldots, s_i)$ for $i \in \{x,y,z\}$, $\boldsymbol{\Theta}_{pq} \in \mathbb{R}^{3 \times C}$ is a learnable parameter matrix, $\odot$ denotes element-wise multiplication, and $\tanh(\cdot)$ is applied element-wise. The tanh activation naturally bounds each element to $[-1, 1]$, ensuring that displacements in each spatial dimension scale proportionally with the corresponding Gaussian extent. This provides an inductive bias coupling displacement scale to Gaussian anisotropy, while the learnable parameters $\boldsymbol{\Theta}_{pq}$ allow each Gaussian to adaptively learn displacement direction and magnitude jointly. (See Appendix~\ref{sec:spatial_scaling_proof} for detailed comparison showing our explicit parameterization provides tighter displacement bounds than N-DGS.)
 
 
 \subsection{Implementation}
@@ -281,14 +281,14 @@ We implement both our disentangled formulation and the baseline N-DGS in CUDA fo
 \caption{Conditional Gaussian Slicing}
 \label{alg:slice}
 \begin{algorithmic}[1]
-\Require Per-Gaussian parameters: $\mu_p$, $\mu_q$, $\alpha$, scale $\mathbf{s}$, $\mathbf{u}$, $\gamma$, Cholesky $\mathbf{L}$, $\lambda_{\text{pos}}$
-\Require Query point: $\text{query}$ (view direction, or view+time for 7DGS)
+\Require Per-Gaussian parameters: $\mu_p$, $\mu_q$, $\alpha$, scale $\mathbf{s}$, $\boldsymbol{\Theta}_{pq}$, Cholesky $\mathbf{L}$, $\lambda_{\text{pos}}$
+\Require Query point: $\text{query}$ (view direction for 6DGS, or view+time for 7DGS)
 \State $\boldsymbol{\delta} \gets \text{query} - \mu_q$ \Comment{Compute query deviation}
-\State $\mathbf{V}_{pq} \gets \text{mean}(\mathbf{s}) \cdot \sigma(\gamma) \cdot \hat{\mathbf{u}}$ \Comment{Construct displacement matrix}
+\State $\alpha_{\text{cond}} \gets \alpha \cdot \exp(-\lambda \cdot \|\mathbf{L}^\top \boldsymbol{\delta}\|^2)$ \Comment{Conditional opacity ($\lambda=0.35$)}
+\State $\mathbf{V}_{pq} \gets \text{repeat}(\mathbf{s}) \odot \tanh(\boldsymbol{\Theta}_{pq})$ \Comment{Construct displacement matrix}
 \State $\tilde{\mathbf{V}}_{qq}^{-1} \gets (1-\lambda_{\text{pos}}) \mathbf{I} + \lambda_{\text{pos}} \mathbf{L}\mathbf{L}^\top$ \Comment{Scaled precision for coupling}
 \State $\mu_{\text{cond}} \gets \mu_p + \mathbf{V}_{pq} \cdot \tilde{\mathbf{V}}_{qq}^{-1} \cdot \boldsymbol{\delta}$ \Comment{Conditional position}
-\State $\alpha_{\text{cond}} \gets \alpha \cdot \exp(-\lambda \cdot \|\mathbf{L}^\top \boldsymbol{\delta}\|^2)$ \Comment{Conditional opacity ($\lambda=0.35$)}
-\State \Return $\mu_{\text{cond}}$, $\alpha_{\text{cond}}$
+\State \Return $\alpha_{\text{cond}}$, $\mu_{\text{cond}}$
 \end{algorithmic}
 \end{algorithm}
 
@@ -310,18 +310,18 @@ We evaluate \modelname{} across five diverse datasets covering both static and d
 We assess reconstruction quality using Peak Signal-to-Noise Ratio (PSNR), Structural Similarity Index (SSIM)~\cite{wang2004image}, and Learned Perceptual Image Patch Similarity (LPIPS)~\cite{zhang2018perceptual}. We also report rendering speed (FPS), training time (minutes), and Gaussian count (K) to evaluate computational efficiency.
 
 \textbf{Implementation Details.}
-We compare three configurations: (1) \textbf{N-DGS}: full N-DGS formulation with joint position and opacity conditioning (entangled baseline), (2) \textbf{\textit{d}GS-O}: our disentangled approach with opacity conditioning only ($\mu_{\text{cond}} = \mu_p$, no position displacement), and (3) \textbf{\textit{d}GS}: our full disentangled approach with both opacity conditioning and learnable position coupling via $\lambda_\text{pos}$. Training uses Adam optimizer for 30K iterations. Proper initialization is critical for stable training: we initialize the view mean $\mu_d$ as random unit vectors (with time in $[0, 1]$ for 7DGS), the direction $\mathbf{u}$ from $\mathcal{N}(0, 0.01^2)$ and normalize during forward pass, the scale $\gamma = 0$ giving $\sigma(0) = 0.5$ for moderate displacement, and the Cholesky factor $\mathbf{L}$ with diagonal elements $\log(2.0)$ and off-diagonal elements 0.
+We compare three configurations: (1) \textbf{N-DGS}: full N-DGS formulation with joint position and opacity conditioning (entangled baseline), (2) \textbf{\textit{d}GS-O}: our disentangled approach with opacity conditioning only ($\mu_{\text{cond}} = \mu_p$, no position displacement), and (3) \textbf{\textit{d}GS}: our full disentangled approach with both opacity conditioning and learnable position coupling via $\lambda_\text{pos}$. Training uses Adam optimizer for 30K iterations. Proper initialization is critical for stable training: we initialize the view mean $\mu_d$ as random unit vectors (with time in $[0, 1]$ for 7DGS), the displacement parameters $\boldsymbol{\Theta}_{pq}$ from $\mathcal{N}(0, 0.01^2)$ to start with small displacements, and the Cholesky factor $\mathbf{L}$ with diagonal elements $\log(2.0)$ and off-diagonal elements 0.
 
 
 % Summary Results Table
 \begin{table}[h]
 \centering
-\caption{Mean quantitative results across all datasets at 30K iterations. Best results in \textbf{bold}. See Appendix for per-scene details.}
+\caption{Mean quantitative results across all datasets: 3 static (NeRF Synthetic, Mip-NeRF 360, 6DGS PBR) and 2 dynamic (D-NeRF, 7DGS PBR). See Appendix for per-scene details.}
 \label{tab:summary_results}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l|ccc|ccc|ccc}
 \toprule
- & \multicolumn{3}{c|}{N-DGS} & \multicolumn{3}{c|}{\textit{d}GS-O} & \multicolumn{3}{c}{\textit{d}GS} \\
+ & \multicolumn{3}{c|}{N-DGS} & \multicolumn{3}{c|}{\textit{d}GS-O (\textbf{Ours})} & \multicolumn{3}{c}{\textit{d}GS (\textbf{Ours})} \\
 Dataset & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ \\
 \midrule
 \texttt{NeRF Synthetic} & 33.38 & 0.970 & 0.032 & \textbf{33.84} & \textbf{0.971} & 0.030 & \textbf{33.84} & \textbf{0.971} & \textbf{0.029} \\
@@ -338,12 +338,12 @@ Dataset & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ & PSNR $\uparro
 
 \begin{table}[h]
 \centering
-\caption{Mean efficiency results of number of Gaussians (K), training time (minutes), and rendering FPS across all datasets. Best results in \textbf{bold}. See Appendix for per-scene details.}
+\caption{Mean efficiency results of number of Gaussians (K), training time (minutes), and rendering FPS across all datasets: 3 static (NeRF Synthetic, Mip-NeRF 360, 6DGS PBR) and 2 dynamic (D-NeRF, 7DGS PBR). See Appendix for per-scene details.}
 \label{tab:summary_efficiency}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l|rrr|rrr|rrr}
 \toprule
- & \multicolumn{3}{c|}{N-DGS} & \multicolumn{3}{c|}{\textit{d}GS-O} & \multicolumn{3}{c}{\textit{d}GS} \\
+ & \multicolumn{3}{c|}{N-DGS} & \multicolumn{3}{c|}{\textit{d}GS-O (\textbf{Ours})} & \multicolumn{3}{c}{\textit{d}GS (\textbf{Ours})} \\
 Dataset & \#Gauss $\downarrow$ & Time $\downarrow$ & FPS $\uparrow$ & \#Gauss $\downarrow$ & Time $\downarrow$ & FPS $\uparrow$ & \#Gauss $\downarrow$ & Time $\downarrow$ & FPS $\uparrow$ \\
 \midrule
 \texttt{NeRF Synthetic} & \textbf{171} & 6.35 & 615.57 & 201 & \textbf{5.83} & \textbf{754.98} & 209 & 6.42 & 687.87 \\
@@ -357,6 +357,31 @@ Dataset & \#Gauss $\downarrow$ & Time $\downarrow$ & FPS $\uparrow$ & \#Gauss $\
 }
 \end{table}
 
+\begin{table}[t]
+\centering
+\caption{Comparison of methods on Mip-NeRF 360 and NeRF Synthetic datasets with MCMC densification. Mean values across all scenes are reported. Number of Gaussians (K) and train time (min). FPS$_{\text{PyTorch}}$ and FPS$_{\text{CUDA}}$ represent FPS where conditional Gaussian operations are implemented in PyTorch and CUDA, respectively. Note that, N-DGS, \textit{d}GS-O, and \textit{d}GS are integrated with TCGS to speed up rendering.}
+\label{tab:mcmc_comparison}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{@{}cl|rrrr|ccc@{}}
+\toprule
+Dataset & Method & \#Gauss $\downarrow$ & Train $\downarrow$ & FPS$_{\text{PyTorch}}$ $\uparrow$& FPS$_{\text{CUDA}}$ $\uparrow$& SSIM $\uparrow$ & PSNR $\uparrow$ & LPIPS $\downarrow$ \\
+\midrule
+\multirow{4}{*}{\makecell{\texttt{Mip-NeRF}\\\texttt{360}}}
+& 3DGS & 3,104 & \bf 40.16 & - & 47.62 & 0.788 & 27.06 & \bf 0.237 \\
+& N-DGS & 2,852 & 51.23 & - & 75.31 & 0.775 & 26.88 & 0.263 \\
+& \textit{d}GS-O (\textbf{Ours}) & 2,852 & 48.11 & - & 200.17 & 0.788 & 27.36 & 0.242 \\
+& \textit{d}GS (\textbf{Ours}) & 2,574 & 49.85 & - & \bf 200.56 & \bf 0.789 & \bf 27.62 & 0.243 \\
+\midrule
+\multirow{4}{*}{\makecell{\texttt{NeRF}\\\texttt{Synthetic}}}
+& 3DGS & 300 & \bf 7.80 & - & 303.09 & 0.971 & 33.72 & 0.028 \\
+& N-DGS & 300 & 10.43 & - & 348.95 & \bf 0.973 & 34.04 & 0.027 \\
+& \textit{d}GS-O (\textbf{Ours}) & 300 & 9.71 & - & \bf 587.84 & \bf 0.973 & 34.25 & \bf 0.026 \\
+& \textit{d}GS (\textbf{Ours}) & 300 & 10.18 & - & 544.47 & \bf 0.973 & \bf 34.32 & \bf 0.026 \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+
 \subsection{Results and Analysis}
 
 The comparison between our three configurations reveals distinct efficiency-quality trade-offs. \textbf{\textit{d}GS-O} uses only opacity conditioning with $\mu_{\text{cond}} = \mu_p$ (no position displacement). On static scenes (NeRF Synthetic, Mip-NeRF 360, 6DGS PBR), it achieves strong quality: +0.46 dB on NeRF Synthetic, +0.78 dB on Mip-NeRF 360, but -0.57 dB on 6DGS PBR compared to N-DGS. The efficiency gains are substantial: 23\% faster rendering (754.98 vs 615.57 FPS on NeRF Synthetic), 89\% faster on Mip-NeRF 360 (279.30 vs 147.46 FPS). Notably, when primitive count is large (e.g., \texttt{Mip-NeRF 360}), \textit{d}GS-O achieves 89\% faster rendering despite using 86\% more primitives (2363K vs 1273K), demonstrating that computational efficiency is dominated by per-primitive operations rather than primitive count. However, on dynamic scenes, the lack of position displacement significantly impacts quality: -2.21 dB on D-NeRF, indicating that temporal dynamics benefit more from position conditioning than static view-dependent effects.
@@ -364,6 +389,26 @@ The comparison between our three configurations reveals distinct efficiency-qual
 \textbf{\textit{d}GS} adds learnable position coupling via $\lambda_{\text{pos}}$, enabling each Gaussian to adaptively balance between fully independent position shifts ($\lambda_{\text{pos}}=0$, where position is decoupled from opacity-controlling precision) and coupled N-DGS behavior ($\lambda_{\text{pos}}=1$, where both share the same precision matrix). This recovers quality losses: on D-NeRF it achieves +0.39 dB over N-DGS (33.52 vs 33.13 dB), demonstrating that learnable coupling can even surpass the entangled baseline. On static scenes, \textit{d}GS consistently matches or exceeds N-DGS (+0.46 dB on NeRF Synthetic, +0.93 dB on Mip-NeRF 360, +0.66 dB on 6DGS PBR), while maintaining competitive rendering speeds (687.87 FPS on NeRF Synthetic, 12\% faster than N-DGS).
 
 For 7DGS PBR, the results are highly competitive: \textit{d}GS-O achieves 31.70 dB (only -0.05 dB vs N-DGS at 31.75 dB) while \textit{d}GS matches this at 31.72 dB (-0.03 dB). Both variants deliver substantial efficiency gains, with \textit{d}GS-O achieving 18\% faster rendering (835.24 vs 709.83 FPS) and 9\% faster training (34.58 vs 38.14 min). The minimal quality gap demonstrates that learnable coupling effectively adapts to scenes with complex spatio-temporal-angular correlations while maintaining the efficiency benefits of disentangled parameterization.
+
+\subsection{Ablation Study}
+
+To understand the contribution of each component in our approach, we conduct an ablation study comparing three configurations: (1) \textbf{\textit{d}GS-O}: opacity conditioning only without position displacement, (2) \textbf{\textit{d}GS w/o $\mathbf{S}$}: position displacement without spatial scaling, and (3) \textbf{\textit{d}GS}: our full method with per-dimension spatial scaling. Table~\ref{tab:ablation} shows results on NeRF Synthetic and 6DGS PBR datasets. Spatial scaling is critical for quality: adding spatial scaling to position displacement improves PSNR by 2.58 dB on NeRF Synthetic (33.84 vs 31.26) and 2.99 dB on 6DGS PBR (37.77 vs 34.78). Notably, position displacement without proper scaling (dGS w/o $\mathbf{S}$) performs worse than using no position displacement at all (dGS-O), with drops of -2.58 dB on NeRF Synthetic and -1.76 dB on 6DGS PBR. This validates our design choice to respect Gaussian anisotropy in the displacement parameterization.
+
+\begin{table}[h]
+\centering
+\caption{Ablation study on NeRF Synthetic and 6DGS PBR datasets. \textit{d}GS w/o $\mathbf{S}$ removes spatial scaling while \textit{d}GS uses per-dimension spatial scaling.}
+\label{tab:ablation}
+\begin{tabular}{l|ccc|ccc}
+\toprule
+ & \multicolumn{3}{c|}{NeRF Synthetic} & \multicolumn{3}{c}{6DGS PBR} \\
+Configuration & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ \\
+\midrule
+\textit{d}GS-O & \textbf{33.84} & \textbf{0.971} & 0.030 & 36.54 & 0.965 & 0.059 \\
+\textit{d}GS w/o $\mathbf{S}$ & 31.26 & 0.957 & 0.046 & 34.78 & 0.951 & 0.075 \\
+\textit{d}GS (full) & \textbf{33.84} & \textbf{0.971} & \textbf{0.029} & \textbf{37.77} & \textbf{0.972} & \textbf{0.051} \\
+\bottomrule
+\end{tabular}%
+\end{table}
 
 \section{Future Work}
 
@@ -394,7 +439,67 @@ We presented \modelname{}, a disentangled parameterization for efficient N-dimen
 
 \appendix
 
+
+\section{Comparison to N-DGS Displacement Parameterization}
+\label{sec:spatial_scaling_proof}
+
+Both N-DGS and \modelname{} scale displacement with spatial scale $s_i$, but differ in how tightly this coupling is achieved and in their parameterization approach.
+
+\textbf{N-DGS: Implicit coupling via Cholesky structure.} N-DGS parameterizes the full $(3+C) \times (3+C)$ covariance via Cholesky decomposition $\boldsymbol{\Sigma} = \mathbf{L}\mathbf{L}^\top$, where $\mathbf{L}$ is lower triangular with diagonal elements $L_{ii} = s_i$ (spatial and query scales) and off-diagonal elements $L_{ij} = \ell_{ij}$ for $i > j$, where $\ell_{ij} \in [-1,1]$ are bounded correlation parameters (initialized to zero).
+
+To illustrate this structure, consider 6DGS with 3 spatial and 3 view dimensions ($C=3$). The Cholesky factor $\mathbf{L} \in \mathbb{R}^{6 \times 6}$ has the form:
+\begin{equation}
+\mathbf{L} = \left(\begin{array}{rrrrrr}
+       s_1 &        0 &        0 &        0 &        0 &        0 \\
+\ell_{21} &       s_2 &        0 &        0 &        0 &        0 \\
+\ell_{31} & \ell_{32} &       s_3 &        0 &        0 &        0 \\
+\ell_{41} & \ell_{42} & \ell_{43} &       s_4 &        0 &        0 \\
+\ell_{51} & \ell_{52} & \ell_{53} & \ell_{54} &       s_5 &        0 \\
+\ell_{61} & \ell_{62} & \ell_{63} & \ell_{64} & \ell_{65} &       s_6
+\end{array}\right),
+\end{equation}
+where $s_1, s_2, s_3$ are spatial scales, $s_4, s_5, s_6$ are query dimension scales, and $\ell_{ij} \in [-1,1]$ are bounded correlations.
+
+The displacement block $\boldsymbol{\Sigma}_{pq} = (\mathbf{L}\mathbf{L}^\top)_{1:3,4:6}$ emerges from matrix multiplication. Computing via row-column dot products yields:
+\begin{equation}
+\boldsymbol{\Sigma}_{pq} = \left(\begin{array}{rrr}
+                           s_1 \ell_{41} &                            s_1 \ell_{51} &                            s_1 \ell_{61} \\
+     \ell_{21}\ell_{41} + s_2 \ell_{42} &      \ell_{21}\ell_{51} + s_2 \ell_{52} &      \ell_{21}\ell_{61} + s_2 \ell_{62} \\
+\ell_{31}\ell_{41} + \ell_{32}\ell_{42} + s_3 \ell_{43} & \ell_{31}\ell_{51} + \ell_{32}\ell_{52} + s_3 \ell_{53} & \ell_{31}\ell_{61} + \ell_{32}\ell_{62} + s_3 \ell_{63}
+\end{array}\right).
+\end{equation}
+Note that $\boldsymbol{\Sigma}_{pq}$ contains only spatial scales $s_1, s_2, s_3$ and bounded correlations $\ell_{ij}$ -- the query dimension scales $s_4, s_5, s_6$ do \textit{not} appear. This occurs because displacement describes how spatial position changes with query deviation, which should scale with the Gaussian's \textit{spatial} extent, not its query dimension spread.
+
+In general, each element of $\boldsymbol{\Sigma}_{pq}$ can be expressed as:
+\begin{equation}
+[\boldsymbol{\Sigma}_{pq}]_{ij} = \sum_{k=1}^{i} L_{ik} L_{(3+j),k} = \sum_{k=1}^{i-1} \ell_{ik} \ell_{(3+j),k} + s_i \cdot \ell_{(3+j),i}.
+\end{equation}
+
+Cross-terms from spatial correlations $\ell_{ik}$ (where $k < i$) accumulate in the displacement. The displacement in row $i$ satisfies:
+\begin{equation}
+\|\boldsymbol{\Sigma}_{pq}^{(i)}\|_2 \leq \sqrt{C}(i-1 + s_i).
+\end{equation}
+For large $s_i$, this approximates $s_i \sqrt{C}$, but the constant offset $(i-1)\sqrt{C}$ can dominate for small Gaussians. This bound also introduces an asymmetry across spatial dimensions: even when $s_1 = s_2 = s_3$, row $i$ accumulates more cross-terms than row 1, allowing arbitrarily different displacement magnitudes depending on the spatial dimension ordering. While N-DGS uses zero initialization of $\ell_{ij}$ to ensure displacement initially scales with $s_i$, training can learn non-zero correlations that introduce both the offset and this asymmetry.
+
+\textbf{Our method: Explicit coupling via element-wise scaling.} We directly parameterize $\mathbf{V}_{pq} = \mathbf{S} \odot \tanh(\boldsymbol{\Theta}_{pq})$, where $\mathbf{S}_{i,:} = (s_i, \ldots, s_i)$ repeats each spatial scale across row $i$, and $\boldsymbol{\Theta}_{pq} \in \mathbb{R}^{3 \times C}$ are learnable parameters. This gives:
+\begin{equation}
+\|\mathbf{V}_{pq}^{(i)}\|_2 = s_i \|\tanh(\boldsymbol{\Theta}_{i,:})\|_2 \leq s_i \sqrt{C}.
+\end{equation}
+Each element is explicitly $s_i \cdot \tanh(\theta)$ with no cross-terms from other spatial dimensions, ensuring displacement scales exactly with $s_i$ even for tiny Gaussians.
+
+\textbf{Key difference.} Both methods bound displacement by spatial scale, but differ fundamentally:
+\begin{itemize}[leftmargin=*]
+\item \textbf{N-DGS}: Displacement emerges \textit{implicitly} from Cholesky structure with bound $\sqrt{C}(i-1 + s_i)$. Cross-terms can allow disproportionately large displacements for small Gaussians and introduce asymmetry across spatial dimensions.
+\item \textbf{\modelname{}}: Displacement is \textit{explicitly} parameterized with tight bound $s_i\sqrt{C}$, ensuring proper scaling across all Gaussian sizes and symmetric treatment of all spatial dimensions.
+\end{itemize}
+
+Empirically, removing spatial scaling (ablation: \textit{d}GS w/o $\mathbf{S}$) degrades PSNR by 2.59 dB on NeRF Synthetic (Table~\ref{tab:ablation}), confirming that displacement scaling is critical. Our explicit parameterization provides tighter bounds, avoids dimension-ordering artifacts, and enables learnable position-opacity disentanglement via $\lambda_{\text{pos}}$.
+
+
 \section{Detailed Per-Scene Results}
+
+This section provides comprehensive per-scene breakdowns for all experiments. Table~\ref{tab:detailed_combined} presents quality metrics (PSNR, SSIM, LPIPS) for each scene across all five datasets, while Table~\ref{tab:efficiency_combined} reports efficiency metrics (Gaussian count, training time, rendering FPS). These detailed results demonstrate the consistency of our method's performance across diverse scene types and complexity levels.
+
 % Combined Detailed Quantitative Comparison Table
 \begin{table*}[bp]
   \centering
@@ -406,8 +511,8 @@ We presented \modelname{}, a disentangled parameterization for efficient N-dimen
 
     \multicolumn{2}{@{\hskip 2pt}c|@{\hskip 2pt}}{\multirow{2}[4]{*}{Dataset}} & \multicolumn{1}{c|@{\hskip 2pt}}{\multirow{2}[4]{*}{Scene}}
         & \multicolumn{3}{c|@{\hskip 2pt}}{N-DGS}
-        & \multicolumn{3}{c|@{\hskip 2pt}}{\textit{d}GS-O}
-        & \multicolumn{3}{@{\hskip 2pt}c}{\textit{d}GS} \\
+        & \multicolumn{3}{c|@{\hskip 2pt}}{\textit{d}GS-O (\textbf{Ours})}
+        & \multicolumn{3}{@{\hskip 2pt}c}{\textit{d}GS (\textbf{Ours})} \\
 \cmidrule{4-12}
           &&       & \multicolumn{1}{@{\hskip 2pt}c@{\hskip 2pt}}{PSNR$\uparrow$}
                   & \multicolumn{1}{@{\hskip 2pt}c@{\hskip 2pt}}{SSIM$\uparrow$}
@@ -461,9 +566,9 @@ We presented \modelname{}, a disentangled parameterization for efficient N-dimen
           & 26.40
           & 0.739
           & 0.316
-          & \bf 27.18
-          & \bf 0.779
-          & \bf 0.252
+          & 27.18
+          & 0.779
+          & 0.252
           & \bf 27.33
           & \bf 0.781
           & \bf 0.250 \\
@@ -575,8 +680,8 @@ We presented \modelname{}, a disentangled parameterization for efficient N-dimen
 
     \multicolumn{2}{@{\hskip 2pt}c|@{\hskip 2pt}}{\multirow{2}[4]{*}{Dataset}} & \multicolumn{1}{c|@{\hskip 2pt}}{\multirow{2}[4]{*}{Scene}}
         & \multicolumn{3}{c|@{\hskip 2pt}}{N-DGS}
-        & \multicolumn{3}{c|@{\hskip 2pt}}{\textit{d}GS-O}
-        & \multicolumn{3}{@{\hskip 2pt}c}{\textit{d}GS} \\
+        & \multicolumn{3}{c|@{\hskip 2pt}}{\textit{d}GS-O (\textbf{Ours})}
+        & \multicolumn{3}{@{\hskip 2pt}c}{\textit{d}GS (\textbf{Ours})} \\
 \cmidrule{4-12}
           &&       & \multicolumn{1}{@{\hskip 2pt}c@{\hskip 2pt}}{\#Gauss$\downarrow$}
                   & \multicolumn{1}{@{\hskip 2pt}c@{\hskip 2pt}}{Time$\downarrow$}
@@ -709,6 +814,5 @@ We presented \modelname{}, a disentangled parameterization for efficient N-dimen
     }
   \label{tab:efficiency_combined}
 \end{table*}
-
 
 \end{document}
