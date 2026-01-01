@@ -86,7 +86,8 @@ run_experiment() {
         --opacity_reg $OPACITY_REG \
         --scale_reg $SCALE_REG \
         $extra_args \
-        --eval 
+        --eval \
+        --disable_viewer
         
     # Render at multiple iterations (including best)
     for iter in 7000 30000 best; do

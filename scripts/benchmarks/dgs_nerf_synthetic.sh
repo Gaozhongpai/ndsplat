@@ -39,6 +39,7 @@ run_experiment() {
         --mode "$mode" \
         $extra_args \
         --eval \
+        --disable_viewer \
         -w
 
     # Render at multiple iterations (including best)

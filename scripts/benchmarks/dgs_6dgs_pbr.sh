@@ -37,7 +37,8 @@ run_experiment() {
         --model_path "$output_dir" \
         --mode "$mode" \
         $extra_args \
-        --eval
+        --eval \
+        --disable_viewer
 
     # Render at multiple iterations (including best)
     for iter in 7000 30000 best; do

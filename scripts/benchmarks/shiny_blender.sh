@@ -26,7 +26,8 @@ for dir in "${datasets[@]}"; do
         # Train
         python train.py -s "../dataset/${clean_dir}" \
             --model_path "../output/6dgs_rebuttal/${clean_dir}" \
-            --eval
+            --eval \
+        --disable_viewer
 
         # Render at multiple iterations
         for iter in 500 2000 7000 15000 30000; do

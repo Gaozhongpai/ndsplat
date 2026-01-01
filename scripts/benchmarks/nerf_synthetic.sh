@@ -20,7 +20,8 @@ for base_dir in "${base_dirs[@]}"; do
             # Train
             python train.py -s "../dataset/${clean_dir}" \
                 --model_path "../output/6dgs/${clean_dir}" \
-                --eval
+                --eval \
+        --disable_viewer
 
             # Render at multiple iterations
             for iter in 500 2000 7000 15000 30000; do

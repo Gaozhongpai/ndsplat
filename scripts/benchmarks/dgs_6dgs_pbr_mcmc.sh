@@ -25,17 +25,27 @@ shopt -s dotglob
 base_dir="/code/dataset/tandt_db/6dgs-pbr/"
 
 # MCMC parameters
-MCMC_CAP_MAX=200000
 NOISE_LR=1.0
 OPACITY_REG=0.01
 SCALE_REG=0.01
+
+# Scene-specific cap_max values
+declare -A MCMC_CAP_MAX
+MCMC_CAP_MAX["bunny_cloud"]=60000
+MCMC_CAP_MAX["cloud"]=60000
+MCMC_CAP_MAX["explosion"]=60000
+MCMC_CAP_MAX["smoke"]=60000
+MCMC_CAP_MAX["dragon"]=300000
+MCMC_CAP_MAX["rvr_x"]=300000
+MCMC_CAP_MAX["suzanne"]=300000
 
 # Function to run experiment for a given mode and output directory
 run_experiment() {
     local mode=$1
     local output_dir=$2
     local dir=$3
-    local extra_args=$4
+    local scene_name=$4
+    local extra_args=$5
 
     # Skip if results already exist
     if [ -f "$output_dir/results.json" ]; then
@@ -43,17 +53,22 @@ run_experiment() {
         return
     fi
 
+    # Get scene-specific cap_max or use default
+    local cap_max=${MCMC_CAP_MAX[$scene_name]:-200000}
+    echo "Using mcmc_cap_max=$cap_max for scene $scene_name"
+
     # Train with MCMC densification
     python train.py -s "$dir" \
         --model_path "$output_dir" \
         --mode "$mode" \
         --densification_strategy mcmc \
-        --mcmc_cap_max $MCMC_CAP_MAX \
+        --mcmc_cap_max $cap_max \
         --noise_lr $NOISE_LR \
         --opacity_reg $OPACITY_REG \
         --scale_reg $SCALE_REG \
         $extra_args \
         --eval \
+        --disable_viewer
 
     # Render at multiple iterations (including best)
     for iter in 7000 30000 best; do
@@ -84,7 +99,7 @@ for dir in "$base_dir"*/; do
 
         output_dir="output/mcmc/3dgs/tandt_pbr/${scene_name}"
         echo "Processing ${scene_name} with mode 3dgs (MCMC)..."
-        run_experiment "3dgs" "$output_dir" "$dir" ""
+        run_experiment "3dgs" "$output_dir" "$dir" "$scene_name" ""
     fi
 done
 
@@ -105,7 +120,7 @@ for dir in "$base_dir"*/; do
 
         output_dir="output/mcmc/opacity_only/tandt_pbr/${scene_name}"
         echo "Processing ${scene_name} with mode opacity_only (MCMC)..."
-        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos False --l_22_inv_init_scale 2.0"
+        run_experiment "dgs" "$output_dir" "$dir" "$scene_name" "--use_view_dependent_pos False --l_22_inv_init_scale 2.0"
     fi
 done
 
@@ -126,7 +141,7 @@ for dir in "$base_dir"*/; do
 
         output_dir="output/mcmc/opacity_pos/tandt_pbr/${scene_name}"
         echo "Processing ${scene_name} with mode opacity_pos (MCMC)..."
-        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --l_22_inv_init_scale 2.0"
+        run_experiment "dgs" "$output_dir" "$dir" "$scene_name" "--use_view_dependent_pos True --l_22_inv_init_scale 2.0"
     fi
 done
 
@@ -147,7 +162,7 @@ for dir in "$base_dir"*/; do
 
         output_dir="output/mcmc/ndgs/tandt_pbr/${scene_name}"
         echo "Processing ${scene_name} with mode ndgs (MCMC)..."
-        run_experiment "ndgs" "$output_dir" "$dir" ""
+        run_experiment "ndgs" "$output_dir" "$dir" "$scene_name" ""
     fi
 done
 

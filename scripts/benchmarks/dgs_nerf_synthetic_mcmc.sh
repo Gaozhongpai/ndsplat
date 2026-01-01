@@ -54,6 +54,7 @@ run_experiment() {
         --scale_reg $SCALE_REG \
         $extra_args \
         --eval \
+        --disable_viewer \
         -w
 
     # Render at multiple iterations (including best)

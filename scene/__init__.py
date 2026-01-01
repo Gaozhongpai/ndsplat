@@ -39,8 +39,6 @@ def get_gaussian_model(mode: str):
         from scene.gaussian_model_ubs_sh import GaussianModel
     elif mode == "ndgs":  ## N-DGS (supports both 6DGS and 7DGS with time, with merged parametrization)
         from scene.gaussian_model_ndgs import GaussianModel
-    elif mode == "ndgs-v2":  ## N-DGS V2 (returns v_cond with Schur complement, lambda controls V_22_inv interpolation)
-        from scene.gaussian_model_ndgs_v2 import GaussianModel
     elif mode == "ndgs-2sh":  ## N-DGS with 2 SH bands
         from scene.gaussian_model_ndgs_2sh import GaussianModel
     elif mode == "dgs":  ## Full DGS with view-dependent position, time-dependent rotation
@@ -150,10 +148,15 @@ class Scene:
                                                 mcmc_cap_max=mcmc_cap_max,
                                                 densification_strategy=densification_strategy)
             elif args.mode == "dgs" or args.mode == "dgs-color":
-                # DGS/DGS-color mode: standard 3DGS-style initialization
-                self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent)
+                # DGS/DGS-color mode: supports MCMC initialization sampling
+                self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent,
+                                                mcmc_cap_max=mcmc_cap_max,
+                                                densification_strategy=densification_strategy)
             else:
-                self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent)
+                # 3DGS mode: supports MCMC initialization sampling
+                self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent,
+                                                mcmc_cap_max=mcmc_cap_max,
+                                                densification_strategy=densification_strategy)
 
     def save(self, iteration, is_best=False):
         if is_best:
