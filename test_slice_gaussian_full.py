@@ -3,12 +3,12 @@ Gradient verification test for slice_gaussian_full CUDA kernel.
 
 Compares CUDA kernel gradients against PyTorch autograd gradients for all parameters:
 - Position: xyz, v_12, L_22_inv, view_mean
+- Scaling: scale, lambda_view, lambda_time (applied in CUDA)
 
 Note: Rotation conditioning has been removed from this version.
-Note: Scale is NOT conditioned in slice_gaussian_full - use get_scaling directly.
+Note: Spatial scaling and lambda modulation are now applied directly in CUDA kernels.
 """
 
-import inspect
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -18,9 +18,6 @@ from gsplat import slice_gaussian_full
 from gsplat.cuda._torch_impl import _slice_gaussian_full
 
 
-_HAS_LAMBDA_OPC_TIME_FULL_CUDA = "lambda_opc_time" in inspect.signature(slice_gaussian_full).parameters
-
-
 def _call_slice_gaussian_full_torch(
     xyz,
     view_mean,
@@ -28,16 +25,23 @@ def _call_slice_gaussian_full_torch(
     v_12,
     L_22_inv,
     lambda_opc,
-    lambda_opc_time,  # Kept for API compatibility but not used by torch impl
+    scale,
+    lambda_view,
+    lambda_time,
+    use_beta=False,
 ):
-    # Note: _slice_gaussian_full doesn't have lambda_opc_time parameter
+    # PyTorch implementation with scale and lambda parameters
     return _slice_gaussian_full(
         xyz,
         view_mean,
         query,
         v_12,
         L_22_inv,
-        lambda_opc,
+        lambda_view=lambda_view,
+        lambda_time=lambda_time,
+        lambda_opc=lambda_opc,
+        scale=scale,
+        use_beta=use_beta,
     )
 
 
@@ -48,25 +52,23 @@ def _call_slice_gaussian_full_cuda(
     v_12,
     L_22_inv,
     lambda_opc,
-    lambda_opc_time,
+    scale,
+    lambda_view,
+    lambda_time,
+    use_beta=False,
 ):
-    if _HAS_LAMBDA_OPC_TIME_FULL_CUDA:
-        return slice_gaussian_full(
-            xyz,
-            view_mean,
-            query,
-            v_12,
-            L_22_inv,
-            lambda_opc,
-            lambda_opc_time,
-        )
+    # CUDA implementation with scale and lambda parameters
     return slice_gaussian_full(
         xyz,
         view_mean,
         query,
         v_12,
         L_22_inv,
-        lambda_opc,
+        lambda_opc=lambda_opc,
+        scale=scale,
+        lambda_view=lambda_view,
+        lambda_time=lambda_time,
+        use_beta=use_beta,
     )
 
 
@@ -74,7 +76,9 @@ def test_slice_gaussian_full_gradients(
     N=1000,
     C=3,
     use_pos=True,
-    lambda_opc_time=None,
+    use_scale=True,
+    use_lambda=True,
+    use_beta=False,
     seed=42,
 ):
     """
@@ -84,38 +88,19 @@ def test_slice_gaussian_full_gradients(
         N: Number of Gaussians
         C: Conditioning dimension (3 for view, 4 for view+time)
         use_pos: Whether to use position conditioning
-        lambda_opc_time: Optional opacity scaling factor for time (only when C=4). Scalar, tensor, or None.
+        use_scale: Whether to use spatial scaling
+        use_lambda: Whether to use lambda modulation
+        use_beta: Whether to use beta-based opacity (UBS-style)
         seed: Random seed for reproducibility
     """
     torch.manual_seed(seed)
     device = "cuda"
 
-    if C == 4:
-        if lambda_opc_time is None:
-            lambda_opc_time_arg = torch.rand(N, device=device) * 0.3 + 0.2
-        else:
-            if isinstance(lambda_opc_time, torch.Tensor):
-                lambda_opc_time_arg = lambda_opc_time.to(device=device)
-            else:
-                lambda_opc_time_arg = torch.full((N,), float(lambda_opc_time), device=device)
-    else:
-        lambda_opc_time_arg = None
-
-    if lambda_opc_time_arg is None:
-        lambda_opc_time_desc = "None"
-    elif isinstance(lambda_opc_time_arg, torch.Tensor):
-        lambda_opc_time_desc = (
-            f"tensor[min={lambda_opc_time_arg.min().item():.3f}, "
-            f"max={lambda_opc_time_arg.max().item():.3f}]"
-        )
-    else:
-        lambda_opc_time_desc = str(lambda_opc_time_arg)
-
     print("=" * 70)
     print("slice_gaussian_full Gradient Verification Test")
     print("=" * 70)
     print(f"N={N}, C={C}, use_pos={use_pos}")
-    print(f"lambda_opc_time={lambda_opc_time_desc}")
+    print(f"use_scale={use_scale}, use_lambda={use_lambda}, use_beta={use_beta}")
     print()
 
     # Create test inputs
@@ -134,6 +119,35 @@ def test_slice_gaussian_full_gradients(
     n_L_22_inv = C * (C + 1) // 2
     L_22_inv = torch.randn(N, n_L_22_inv, device=device, requires_grad=True) * 0.5
 
+    # Scaling parameters
+    if use_scale:
+        scale = torch.rand(N, 3, device=device, requires_grad=True) * 0.5 + 0.5  # [0.5, 1.0]
+    else:
+        scale = None
+
+    if use_lambda:
+        if use_beta:
+            # Beta mode: Pass beta values directly (not pre-activated)
+            # These values are used as-is for beta parameters in the kernel
+            # Range [1.0, 3.0] for beta values (will be clamped to [0,1] for position scaling)
+            lambda_view = torch.rand(N, device=device, requires_grad=True) * 2.0 + 1.0  # [1.0, 3.0]
+            if C == 4:
+                lambda_time = torch.rand(N, device=device, requires_grad=True) * 2.0 + 1.0  # [1.0, 3.0]
+            else:
+                lambda_time = None
+        else:
+            # Standard mode: Pass lambda values directly (not pre-activated)
+            # These values are used as-is for position scaling in the kernel
+            # Range [0.5, 1.0] for lambda values
+            lambda_view = torch.rand(N, device=device, requires_grad=True) * 0.5 + 0.5  # [0.5, 1.0]
+            if C == 4:
+                lambda_time = torch.rand(N, device=device, requires_grad=True) * 0.5 + 0.5  # [0.5, 1.0]
+            else:
+                lambda_time = None
+    else:
+        lambda_view = None
+        lambda_time = None
+
     lambda_opc = 0.35
 
     # ============ Test with PyTorch autograd (ground truth) ============
@@ -144,6 +158,9 @@ def test_slice_gaussian_full_gradients(
     view_mean_pt = view_mean.detach().clone().requires_grad_(True)
     v_12_pt = v_12.detach().clone().requires_grad_(True) if v_12 is not None else None
     L_22_inv_pt = L_22_inv.detach().clone().requires_grad_(True)
+    scale_pt = scale.detach().clone().requires_grad_(True) if scale is not None else None
+    lambda_view_pt = lambda_view.detach().clone().requires_grad_(True) if lambda_view is not None else None
+    lambda_time_pt = lambda_time.detach().clone().requires_grad_(True) if lambda_time is not None else None
 
     # Forward pass with PyTorch
     x_cond_pt, attention_pt = _call_slice_gaussian_full_torch(
@@ -153,8 +170,10 @@ def test_slice_gaussian_full_gradients(
         v_12_pt,
         L_22_inv_pt,
         lambda_opc,
-        lambda_opc_time_arg,
-        
+        scale_pt,
+        lambda_view_pt,
+        lambda_time_pt,
+        use_beta=use_beta,
     )
 
     # Create random upstream gradients
@@ -176,6 +195,12 @@ def test_slice_gaussian_full_gradients(
     }
     if v_12_pt is not None:
         pt_grads['v_12'] = v_12_pt.grad.clone()
+    if scale_pt is not None and scale_pt.grad is not None:
+        pt_grads['scale'] = scale_pt.grad.clone()
+    if lambda_view_pt is not None and lambda_view_pt.grad is not None:
+        pt_grads['lambda_view'] = lambda_view_pt.grad.clone()
+    if lambda_time_pt is not None and lambda_time_pt.grad is not None:
+        pt_grads['lambda_time'] = lambda_time_pt.grad.clone()
 
     # ============ Test with CUDA kernel ============
     print("Computing CUDA kernel gradients...")
@@ -185,6 +210,9 @@ def test_slice_gaussian_full_gradients(
     view_mean_cuda = view_mean.detach().clone().requires_grad_(True)
     v_12_cuda = v_12.detach().clone().requires_grad_(True) if v_12 is not None else None
     L_22_inv_cuda = L_22_inv.detach().clone().requires_grad_(True)
+    scale_cuda = scale.detach().clone().requires_grad_(True) if scale is not None else None
+    lambda_view_cuda = lambda_view.detach().clone().requires_grad_(True) if lambda_view is not None else None
+    lambda_time_cuda = lambda_time.detach().clone().requires_grad_(True) if lambda_time is not None else None
 
     # Forward pass with CUDA kernel
     x_cond_cuda, attention_cuda = _call_slice_gaussian_full_cuda(
@@ -194,8 +222,10 @@ def test_slice_gaussian_full_gradients(
         v_12_cuda,
         L_22_inv_cuda,
         lambda_opc,
-        lambda_opc_time_arg,
-        
+        scale_cuda,
+        lambda_view_cuda,
+        lambda_time_cuda,
+        use_beta=use_beta,
     )
 
     # Backward pass with same upstream gradients
@@ -213,6 +243,12 @@ def test_slice_gaussian_full_gradients(
     }
     if v_12_cuda is not None:
         cuda_grads['v_12'] = v_12_cuda.grad.clone()
+    if scale_cuda is not None and scale_cuda.grad is not None:
+        cuda_grads['scale'] = scale_cuda.grad.clone()
+    if lambda_view_cuda is not None and lambda_view_cuda.grad is not None:
+        cuda_grads['lambda_view'] = lambda_view_cuda.grad.clone()
+    if lambda_time_cuda is not None and lambda_time_cuda.grad is not None:
+        cuda_grads['lambda_time'] = lambda_time_cuda.grad.clone()
 
     # ============ Compare gradients ============
     print()
@@ -260,6 +296,16 @@ def test_slice_gaussian_full_gradients(
     print("\n--- SHARED GRADIENTS ---")
     results['view_mean'] = compare_grads("view_mean (shared canonical view)", pt_grads['view_mean'], cuda_grads['view_mean'])
 
+    # Scaling gradients
+    if 'scale' in pt_grads or 'lambda_view' in pt_grads:
+        print("\n--- SCALING GRADIENTS ---")
+    if 'scale' in pt_grads:
+        results['scale'] = compare_grads("scale (spatial scales)", pt_grads['scale'], cuda_grads['scale'])
+    if 'lambda_view' in pt_grads:
+        results['lambda_view'] = compare_grads("lambda_view (view lambda modulation)", pt_grads['lambda_view'], cuda_grads['lambda_view'])
+    if 'lambda_time' in pt_grads:
+        results['lambda_time'] = compare_grads("lambda_time (time lambda modulation)", pt_grads['lambda_time'], cuda_grads['lambda_time'])
+
     # ============ Summary ============
     print()
     print("=" * 70)
@@ -289,8 +335,8 @@ def test_forward_output_match(
     N=100,
     C=3,
     use_pos=True,
-    
-    lambda_opc_time=None,
+    use_scale=True,
+    use_lambda=True,
     seed=42,
 ):
     """
@@ -299,33 +345,28 @@ def test_forward_output_match(
     torch.manual_seed(seed)
     device = "cuda"
 
-    if C == 4:
-        if lambda_opc_time is None:
-            lambda_opc_time_arg = torch.rand(N, device=device) * 0.3 + 0.2
-        else:
-            if isinstance(lambda_opc_time, torch.Tensor):
-                lambda_opc_time_arg = lambda_opc_time.to(device=device)
-            else:
-                lambda_opc_time_arg = torch.full((N,), float(lambda_opc_time), device=device)
+    # Create scaling parameters
+    if use_scale:
+        scale = torch.rand(N, 3, device=device) * 0.5 + 0.75  # Range [0.75, 1.25]
     else:
-        lambda_opc_time_arg = None
+        scale = None
 
-    if lambda_opc_time_arg is None:
-        lambda_opc_time_desc = "None"
-    elif isinstance(lambda_opc_time_arg, torch.Tensor):
-        lambda_opc_time_desc = (
-            f"tensor[min={lambda_opc_time_arg.min().item():.3f}, "
-            f"max={lambda_opc_time_arg.max().item():.3f}]"
-        )
+    if use_lambda:
+        lambda_view = torch.rand(N, device=device) * 0.3 + 0.7  # Range [0.7, 1.0]
+        if C == 4:
+            lambda_time = torch.rand(N, device=device) * 0.3 + 0.7  # Range [0.7, 1.0]
+        else:
+            lambda_time = None
     else:
-        lambda_opc_time_desc = str(lambda_opc_time_arg)
+        lambda_view = None
+        lambda_time = None
 
     print()
     print("=" * 70)
     print("Forward Pass Output Comparison")
     print("=" * 70)
     print(f"N={N}, C={C}, use_pos={use_pos}")
-    print(f"lambda_opc_time={lambda_opc_time_desc}")
+    print(f"use_scale={use_scale}, use_lambda={use_lambda}")
 
     # Create test inputs
     xyz = torch.randn(N, 3, device=device)
@@ -347,8 +388,9 @@ def test_forward_output_match(
         v_12,
         L_22_inv,
         lambda_opc,
-        lambda_opc_time_arg,
-        
+        scale,
+        lambda_view,
+        lambda_time,
     )
 
     # CUDA forward
@@ -359,8 +401,9 @@ def test_forward_output_match(
         v_12,
         L_22_inv,
         lambda_opc,
-        lambda_opc_time_arg,
-        
+        scale,
+        lambda_view,
+        lambda_time,
     )
 
     # Compare outputs
@@ -390,26 +433,23 @@ def test_different_configurations():
     print("=" * 70)
 
     configs = [
-        # (C, use_pos,  lambda_opc_time, description)
-        (3, True, True, None, "C=3, pos=True, zero_cross=True (6DGS view-only)"),
-        (3, True, False, None, "C=3, pos=True, zero_cross=False (view-only with cross-terms)"),
-        (3, False, True, None, "C=3, pos=False, zero_cross=True (no position shift)"),
-        (4, True, True, 0.45, "C=4, pos=True, zero_cross=True (6DGS view+time)"),
-        (4, False, True, 0.45, "C=4, pos=False, zero_cross=True (time only)"),
-        # Test with )
-        (4, True, False, 0.65, "C=4, pos=True, zero_cross=False (full cross-terms)"),
+        # (C, use_pos, use_scale, use_lambda, description)
+        (3, True, True, True, "C=3, pos=True, scale+lambda (6DGS view-only)"),
+        (3, False, False, False, "C=3, pos=False, no scale/lambda (minimal)"),
+        (4, True, True, True, "C=4, pos=True, scale+lambda (7DGS view+time)"),
+        (4, False, True, False, "C=4, pos=False, scale only (time without lambda)"),
     ]
 
     all_results = {}
-    for C, use_pos, zero_cross, lambda_time, desc in configs:
+    for C, use_pos, use_scale, use_lambda, desc in configs:
         print(f"\n--- {desc} ---")
         try:
             results = test_slice_gaussian_full_gradients(
                 N=500,
                 C=C,
                 use_pos=use_pos,
-                
-                lambda_opc_time=lambda_time,
+                use_scale=use_scale,
+                use_lambda=use_lambda,
                 seed=42,
             )
             all_results[desc] = results
@@ -422,33 +462,66 @@ def test_different_configurations():
     return all_results
 
 
+def test_beta_opacity():
+    """Test beta-based opacity (use_beta=True) specifically."""
+    print("\n" + "=" * 70)
+    print("Testing Beta-Based Opacity (UBS-style)")
+    print("=" * 70)
+
+    # Test C=4 (7DGS) with use_beta=True
+    print("\n--- C=4, use_beta=True, beta values > 1.0 ---")
+    test_slice_gaussian_full_gradients(
+        N=500,
+        C=4,
+        use_pos=True,
+        use_scale=True,
+        use_lambda=True,
+        use_beta=True,
+        seed=42,
+    )
+
+    # Test C=3 (6DGS) with use_beta=True
+    print("\n--- C=3, use_beta=True, beta values > 1.0 ---")
+    test_slice_gaussian_full_gradients(
+        N=500,
+        C=3,
+        use_pos=True,
+        use_scale=True,
+        use_lambda=True,
+        use_beta=True,
+        seed=42,
+    )
+
+
 if __name__ == "__main__":
+    # First test beta-based opacity
+    print("Testing beta-based opacity (use_beta=True)...")
+    test_beta_opacity()
+
     # Run forward output comparison for different configs
-    print("Testing forward output matching...")
+    print("\n\nTesting forward output matching...")
     for C in (3, 4):
-        for zero_cross in (True, False):
-            lambda_time = None if C == 3 else (0.45 if zero_cross else 0.65)
-            test_forward_output_match(
-                N=100,
-                C=C,
-                use_pos=True,
-                
-                lambda_opc_time=lambda_time,
-            )
+        for use_scale in (True, False):
+            for use_lambda in (True, False):
+                test_forward_output_match(
+                    N=100,
+                    C=C,
+                    use_pos=True,
+                    use_scale=use_scale,
+                    use_lambda=use_lambda,
+                )
 
     # Run main gradient checks across configurations
     print("\n\n")
     for C in (3, 4):
-        for zero_cross in (True, False):
-            print("\n")
-            lambda_time = None if C == 3 else (0.45 if zero_cross else 0.65)
-            test_slice_gaussian_full_gradients(
-                N=1000,
-                C=C,
-                use_pos=True,
-                
-                lambda_opc_time=lambda_time,
-            )
+        print("\n")
+        test_slice_gaussian_full_gradients(
+            N=1000,
+            C=C,
+            use_pos=True,
+            use_scale=True,
+            use_lambda=True,
+        )
 
     # Test different configurations
     print("\n\n")

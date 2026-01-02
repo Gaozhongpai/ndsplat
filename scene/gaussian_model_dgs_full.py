@@ -39,7 +39,7 @@ from utils.general_utils import strip_symmetric, build_scaling_rotation
 
 # Import CUDA-accelerated slice functions
 # from gsplat import slice_gaussian_full
-from gsplat import slice_gaussian_full_v2
+from gsplat import slice_gaussian_full, slice_gaussian_full_v2
 
 
 def quaternion_multiply(q1, q2):
@@ -165,6 +165,16 @@ class GaussianModel:
 
         # Beta activation: same as UBS - 4.0 * exp(beta)
         self.beta_activation = lambda x: 4.0 * torch.exp(x)
+
+        # Lambda activation function (unified for view and time)
+        # Standard mode: sigmoid -> [0, 1] for position scaling
+        # Beta mode: same as beta_activation -> 4.0 * exp(x) -> (0, ∞)
+        if hasattr(self, 'use_beta') and self.use_beta:
+            # Beta mode: use same activation as beta -> (0, ∞)
+            self.lambda_activation = self.beta_activation
+        else:
+            # Standard mode: sigmoid -> [0, 1]
+            self.lambda_activation = torch.sigmoid
 
         # Time activation: sigmoid maps internal parameter to [0, 1]
         self.time_act = lambda x: torch.sigmoid(x)
@@ -355,7 +365,32 @@ class GaussianModel:
         return self.beta_activation(self._beta)
 
     @property
-    def get_v_12(self):
+    def get_v_12_v1(self):
+        """
+        Get v_12 with tanh activation applied.
+
+        Returns the activated displacement parameters which will be further processed
+        by the slice function with:
+        1. Spatial scaling (diagonal matrix S)
+        2. Lambda modulation (separate for view and time)
+        3. V_22_inv multiplication (for coupling with opacity)
+
+        The complete transformation is:
+            v_regr = (S * lambda * tanh(Theta_pq)) @ V_22_inv
+
+        This property returns: tanh(Theta_pq)
+        The slice function applies: S, lambda, and V_22_inv
+        """
+        if not self.use_view_dependent_pos:
+            return None
+
+        # Apply tanh activation to bound values to [-1, 1]
+        v_12_activated = self.v_12_activaton(self._v_12_direction)  # [N, 3*C] remove activation for ablation
+
+        return v_12_activated
+    
+    @property
+    def get_v_12_v2(self):
         """
         Get effective v_12 (position-view regression matrix) with bounded magnitude.
 
@@ -380,58 +415,6 @@ class GaussianModel:
         v_12_scaled = v_12_dir * (v_12_magnitude * spatial_scale)
 
         return v_12_scaled # self._v_12_direction  
-
-    @property
-    def get_v_12_v2(self):
-        """
-        Get effective v_12 (position-view regression matrix) with bounded magnitude.
-
-        NOTE: v_12 is actually v_regr (regression matrix) in the mathematical formulation.
-        After the decoupling change, position shift is computed as:
-            x_cond = x + v_12 @ (query - view_mean)
-
-        Previously it was:
-            x_cond = x + v_12 @ V_22_inv @ (query - view_mean)
-
-        So v_12 now directly acts as the regression matrix (v_regr), independent of V_22_inv.
-        This makes position conditioning completely separate from opacity conditioning.
-
-        Same parameterization as dgs_diag: direction (normalized) + magnitude (bounded by spatial scale).
-
-        EXPERIMENTAL: Now multiplying by inverse of L_22_inv diagonal to test consistency with N-DGS.
-        """
-        if not self.use_view_dependent_pos:
-            return None
-        # Repeat each scale component C times to get (N, 3*C)
-        # For C=3 (6DGS): [sx, sy, sz] -> [sx, sx, sx, sy, sy, sy, sz, sz, sz]
-        # For C=4 (7DGS): [sx, sy, sz] -> [sx, sx, sx, sx, sy, sy, sy, sy, sz, sz, sz, sz]
-        
-        C = self._v_12_direction.shape[1] // 3
-        spatial_scale_expanded = self.get_scaling.repeat_interleave(C, dim=1)  # (N, 3*C)
-        # spatial_scale_expanded = self.get_scaling.mean(dim=1, keepdim=True)
-
-        return self.v_12_activaton(self._v_12_direction) * spatial_scale_expanded # * s_inv_diag_expanded # (N, 3*C)
-
-    @property
-    def get_v_12_v3(self): ## ablation version
-        """
-        Get effective v_12 (position-view regression matrix) with bounded magnitude.
-
-        NOTE: v_12 is actually v_regr (regression matrix) in the mathematical formulation.
-        After the decoupling change, position shift is computed as:
-            x_cond = x + v_12 @ (query - view_mean)
-
-        Previously it was:
-            x_cond = x + v_12 @ V_22_inv @ (query - view_mean)
-
-        So v_12 now directly acts as the regression matrix (v_regr), independent of V_22_inv.
-        This makes position conditioning completely separate from opacity conditioning.
-
-        Same parameterization as dgs_diag: direction (normalized) + magnitude (bounded by spatial scale).
-        """
-        if not self.use_view_dependent_pos:
-            return None
-        return self._v_12_direction  
     
     @property
     def get_L_22_inv(self):
@@ -533,32 +516,53 @@ class GaussianModel:
 
         # Apply sigmoid to lambda parameters (stored in logit space)
         # Only used when use_view_dependent_pos is True
-        # Skip sigmoid when use_opacity_pos_decouple=True (lambda stored as exact value, not logit)
+        # Apply activation based on mode:
+        # - use_opacity_pos_decouple=True: use lambda directly (already 0.0, no activation)
+        # - use_beta=True: apply beta_activation -> 4.0 * exp(x) -> (0, ∞)
+        # - default: apply sigmoid activation -> [0, 1]
         if self.use_view_dependent_pos:
             if self.use_opacity_pos_decouple:
-                # Decouple mode: use lambda directly (already 0.0, no sigmoid)
+                # Decouple mode: use lambda directly (already 0.0, no activation)
                 lambda_view = self._lambda_view  # [N], exact value
                 lambda_time = self._lambda_time if self.input_dim == 7 else None  # [N] or None, exact value
             else:
-                # Default mode: apply sigmoid (lambda in logit space)
-                lambda_view = torch.sigmoid(self._lambda_view)  # [N] -> [0, 1]
-                lambda_time = torch.sigmoid(self._lambda_time) if self.input_dim == 7 else None  # [N] -> [0, 1] or None
+                # Apply activation function (sigmoid for standard, beta_activation for beta mode)
+                lambda_view = self.lambda_activation(self._lambda_view)  # [N]
+                lambda_time = self.lambda_activation(self._lambda_time) if self.input_dim == 7 else None  # [N] or None
         else:
             # Use identity (lambda=0) when position conditioning is disabled
             lambda_view = torch.zeros(self._xyz.shape[0], device=self._xyz.device)
             lambda_time = None
 
-        # Use slice_gaussian_full_v2 CUDA kernel with learnable lambda
-        x_cond, opacity_scale = slice_gaussian_full_v2(
-            xyz=self._xyz,                   # [N, 3]
-            view_mean=self.get_cond_mean,    # [N, C]
-            query=query,                     # [N, C]
-            v_12=self.get_v_12 if self.use_view_dependent_pos else None,  # [N, 3*C] or None
-            L_22_inv=self.get_L_22_inv,      # [N, C*(C+1)/2] full Cholesky (block-diagonal for C=4)
-            lambda_view=lambda_view,         # [N] learnable conditioning strength for view (or zeros)
-            lambda_time=lambda_time,         # [N] or None, learnable conditioning strength for time
-            lambda_opc=lambda_opc
-        )
+        is_v_12_v1 = True  # Use v_12_v2 (decoupled position shift)
+
+        if is_v_12_v1:
+            v_12 = self.get_v_12_v1  # [N, 3*C] with tanh activation
+            x_cond, opacity_scale = slice_gaussian_full(
+                xyz=self._xyz,                   # [N, 3]
+                view_mean=self.get_cond_mean,    # [N, C]
+                query=query,                     # [N, C]
+                v_12=v_12 if self.use_view_dependent_pos else None,  # [N, 3*C] or None
+                L_22_inv=self.get_L_22_inv,      # [N, C*(C+1)/2] full Cholesky (block-diagonal for C=4)
+                lambda_opc=lambda_opc,
+                scale=self.get_scaling,            # [N, 3]
+                lambda_view=lambda_view,         # [N] learnable conditioning strength for view (or zeros)
+                lambda_time=lambda_time,         # [N] or None, learnable conditioning strength for time
+                use_beta=self.use_beta,          # Use beta-based opacity (UBS-style)
+            )
+        else:
+            v_12 = self.get_v_12_v2  # [N, 3*C] with bounded magnitude
+            # Use slice_gaussian_full_v2 CUDA kernel with learnable lambda
+            x_cond, opacity_scale = slice_gaussian_full_v2(
+                xyz=self._xyz,                   # [N, 3]
+                view_mean=self.get_cond_mean,    # [N, C]
+                query=query,                     # [N, C]
+                v_12=v_12 if self.use_view_dependent_pos else None,  # [N, 3*C] or None
+                L_22_inv=self.get_L_22_inv,      # [N, C*(C+1)/2] full Cholesky (block-diagonal for C=4)
+                lambda_view=lambda_view,         # [N] learnable conditioning strength for view (or zeros)
+                lambda_time=lambda_time,         # [N] or None, learnable conditioning strength for time
+                lambda_opc=lambda_opc
+            )
 
         return x_cond, opacity_scale
 
