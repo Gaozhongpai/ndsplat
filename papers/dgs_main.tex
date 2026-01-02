@@ -43,7 +43,7 @@
 \usepackage{amsmath}
 \usepackage{gensymb}
 \usepackage{algorithm}
-\usepackage{algpseudocode}
+\usepackage[noend]{algpseudocode}
 \usepackage{enumitem}
 
 % Add a period to the end of an abbreviation unless there's one
@@ -76,7 +76,7 @@
 \let\titleold\title
 \renewcommand{\title}[1]{\titleold{#1}\newcommand{\thetitle}{#1}}
 
-\title{\modelname: Disentangled Parameterization for Efficient \\ Conditional Gaussian Splatting}
+\title{\modelname: Direct Parameterization for Efficient \\ Conditional Gaussian Splatting}
 
 % The \author macro works with any number of authors. There are two commands
 % used to separate the names and addresses of multiple authors: \And and \AND.
@@ -111,7 +111,7 @@ United Imaging Intelligence, Boston, MA
 \maketitle
 
 \begin{abstract}
-High-dimensional Gaussian Splatting methods like 6DGS and 7DGS achieve impressive view-dependent and dynamic scene modeling through conditional N-dimensional Gaussians. However, their monolithic covariance design enforces tight coupling between position shifts and opacity modulation, limiting flexibility and requiring computational overhead that accumulates across millions of primitives during training. We introduce \modelname{}, a disentangled parameterization that separates these conditioning effects into independent modules with learnable coupling. Our key contribution is per-Gaussian parameters that adaptively interpolate between fully independent position learning and coupled conditional behavior, eliminating the need for matrix inversions while enabling flexible control. Position shifts use direct displacement matrices, and opacity modulation employs Cholesky precision factors for numerically stable distance computation. This disentanglement achieves up to 17\% higher rendering throughput across diverse benchmarks while matching or exceeding N-DGS quality. The learned coupling parameters provide interpretable scene decomposition, revealing which regions benefit from entangled versus independent conditioning. Our approach offers a principled, efficient alternative to monolithic covariance representations in high-dimensional Gaussian splatting.
+High-dimensional Gaussian Splatting methods like 6DGS and 7DGS achieve impressive view-dependent and dynamic scene modeling through conditional N-dimensional Gaussians. However, their monolithic covariance design derives all conditioning effects from a shared joint covariance matrix, requiring expensive cubic-complexity matrix inversions in every forward pass. We introduce \modelname{}, a direct parameterization that explicitly represents each conditioning component with efficient, independent parameters. Instead of inverting covariance sub-matrices, we directly parameterize opacity modulation via Cholesky precision factors and position shifts via displacement matrices, eliminating cubic-complexity inversions while maintaining numerical stability. Our key contribution is learnable per-dimension coupling parameters that control how strongly position shifts respond to query deviations, enabling adaptive interpolation from no position conditioning to full N-DGS-style coupling. This direct parameterization achieves up to 17\% higher rendering throughput across diverse benchmarks while matching or exceeding N-DGS quality. Our approach offers a principled, efficient alternative to implicit covariance-based conditioning in high-dimensional Gaussian splatting.
 \end{abstract}
 
 \section{Introduction}
@@ -120,18 +120,18 @@ High-dimensional Gaussian Splatting methods like 6DGS and 7DGS achieve impressiv
 
 Recent extensions elevate Gaussians into higher-dimensional spaces to capture these phenomena. N-dimensional Gaussians (N-DG)~\citep{diolatzis2024n} pioneered this direction, refined by 6D Gaussian Splatting (6DGS)~\citep{gao20246dgs} which models position and viewing direction jointly for view-dependent effects, and 7D Gaussian Splatting (7DGS)~\citep{gao20257dgs} which adds temporal dimensions for dynamic scenes. Alternative kernel designs like Deformable Beta Splatting (DBS)~\citep{liu2025deformable} improve geometric fidelity but remain limited to spatial dimensions.
 
-Despite their expressive power, these N-dimensional formulations suffer from two fundamental limitations. First, they require inverting covariance sub-matrices ($O(C^3)$ operations per Gaussian) in every forward pass, creating computational overhead that accumulates across millions of primitives during training. Second, their monolithic covariance structure enforces tight coupling: position shifts and opacity modulation are entangled through a shared precision matrix. This coupling limits flexibility: some scene regions may benefit from independent opacity control without position displacement (e.g., view-dependent shading on static geometry), while others require coupled behavior (e.g., specular highlights that move and fade together). The rigid entanglement also risks numerical instabilities when matrices become ill-conditioned.
+Despite their expressive power, these N-dimensional formulations suffer from a fundamental limitation: their \textit{implicit} parameterization. All conditioning effects---position shifts, opacity modulation, and covariance adjustments---are derived from a single joint covariance matrix via conditional Gaussian formulas. Computing any single effect requires inverting the conditioning block with cubic complexity operations per Gaussian, creating computational overhead that accumulates across millions of primitives. Moreover, this implicit derivation offers limited control: position and opacity conditioning are rigidly tied through the shared covariance structure, preventing independent adjustment of their coupling strengths. The monolithic design also risks numerical instabilities when covariance matrices become ill-conditioned.
 
-\textbf{Our Insight.} The full N-dimensional joint covariance matrix (where $N = 3 + C$, with 3 spatial dimensions plus $C$ conditioning dimensions for view/time) is unnecessarily complex. Position shifts and opacity modulation serve distinct purposes and can be \textbf{disentangled} into independent modules, each with efficient direct parameterization. Rather than deriving all effects from a shared covariance and computing matrix inversions, we parameterize each component separately with learnable coupling between them. This design mirrors \textit{factorized attention} mechanisms: view/time act as \textit{queries} that independently modulate \textit{values} (position and opacity), creating sparse pathways instead of the dense coupling in N-DGS. This factorization enables extensibility to additional queries (lighting, materials) and values (rotation, color) without combinatorial complexity.
+\textbf{Our Insight.} Conditional Gaussian formulas are elegant mathematically but computationally inefficient. Each conditioning effect can be \textbf{directly parameterized} with efficient, independent parameters instead of being implicitly derived through matrix algebra. Opacity modulation only needs a precision matrix for distance computation---parameterize it directly via Cholesky factors. Position shifts only need a displacement matrix scaled by query deviations---parameterize it directly with bounded weights. By replacing implicit derivation with explicit parameters, we eliminate matrix inversions while gaining fine-grained control over each effect independently.
 
-We introduce \textbf{\modelname{}}, a disentangled parameterization for efficient conditional Gaussian splatting. The `\textbf{d}' signifies our principle: \textbf{d}isentangle conditioning into independent components with \textbf{d}irect parameterization---\textbf{d}isplacement matrices for position and \textbf{d}ecay factors for opacity. Our key contributions are:
+We introduce \textbf{\modelname{}}, a direct parameterization for efficient conditional Gaussian splatting. The `\textbf{d}' signifies our principle: \textbf{d}irect parameterization---\textbf{d}isplacement matrices for position and \textbf{d}ecay factors for opacity. Our key contributions are:
 
 \begin{enumerate}[leftmargin=*]
-\item \textbf{Direct Opacity Parameterization:} We directly parameterize opacity decay via Cholesky-factored precision matrices, replacing $O(C^3)$ matrix inversions with $O(C^2)$ triangular operations while guaranteeing numerical stability.
+\item \textbf{Direct Opacity Parameterization:} We directly parameterize opacity decay via Cholesky-factored precision matrices, replacing cubic-complexity matrix inversions with quadratic-complexity triangular operations while guaranteeing numerical stability.
 
-\item \textbf{Scaled Position Displacement:} Position shifts are parameterized by diagonal scaling with bounded learnable parameters, ensuring tight, symmetric displacement bounds and avoiding asymmetries from N-DGS's implicit coupling structure.
+\item \textbf{Direct Position Displacement:} Position shifts are directly parameterized via displacement matrices with spatial scaling and bounded activations, ensuring tight displacement bounds without requiring covariance inversion.
 
-\item \textbf{Learnable Coupling:} Per-Gaussian coupling parameters enable adaptive interpolation between fully independent and coupled behavior, allowing each primitive to learn its optimal disentanglement strength.
+\item \textbf{Learnable Coupling Strength:} Per-dimension coupling parameters control how strongly position shifts respond to query deviations, enabling adaptive interpolation from no position conditioning to full coupling through the shared precision matrix.
 
 \item \textbf{Efficient CUDA Implementation:} We implement optimized CUDA kernels for both our method and N-DGS baseline, fusing conditional operations with register-level computation for fair comparison (Note that the original N-DGS only implements in PyTorch).
 \end{enumerate}
@@ -153,7 +153,7 @@ Various parameterization strategies have been explored for covariance matrices i
 \textbf{Dynamic Scene Modeling.}
 Early NeRF extensions modeled dynamics through deformation fields: D-NeRF~\cite{pumarola2020dnerfneuralradiancefields}, Nerfies~\cite{park2021nerfies}, and HyperNeRF~\cite{park2021hypernerf}. For Gaussian Splatting, 4D Gaussian Splatting (4DGS)~\cite{yang2023real} extends primitives temporally, while Dynamic 3D Gaussians~\cite{luiten2023dynamic} combines canonical representations with learned deformations. 7DGS unifies spatial, temporal, and angular dimensions but enforces tight coupling through shared covariance structures, preventing independent control of position and opacity modulation.
 
-Our work addresses these limitations by introducing learnable disentanglement between position and opacity conditioning, eliminating matrix inversions while enabling adaptive coupling control through per-Gaussian parameters.
+Our work addresses these limitations by introducing direct parameterization of conditioning effects, eliminating matrix inversions while enabling learnable control over position-opacity coupling strength through per-dimension parameters.
 
 \section{Preliminary}
 
@@ -190,21 +190,17 @@ where $\lambda$ is a scaling factor (default 0.35). This formulation requires in
 
 \section{Our Approach}
 
-The full covariance formulations of 6DGS and 7DGS model all conditioning effects through a single $(3+C) \times (3+C)$ joint covariance matrix. To compute any single effect (position shift, opacity modulation, or covariance adjustment), one must invert the entire $C \times C$ conditioning block $\boldsymbol{\Sigma}_{qq}$.
+N-DGS methods derive all conditioning effects from a single $(3+C) \times (3+C)$ joint covariance matrix via conditional Gaussian formulas. To compute any effect (position shift, opacity modulation, or covariance adjustment), they must invert the $C \times C$ conditioning block $\boldsymbol{\Sigma}_{qq}$, requiring $O(C^3)$ operations per Gaussian per forward pass.
 
-We propose \modelname{}, which \textbf{disentangles} these effects into three independent modules. Rather than deriving all transformations from a shared covariance structure, we directly parameterize each conditioning component separately. This disentanglement eliminates the need for full covariance modeling while enabling efficient, modular computation.
+We propose \modelname{}, which replaces this \textbf{implicit derivation} with \textbf{direct parameterization}. Rather than computing conditioning effects through matrix algebra, we explicitly parameterize each component with dedicated, efficient parameters. This direct approach eliminates cubic-complexity inversions while providing independent control over each conditioning effect.
 
 \subsection{Overview}
 
-Our approach reformulates conditional Gaussian slicing into two \textbf{disentangled} components. Given the deviation $\boldsymbol{\delta} = q - \mu_q$ from the canonical view/time:
+Our approach directly parameterizes conditional Gaussian slicing with two explicit components. Given the deviation $\boldsymbol{\delta} = q - \mu_q$ from the canonical view/time:
 \begin{align}
-\alpha_{\text{cond}} &= \alpha \cdot \exp\left(-\lambda \cdot \|\mathbf{L}^\top \boldsymbol{\delta}\|_2^2\right), & &\text{(Opacity)} \\
+\alpha_{\text{cond}} &= \alpha \cdot \exp\left(-\|\mathbf{L}^\top \boldsymbol{\delta}\|_2^2\right), & &\text{(Opacity)} \\
 \mu_{\text{cond}} &= \mu_p + \mathbf{V}_{pq} \cdot \tilde{\mathbf{V}}_{qq}^{-1} \cdot \boldsymbol{\delta}, & &\text{(Position)} \end{align}
-where $\mathbf{L} \in \mathbb{R}^{C \times C}$ is the Cholesky factor of the precision matrix $\mathbf{V}_{qq}^{-1} = \mathbf{L}\mathbf{L}^\top$, $\mathbf{V}_{pq} \in \mathbb{R}^{3 \times C}$ is the displacement matrix, $\lambda_\text{pos} \in [0,1]$ is a learnable per-Gaussian parameter controlling position-opacity coupling, and $\lambda$ is a global opacity scaling hyperparameter (default 0.35) that controls the rate of opacity decay with distance. The scaled precision matrix $\tilde{\mathbf{V}}_{qq}^{-1}$ is defined as:
-\begin{equation}
-\tilde{\mathbf{V}}_{qq}^{-1} = (1-\lambda_\text{pos}) \mathbf{I} + \lambda_\text{pos} \mathbf{V}_{qq}^{-1}.
-\end{equation}
-The spatial covariance $\Sigma_{pp}$ remains independent of the query, using the standard 3DGS quaternion-scale parameterization ($\Sigma_{pp} = RSS^\top R^\top$) for seamless compatibility with existing pipelines, including densification strategies.
+where $\mathbf{L} \in \mathbb{R}^{C \times C}$ is the directly parameterized Cholesky factor of the precision matrix $\mathbf{V}_{qq}^{-1} = \mathbf{L}\mathbf{L}^\top$, $\mathbf{V}_{pq} = \mathbf{S}\boldsymbol{\Theta}_{pq} \in \mathbb{R}^{3 \times C}$ is the displacement matrix (spatial scale $\mathbf{S}$ times normalized $\boldsymbol{\Theta}_{pq}$ with $\|\boldsymbol{\Theta}_{pq}\|_F = 1$), and $\tilde{\mathbf{V}}_{qq}^{-1} = \text{diag}(\boldsymbol{\Lambda}) \mathbf{V}_{qq}^{-1}$ is the scaled precision with learnable per-dimension coupling strengths $\boldsymbol{\Lambda} \in [0,1]^C$ (dimensions of the same type share parameters). The spatial covariance $\boldsymbol{\Sigma}_{pp}$ remains independent of the query, using the standard 3DGS quaternion-scale parameterization ($\boldsymbol{\Sigma}_{pp} = \mathbf{R}\mathbf{S}\mathbf{S}^\top \mathbf{R}^\top$) for seamless compatibility with existing pipelines, including densification strategies.
 
 For 7DGS ($C=4$), we further \textbf{separate view and time} by using a block-diagonal precision matrix with zero cross-terms:
 \begin{equation}
@@ -218,22 +214,22 @@ where $\mathbf{\Sigma}_{vv}^{-1} \in \mathbb{R}^{3 \times 3}$ is the view precis
 
 \begin{table}[t!]
 \centering
-\caption{Comparison between N-DGS (entangled) and \modelname{} (learnable coupling). Our approach parameterizes opacity and position independently, eliminating matrix inversions. The scaled precision $\tilde{\mathbf{V}}_{qq}^{-1}$ in position computation enables learnable coupling strength.}
+\caption{Comparison between N-DGS (implicit derivation) and \modelname{} (direct parameterization). Our approach directly parameterizes opacity and position with dedicated parameters, eliminating matrix inversions. The coupling strength $\Lambda$ controls position response to queries.}
 \label{tab:comparison_overview}
 \resizebox{\columnwidth}{!}{%
 \begin{tabular}{@{}llll@{}}
 \toprule
-\textbf{Aspect} & \textbf{N-DGS (entangled)} & \textbf{\modelname{} (learnable coupling)} & \textbf{Benefit} \\
+\textbf{Aspect} & \textbf{N-DGS (implicit)} & \textbf{\modelname{} (direct)} & \textbf{Benefit} \\
 \midrule
-Opacity & $\alpha \cdot \exp(-\lambda\boldsymbol{\delta}^\top\boldsymbol{\Sigma}_{qq}^{-1}\boldsymbol{\delta})$ & $\alpha \cdot \exp(-\lambda\|\mathbf{L}^\top\boldsymbol{\delta}\|^2)$ & No inversion, $\mathbf{V}_{qq}^{-1} = \mathbf{L}\mathbf{L}^\top$ \\
-Position & $\boldsymbol{\mu}_p + \boldsymbol{\Sigma}_{pq}\boldsymbol{\Sigma}_{qq}^{-1}\boldsymbol{\delta}$ & $\boldsymbol{\mu}_p + \mathbf{V}_{pq}\tilde{\mathbf{V}}_{qq}^{-1}\boldsymbol{\delta}$ & Scaled precision $\tilde{\mathbf{V}}_{qq}^{-1}$ controls coupling \\
-Covariance & $\boldsymbol{\Sigma}_{pp} - \boldsymbol{\Sigma}_{pq}\boldsymbol{\Sigma}_{qq}^{-1}\boldsymbol{\Sigma}_{pq}^\top$ & $\boldsymbol{\Sigma}_{pp}$ (disentangled) & Shape independent \\
+Opacity & $\alpha \cdot \exp(-\lambda\boldsymbol{\delta}^\top\boldsymbol{\Sigma}_{qq}^{-1}\boldsymbol{\delta})$ & $\alpha \cdot \exp(-\|\mathbf{L}^\top\boldsymbol{\delta}\|^2)$ & No inversion, direct Cholesky $\mathbf{L}$ \\
+Position & $\boldsymbol{\mu}_p + \boldsymbol{\Sigma}_{pq}\boldsymbol{\Sigma}_{qq}^{-1}\boldsymbol{\delta}$ & $\boldsymbol{\mu}_p + \mathbf{V}_{pq}\tilde{\mathbf{V}}_{qq}^{-1}\boldsymbol{\delta}$ & Direct $\mathbf{V}_{pq}$, learnable $\boldsymbol{\Lambda}$ \\
+Covariance & $\boldsymbol{\Sigma}_{pp} - \boldsymbol{\Sigma}_{pq}\boldsymbol{\Sigma}_{qq}^{-1}\boldsymbol{\Sigma}_{pq}^\top$ & $\boldsymbol{\Sigma}_{pp}$ (direct) & No correction term needed \\
 \bottomrule
 \end{tabular}%
 }
 \end{table}
 
-Table~\ref{tab:comparison_overview} compares our approach with the entangled N-DGS formulation. The key innovation is \textbf{learnable position-opacity coupling} via the scaled precision matrix $\tilde{\mathbf{V}}_{qq}^{-1}$: the parameter $\lambda_{\text{pos}}$ enables each Gaussian to adaptively interpolate between fully independent ($\lambda_{\text{pos}}=0$) and coupled N-DGS behavior ($\lambda_{\text{pos}}=1$). For the simplified \textbf{\textit{d}GS-O} variant, we set $\boldsymbol{\mu}_{\text{cond}} = \boldsymbol{\mu}_p$ (no position displacement) and use only opacity modulation for maximum efficiency. The following subsections detail how this learnable coupling is implemented for opacity and position conditioning.
+Table~\ref{tab:comparison_overview} compares our direct parameterization with N-DGS's implicit derivation. The key innovation is \textbf{learnable coupling strength} via per-dimension parameters $\Lambda$: when $\Lambda = \mathbf{0}$, position becomes query-independent ($\boldsymbol{\mu}_{\text{cond}} = \boldsymbol{\mu}_p$); when $\Lambda = \mathbf{1}$, position couples through the shared precision matrix $\mathbf{V}_{qq}^{-1}$ like N-DGS. For the simplified \textbf{\textit{d}GS-O} variant, we disable position conditioning entirely ($\boldsymbol{\mu}_{\text{cond}} = \boldsymbol{\mu}_p$) and use only direct opacity parameterization for maximum efficiency. The following subsections detail the direct parameterization of each component.
 
 \subsection{Opacity Conditioning}
 
@@ -243,39 +239,35 @@ Our formulation computes $\mathbf{L}^\top \boldsymbol{\delta}$ followed by $\|\c
 
 For 7DGS, the block-diagonal structure enables \textbf{separated view and time opacity}. With $\boldsymbol{\delta} = (\boldsymbol{\delta}_v, \delta_t)^\top$ where $\boldsymbol{\delta}_v \in \mathbb{R}^3$ is the view deviation and $\delta_t \in \mathbb{R}$ is the time deviation, the opacity factors as:
 \begin{equation}
-\alpha_{\text{cond}} = \alpha \cdot \exp\left(-\lambda\left(\boldsymbol{\delta}_v^\top \mathbf{\Sigma}_{vv}^{-1} \boldsymbol{\delta}_v + \delta_t^2 \boldsymbol{\sigma}_t^{-1}\right)\right).
+\alpha_{\text{cond}} = \alpha \cdot \exp\left(-\left(\boldsymbol{\delta}_v^\top \mathbf{\Sigma}_{vv}^{-1} \boldsymbol{\delta}_v + \delta_t^2 \boldsymbol{\sigma}_t^{-1}\right)\right).
 \end{equation}
 This factorization allows view-dependent and time-dependent opacity to be controlled independently, with view precision $\mathbf{\Sigma}_{vv}^{-1}$ parameterized by a $3 \times 3$ Cholesky factor (6 parameters) and time precision $\boldsymbol{\sigma}_t^{-1}$ by a single scalar, for a total of 7 parameters instead of 10 for a full $4 \times 4$ precision matrix.
 
 \subsection{Position Conditioning}
 \label{subsec:position}
 
-In N-DGS, position is computed as $\boldsymbol{\mu}_{\text{cond}} = \boldsymbol{\mu}_p + \boldsymbol{\Sigma}_{pq}\boldsymbol{\Sigma}_{qq}^{-1}(\mathbf{q}-\boldsymbol{\mu}_q)$, where $\boldsymbol{\Sigma}_{pq}$ is derived from a joint Cholesky decomposition and $\boldsymbol{\Sigma}_{qq}^{-1}$ is the precision matrix that also controls opacity. This coupling means position shifts and opacity modulation are entangled through the shared precision matrix.
+In N-DGS, position is computed as $\boldsymbol{\mu}_{\text{cond}} = \boldsymbol{\mu}_p + \boldsymbol{\Sigma}_{pq}\boldsymbol{\Sigma}_{qq}^{-1}(\mathbf{q}-\boldsymbol{\mu}_q)$, where both $\boldsymbol{\Sigma}_{pq}$ and $\boldsymbol{\Sigma}_{qq}^{-1}$ are implicitly derived from the joint covariance matrix through Cholesky decomposition and matrix inversion.
 
-We introduce \textbf{learnable position-opacity disentanglement} through a scaled precision matrix:
+We replace this implicit derivation with \textbf{direct parameterization} of position shifts, combined with learnable coupling strength control:
 \begin{equation}
-\boldsymbol{\mu}_{\text{cond}} = \boldsymbol{\mu}_p + \mathbf{V}_{pq} \cdot \tilde{\mathbf{V}}_{qq}^{-1} \cdot \boldsymbol{\delta}, \quad \text{where} \quad \tilde{\mathbf{V}}_{qq}^{-1} = (1-\lambda_\text{pos}) \mathbf{I} + \lambda_\text{pos} \mathbf{V}_{qq}^{-1},
+\boldsymbol{\mu}_{\text{cond}} = \boldsymbol{\mu}_p + \underbrace{\mathbf{S} \boldsymbol{\Theta}_{pq}}_{\mathbf{V}_{pq}} \cdot \underbrace{\text{diag}(\Lambda) \mathbf{V}_{qq}^{-1}}_{\tilde{\mathbf{V}}_{qq}^{-1}} \cdot \boldsymbol{\delta},
 \end{equation}
-where $\mathbf{V}_{pq} \in \mathbb{R}^{3 \times C}$ is the displacement matrix, $\lambda_\text{pos} \in [0,1]$ is a learnable per-Gaussian parameter, and $\mathbf{V}_{qq}^{-1} = \mathbf{L}\mathbf{L}^\top$ is the precision matrix (derived from Cholesky factor $\mathbf{L}$) that also governs opacity. The scaled precision matrix $\tilde{\mathbf{V}}_{qq}^{-1}$ controls the coupling strength:
+where $\mathbf{S} = \text{diag}(s_x, s_y, s_z)$ is the spatial scale matrix, $\boldsymbol{\Theta}_{pq} \in \mathbb{R}^{3 \times C}$ are learnable parameters normalized to unit Frobenius norm ($\|\boldsymbol{\Theta}_{pq}\|_F = 1$), $\text{diag}(\boldsymbol{\Lambda}) \in \mathbb{R}^{C \times C}$ contains learnable per-dimension coupling strengths in $[0,1]$, and $\mathbf{V}_{qq}^{-1} = \mathbf{L}\mathbf{L}^\top$ is the precision matrix shared with opacity conditioning. The coupling strength $\boldsymbol{\Lambda}$ controls how strongly position shifts respond to query deviations:
 \begin{itemize}[leftmargin=*]
-\item When $\lambda_\text{pos}=0$: $\tilde{\mathbf{V}}_{qq}^{-1} = \mathbf{I}$, so position shift reduces to $\mathbf{V}_{pq} \cdot \boldsymbol{\delta}$, fully disentangled from the precision matrix $\mathbf{V}_{qq}^{-1} = \mathbf{L}\mathbf{L}^\top$ that controls opacity.
-\item When $\lambda_\text{pos}=1$: $\tilde{\mathbf{V}}_{qq}^{-1} = \mathbf{V}_{qq}^{-1}$, recovering the N-DGS formulation $\mathbf{V}_{pq} \cdot \mathbf{V}_{qq}^{-1} \cdot \boldsymbol{\delta}$, where position and opacity are coupled through the shared precision matrix.
-\item Intermediate values: Partial coupling, blending independent position learning with conditional Gaussian behavior.
+\item When $\Lambda = \mathbf{0}$: $\tilde{\mathbf{V}}_{qq}^{-1} = \mathbf{0}$, position becomes query-independent ($\boldsymbol{\mu}_{\text{cond}} = \boldsymbol{\mu}_p$, no conditioning).
+\item When $\Lambda = \mathbf{1}$: $\tilde{\mathbf{V}}_{qq}^{-1} = \mathbf{V}_{qq}^{-1}$, position and opacity couple through the shared precision matrix $\mathbf{V}_{qq}^{-1}$ (similar to N-DGS, but with direct $\mathbf{V}_{pq}$ instead of derived $\boldsymbol{\Sigma}_{pq}$).
+\item Intermediate values: Partial coupling with per-dimension control. Different query dimensions (e.g., view vs. time) can have different coupling strengths, with dimensions of the same type (e.g., the three view dimensions) sharing parameters.
 \end{itemize}
-This provides adaptive disentanglement where each Gaussian learns its optimal coupling strength during training.
+This direct parameterization eliminates covariance inversion while providing fine-grained control over position conditioning strength. Each Gaussian learns optimal per-dimension coupling during training.
 
-Following N-DGS's design principle that displacement should scale with spatial extent (so small Gaussians produce small displacements), we parameterize the displacement matrix with bounded activation and explicit per-dimension spatial scaling. We directly learn $\mathbf{V}_{pq} \in \mathbb{R}^{3 \times C}$ as:
-\begin{equation}
-\mathbf{V}_{pq} = \mathbf{S} \boldsymbol{\Theta}_{pq},
-\end{equation}
-where $\mathbf{S} = \text{diag}(s_x, s_y, s_z) \in \mathbb{R}^{3 \times 3}$ is the diagonal scale matrix from the Gaussian parameterization and $\boldsymbol{\Theta}_{pq} \in \mathbb{R}^{3 \times C}$ is a learnable parameter matrix with $\tanh(\cdot)$ activation applied element-wise. The tanh activation naturally bounds each element to $[-1, 1]$, ensuring that displacements in each spatial dimension scale proportionally with the corresponding Gaussian extent. This provides an inductive bias coupling displacement scale to Gaussian anisotropy, while the learnable parameters $\boldsymbol{\Theta}_{pq}$ allow each Gaussian to adaptively learn displacement direction and magnitude jointly. (See Appendix~\ref{sec:spatial_scaling_proof} for detailed comparison showing our explicit parameterization provides tighter displacement bounds than N-DGS.)
+Following N-DGS's design principle that displacement should scale with spatial extent (so small Gaussians produce small displacements), the displacement matrix $\mathbf{V}_{pq} = \mathbf{S} \boldsymbol{\Theta}_{pq}$ combines spatial scaling with normalized learnable parameters. By normalizing $\boldsymbol{\Theta}_{pq}$ to unit Frobenius norm ($\|\boldsymbol{\Theta}_{pq}\|_F = 1$), displacements in each spatial dimension scale proportionally with the corresponding Gaussian extent ($s_x, s_y, s_z$), with displacement magnitude bounded by $\|\mathbf{V}_{pq}^{(i)}\|_2 \leq s_i\sqrt{C}$ for row $i$. This provides an inductive bias coupling displacement scale to Gaussian anisotropy, while allowing each Gaussian to adaptively learn displacement direction. (See Appendix~\ref{sec:spatial_scaling_proof} for detailed comparison showing our direct parameterization provides tighter displacement bounds than N-DGS.)
 
 
 \subsection{CUDA Implementation}
 
 Since the original N-DGS methods (6DGS and 7DGS) use PyTorch's autograd for conditional Gaussian operations without custom CUDA kernels, we implement both our disentangled formulation and the N-DGS baseline with optimized CUDA kernels for fair comparison. Our implementation uses a custom kernel that fuses conditional position and opacity computations in a single pass, as shown in Algorithm~\ref{alg:slice}.
 
-\textbf{CUDA Kernel Design.} The kernel is templated on dimension $C$ (3 for 6DGS, 4 for 7DGS) with compile-time loop unrolling for optimal performance. Each thread processes one Gaussian primitive independently, enabling perfect parallelization across millions of Gaussians. For opacity computation (Line 2 in Algorithm~\ref{alg:slice}), we compute the triangular matrix-vector product $\mathbf{L}^\top \boldsymbol{\delta}$ directly in registers using the lower-triangular structure—only $C(C+1)/2$ multiplications are needed (6 for 6DGS, 10 for 7DGS), followed by a dot product for $\|\cdot\|_2^2$. For position displacement (Lines 3-5), we construct $\mathbf{V}_{pq}$ via diagonal scaling of $\tanh$ activations, then compute the scaled precision matrix $\tilde{\mathbf{V}}_{qq}^{-1}$ by interpolating between identity and $\mathbf{L}\mathbf{L}^\top$ using the coupling parameter $\lambda_{\text{pos}}$. All matrix operations use registers rather than shared memory, as the small matrix sizes fit entirely in per-thread registers. This fused design minimizes global memory bandwidth by avoiding intermediate tensor allocations and maximizes GPU occupancy through register-level computation.
+\textbf{CUDA Kernel Design.} The kernel is templated on dimension $C$ (3 for 6DGS, 4 for 7DGS) with compile-time loop unrolling for optimal performance. Each thread processes one Gaussian primitive independently, enabling perfect parallelization across millions of Gaussians. For opacity computation (Line 2 in Algorithm~\ref{alg:slice}), we compute the triangular matrix-vector product $\mathbf{L}^\top \boldsymbol{\delta}$ directly in registers using the lower-triangular structure—only $C(C+1)/2$ multiplications are needed (6 for 6DGS, 10 for 7DGS), followed by a dot product for $\|\cdot\|_2^2$. For position displacement (Lines 3-5), we construct $\mathbf{V}_{pq}$ via diagonal scaling of $\tanh$ activations, then compute the scaled precision matrix $\tilde{\mathbf{V}}_{qq}^{-1}$ by applying per-dimension scaling $\text{diag}(\Lambda)$ to $\mathbf{L}\mathbf{L}^\top$. All matrix operations use registers rather than shared memory, as the small matrix sizes fit entirely in per-thread registers. This fused design minimizes global memory bandwidth by avoiding intermediate tensor allocations and maximizes GPU occupancy through register-level computation.
 
 \textbf{Modular Compatibility.} Our implementation provides compile-time options to enable different levels of conditioning: (1) standard 3DGS with no conditioning, (2) \textit{d}GS-O with opacity modulation only, and (3) full \textit{d}GS with both opacity and position modulation. This modularity maintains compatibility with existing 3DGS codebases while allowing practitioners to select the appropriate complexity-performance tradeoff for their application.
 
@@ -284,17 +276,17 @@ Since the original N-DGS methods (6DGS and 7DGS) use PyTorch's autograd for cond
 \caption{Conditional Gaussian Slicing}
 \label{alg:slice}
 \begin{algorithmic}[1]
-\Require Per-Gaussian parameters: $\mu_p$, $\mu_q$, $\alpha$, scale $\mathbf{S}$, $\boldsymbol{\Theta}_{pq}$, Cholesky $\mathbf{L}$, $\lambda_{\text{pos}}$
+\Require Per-Gaussian parameters: $\mu_p$, $\mu_q$, $\alpha$, $\mathbf{S}$, $\boldsymbol{\Theta}_{pq}$, $\mathbf{L}$, $\Lambda$
 \Require Query point: $\text{query}$ (view direction for 6DGS, or view+time for 7DGS)
 \State $\boldsymbol{\delta} \gets \text{query} - \mu_q$ \Comment{Compute query deviation}
-\State $\alpha_{\text{cond}} \gets \alpha \cdot \exp(-\lambda \cdot \|\mathbf{L}^\top \boldsymbol{\delta}\|^2)$ \Comment{Conditional opacity ($\lambda=0.35$)}
-\State $\mathbf{V}_{pq} \gets \mathbf{S} \cdot \boldsymbol{\Theta}_{pq}$ \Comment{Construct displacement matrix (with tanh activation)}
-\State $\tilde{\mathbf{V}}_{qq}^{-1} \gets (1-\lambda_{\text{pos}}) \mathbf{I} + \lambda_{\text{pos}} \mathbf{L}\mathbf{L}^\top$ \Comment{Scaled precision for coupling}
+\State $\alpha_{\text{cond}} \gets \alpha \cdot \exp(-\|\mathbf{L}^\top \boldsymbol{\delta}\|^2)$ \Comment{Conditional opacity}
+\State \Return $\alpha_{\text{cond}}, \mu_p$ \textbf{if} \textit{d}GS-O variant \Comment{Early exit for opacity-only: skip position conditioning}
+\State $\mathbf{V}_{pq} \gets \mathbf{S} \cdot \boldsymbol{\Theta}_{pq}$ \Comment{Construct displacement matrix ($\boldsymbol{\Theta}_{pq}$ normalized)}
+\State $\tilde{\mathbf{V}}_{qq}^{-1} \gets \text{diag}(\Lambda) \mathbf{L}\mathbf{L}^\top$ \Comment{Scaled precision for per-dimension coupling}
 \State $\mu_{\text{cond}} \gets \mu_p + \mathbf{V}_{pq} \cdot \tilde{\mathbf{V}}_{qq}^{-1} \cdot \boldsymbol{\delta}$ \Comment{Conditional position}
 \State \Return $\alpha_{\text{cond}}$, $\mu_{\text{cond}}$
 \end{algorithmic}
 \end{algorithm}
-
 
 \section{Experiments}
 
@@ -312,7 +304,7 @@ We evaluate \modelname{} across five diverse datasets covering both static and d
 We assess reconstruction quality using Peak Signal-to-Noise Ratio (PSNR), Structural Similarity Index (SSIM)~\cite{wang2004image}, and Learned Perceptual Image Patch Similarity (LPIPS)~\cite{zhang2018perceptual}. We also report rendering speed (FPS), training time (minutes), and Gaussian count (K) to evaluate computational efficiency.
 
 \textbf{Implementation Details.}
-We compare three configurations: (1) \textbf{N-DGS}: full N-DGS formulation with joint position and opacity conditioning (entangled baseline), (2) \textbf{\textit{d}GS-O}: our disentangled approach with opacity conditioning only ($\mu_{\text{cond}} = \mu_p$, no position displacement), and (3) \textbf{\textit{d}GS}: our full disentangled approach with both opacity conditioning and learnable position coupling via $\lambda_\text{pos}$. Training uses Adam optimizer for 30K iterations. Proper initialization is critical for stable training: we initialize the view mean $\mu_d$ as random unit vectors (with time in $[0, 1]$ for 7DGS), the displacement parameters $\boldsymbol{\Theta}_{pq}$ from $\mathcal{N}(0, 0.01^2)$ to start with small displacements, and the Cholesky factor $\mathbf{L}$ with diagonal elements $\log(2.0)$ and off-diagonal elements 0.
+We compare three configurations: (1) \textbf{N-DGS}: full N-DGS formulation with joint position and opacity conditioning (entangled baseline), (2) \textbf{\textit{d}GS-O}: our disentangled approach with opacity conditioning only ($\mu_{\text{cond}} = \mu_p$, no position displacement), and (3) \textbf{\textit{d}GS}: our full disentangled approach with both opacity conditioning and learnable per-dimension position coupling via $\Lambda$. Training uses Adam optimizer for 30K iterations. Proper initialization is critical for stable training: we initialize the view mean $\mu_d$ as random unit vectors (with time in $[0, 1]$ for 7DGS), the displacement parameters $\boldsymbol{\Theta}_{pq}$ from $\mathcal{N}(0, 0.01^2)$ to start with small displacements, and the Cholesky factor $\mathbf{L}$ with diagonal elements $\log(2.0)$ and off-diagonal elements 0.
 
 
 % Merged Summary Results Table
@@ -381,9 +373,9 @@ Dataset & Method & \#Gauss $\downarrow$ & Train $\downarrow$ & FPS$_{\text{PyTor
 
 The comparison between our three configurations reveals distinct efficiency-quality trade-offs. \textbf{\textit{d}GS-O} uses only opacity conditioning with $\mu_{\text{cond}} = \mu_p$ (no position displacement). On static scenes (NeRF Synthetic, Mip-NeRF 360, 6DGS PBR), it achieves strong quality: +0.46 dB on NeRF Synthetic, +0.78 dB on Mip-NeRF 360, but -0.57 dB on 6DGS PBR compared to N-DGS. The efficiency gains are substantial: 23\% faster rendering (754.98 vs 615.57 FPS on NeRF Synthetic), 89\% faster on Mip-NeRF 360 (279.30 vs 147.46 FPS). Notably, when primitive count is large (e.g., \texttt{Mip-NeRF 360}), \textit{d}GS-O achieves 89\% faster rendering despite using 86\% more primitives (2363K vs 1273K), demonstrating that computational efficiency is dominated by per-primitive operations rather than primitive count. However, on dynamic scenes, the lack of position displacement significantly impacts quality: -2.21 dB on D-NeRF, indicating that temporal dynamics benefit more from position conditioning than static view-dependent effects.
 
-\textbf{\textit{d}GS} adds learnable position coupling via $\lambda_{\text{pos}}$, enabling each Gaussian to adaptively balance between fully independent position shifts ($\lambda_{\text{pos}}=0$, where position is decoupled from opacity-controlling precision) and coupled N-DGS behavior ($\lambda_{\text{pos}}=1$, where both share the same precision matrix). This recovers quality losses: on D-NeRF it achieves +0.39 dB over N-DGS (33.52 vs 33.13 dB), demonstrating that learnable coupling can even surpass the entangled baseline. On static scenes, \textit{d}GS consistently matches or exceeds N-DGS (+0.46 dB on NeRF Synthetic, +0.93 dB on Mip-NeRF 360, +0.66 dB on 6DGS PBR), while maintaining competitive rendering speeds (687.87 FPS on NeRF Synthetic, 12\% faster than N-DGS).
+\textbf{\textit{d}GS} adds learnable per-dimension coupling strength via $\Lambda$, enabling each Gaussian to adaptively control how strongly position shifts respond to query deviations. When $\Lambda = \mathbf{0}$, position becomes query-independent (no conditioning); when $\Lambda = \mathbf{1}$, position couples through the shared precision matrix $\mathbf{V}_{qq}^{-1}$ like N-DGS. This recovers quality losses: on D-NeRF it achieves +0.39 dB over N-DGS (33.52 vs 33.13 dB), demonstrating that learnable coupling strength control can even surpass N-DGS's fixed coupling. On static scenes, \textit{d}GS consistently matches or exceeds N-DGS (+0.46 dB on NeRF Synthetic, +0.93 dB on Mip-NeRF 360, +0.66 dB on 6DGS PBR), while maintaining competitive rendering speeds (687.87 FPS on NeRF Synthetic, 12\% faster than N-DGS).
 
-For 7DGS PBR, the results are highly competitive: \textit{d}GS-O achieves 31.70 dB (only -0.05 dB vs N-DGS at 31.75 dB) while \textit{d}GS matches this at 31.72 dB (-0.03 dB). Both variants deliver substantial efficiency gains, with \textit{d}GS-O achieving 18\% faster rendering (835.24 vs 709.83 FPS) and 9\% faster training (34.58 vs 38.14 min). The minimal quality gap demonstrates that learnable coupling effectively adapts to scenes with complex spatio-temporal-angular correlations while maintaining the efficiency benefits of disentangled parameterization.
+For 7DGS PBR, the results are highly competitive: \textit{d}GS-O achieves 31.70 dB (only -0.05 dB vs N-DGS at 31.75 dB) while \textit{d}GS matches this at 31.72 dB (-0.03 dB). Both variants deliver substantial efficiency gains, with \textit{d}GS-O achieving 18\% faster rendering (835.24 vs 709.83 FPS) and 9\% faster training (34.58 vs 38.14 min). The minimal quality gap demonstrates that direct parameterization with learnable coupling strength effectively adapts to scenes with complex spatio-temporal-angular correlations while maintaining efficiency benefits.
 
 \subsection{Ablation Study}
 
@@ -407,11 +399,11 @@ Configuration & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ & PSNR $\
 
 \section{Future Work}
 
-The disentangled framework naturally extends in two directions, analogous to factorized attention mechanisms where opacity and position are \textbf{values} independently modulated by view and time as \textbf{query/key}. We can extend both the \textit{value space} (what gets modulated) and the \textit{query space} (what drives modulation). For values, we can add \textbf{rotation conditioning} (for orientation-dependent effects) or \textbf{color modulation} (for appearance variations). For queries, we can incorporate \textbf{lighting direction} (for relighting) or \textbf{material properties} (for physically-based effects). Each new dimension---whether value or query---can be incorporated as an independent module with its own learnable coupling parameter, avoiding the combinatorial complexity of full joint covariance matrices. For instance, rotation conditioning parameterizes orientation changes via quaternion interpolation $\mathbf{q}_{\text{cond}} = \mathbf{q} \otimes \text{slerp}(\mathbf{I}, \mathbf{q}_\delta, 1 - \alpha_{\text{rot}})$, where $\mathbf{q}$ is the base rotation, $\mathbf{q}_\delta$ is a learnable rotation offset, $\alpha_{\text{rot}}$ is a query-dependent weight computed from the query (analogous to but separate from the position/opacity weights), and $\mathbf{I}$ is the identity quaternion. The interpolation weight $(1 - \alpha_{\text{rot}})$ ties rotation strength to the query, enabling view/time-dependent orientation as an independent module without requiring joint covariance with position or opacity dimensions.
+The direct parameterization framework naturally extends to additional conditioning effects, analogous to factorized attention mechanisms where opacity and position are \textbf{values} independently modulated by view and time as \textbf{queries}. We can extend both the \textit{value space} (what gets conditioned) and the \textit{query space} (what drives conditioning). For values, we can add \textbf{rotation conditioning} (for orientation-dependent effects) or \textbf{color modulation} (for appearance variations beyond spherical harmonics). For queries, we can incorporate \textbf{lighting direction} (for relighting) or \textbf{material properties} (for physically-based rendering). Each new conditioning effect can be directly parameterized with dedicated parameters and its own learnable coupling strength, avoiding the combinatorial complexity of full joint covariance matrices. For instance, rotation conditioning can directly parameterize orientation changes via quaternion spherical linear interpolation, where a learnable rotation offset is blended with the base rotation based on a coupling strength parameter. This enables view/time-dependent orientation as an independent module without requiring joint covariance computation.
 
 \section{Conclusion}
 
-We presented \modelname{}, a disentangled parameterization for efficient N-dimensional Gaussian splatting. Our key insight is that the full joint covariance matrix is unnecessarily complex---position shifts and opacity modulation can be disentangled into independent modules with efficient direct parameterization and learnable coupling. This approach delivers efficiency by replacing cubic-complexity inversions with linear operations, stability through direct Cholesky parameterization, and interpretability via scene-adaptive coupling that reveals which regions benefit from entangled versus independent conditioning. Experiments demonstrate up to 17\% higher rendering throughput while matching or exceeding N-DGS quality across diverse benchmarks. The disentangled framework naturally extends to additional conditioning dimensions like rotation, lighting, and materials, providing a flexible foundation for future high-dimensional Gaussian representations.
+We presented \modelname{}, a direct parameterization for efficient N-dimensional Gaussian splatting. Our key insight is that conditional Gaussian formulas, while mathematically elegant, are computationally inefficient---each conditioning effect can be directly parameterized with dedicated parameters instead of being implicitly derived through matrix algebra. This direct approach delivers efficiency by replacing cubic-complexity inversions with quadratic-complexity operations, stability through explicit Cholesky parameterization, and flexibility via learnable per-dimension coupling strengths that control how strongly each effect responds to queries. Experiments demonstrate up to 17\% higher rendering throughput while matching or exceeding N-DGS quality across diverse benchmarks. The direct parameterization framework naturally extends to additional conditioning effects like rotation, lighting, and materials, providing a principled foundation for future high-dimensional Gaussian representations.
 
 % References section
 \bibliographystyle{plainnat} % Using plainnat style for compatibility with numbers option if used
@@ -518,11 +510,11 @@ Cross-terms from spatial correlations $\ell_{ik}$ (where $k < i$) accumulate in 
 \end{equation}
 For large $s_i$, this approximates $s_i \sqrt{C}$, but the constant offset $(i-1)\sqrt{C}$ can dominate for small Gaussians. This bound also introduces an asymmetry across spatial dimensions: even when $s_1 = s_2 = s_3$, row $i$ accumulates more cross-terms than row 1, allowing arbitrarily different displacement magnitudes depending on the spatial dimension ordering. While N-DGS uses zero initialization of $\ell_{ij}$ to ensure displacement initially scales with $s_i$, training can learn non-zero correlations that introduce both the offset and this asymmetry.
 
-\textbf{Our method: Explicit coupling via diagonal scaling.} We directly parameterize $\mathbf{V}_{pq} = \mathbf{S} \boldsymbol{\Theta}_{pq}$, where $\mathbf{S} = \text{diag}(s_x, s_y, s_z)$ is the diagonal scale matrix and $\boldsymbol{\Theta}_{pq} \in \mathbb{R}^{3 \times C}$ are learnable parameters with $\tanh(\cdot)$ activation. This gives:
+\textbf{Our method: Explicit coupling via diagonal scaling.} We directly parameterize $\mathbf{V}_{pq} = \mathbf{S} \boldsymbol{\Theta}_{pq}$, where $\mathbf{S} = \text{diag}(s_x, s_y, s_z)$ is the diagonal scale matrix and $\boldsymbol{\Theta}_{pq} \in \mathbb{R}^{3 \times C}$ are learnable parameters normalized to unit Frobenius norm ($\|\boldsymbol{\Theta}_{pq}\|_F = 1$). This gives:
 \begin{equation}
-\|\mathbf{V}_{pq}^{(i)}\|_2 = s_i \|\tanh(\boldsymbol{\Theta}_{i,:})\|_2 \leq s_i \sqrt{C}.
+\|\mathbf{V}_{pq}^{(i)}\|_2 = s_i \|\boldsymbol{\Theta}_{i,:}\|_2 \leq s_i \sqrt{C}.
 \end{equation}
-Each element in row $i$ is explicitly $s_i \cdot \tanh(\theta)$ with no cross-terms from other spatial dimensions, ensuring displacement scales exactly with $s_i$ even for tiny Gaussians.
+Each element in row $i$ scales with $s_i$ with no cross-terms from other spatial dimensions, ensuring displacement scales exactly with $s_i$ even for tiny Gaussians. The unit Frobenius norm constraint ensures bounded displacements while allowing flexible direction learning.
 
 \textbf{Key difference.} Both methods bound displacement by spatial scale, but differ fundamentally:
 \begin{itemize}[leftmargin=*]
@@ -530,7 +522,7 @@ Each element in row $i$ is explicitly $s_i \cdot \tanh(\theta)$ with no cross-te
 \item \textbf{\modelname{}}: Displacement is \textit{explicitly} parameterized with tight bound $s_i\sqrt{C}$, ensuring proper scaling across all Gaussian sizes and symmetric treatment of all spatial dimensions.
 \end{itemize}
 
-Empirically, removing spatial scaling (ablation: \textit{d}GS w/o $\mathbf{S}$) degrades PSNR by 2.59 dB on NeRF Synthetic (Table~\ref{tab:ablation}), confirming that displacement scaling is critical. Our explicit parameterization provides tighter bounds, avoids dimension-ordering artifacts, and enables learnable position-opacity disentanglement via $\lambda_{\text{pos}}$.
+Empirically, removing spatial scaling (ablation: \textit{d}GS w/o $\mathbf{S}$) degrades PSNR by 2.59 dB on NeRF Synthetic (Table~\ref{tab:ablation}), confirming that displacement scaling is critical. Our direct parameterization provides tighter bounds, avoids dimension-ordering artifacts, and enables learnable per-dimension coupling strength control via $\Lambda$.
 
 
 \section{Detailed Per-Scene Results}

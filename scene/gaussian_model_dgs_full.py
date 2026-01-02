@@ -367,27 +367,41 @@ class GaussianModel:
     @property
     def get_v_12_v1(self):
         """
-        Get v_12 with tanh activation applied.
+        Get v_12 with spatial scaling applied.
 
-        Returns the activated displacement parameters which will be further processed
-        by the slice function with:
-        1. Spatial scaling (diagonal matrix S)
-        2. Lambda modulation (separate for view and time)
-        3. V_22_inv multiplication (for coupling with opacity)
+        Returns the activated displacement parameters with spatial scaling applied.
+        The slice function will further apply:
+        1. Lambda modulation (separate for view and time)
+        2. V_22_inv multiplication (for coupling with opacity)
 
         The complete transformation is:
-            v_regr = (S * lambda * tanh(Theta_pq)) @ V_22_inv
+            v_regr = (lambda * S * tanh(Theta_pq)) @ V_22_inv
 
-        This property returns: tanh(Theta_pq)
-        The slice function applies: S, lambda, and V_22_inv
+        This property returns: S * tanh(Theta_pq)  [N, 3*C]
+        The slice function applies: lambda and V_22_inv
+
+        Spatial scaling S is applied in blocked format (matching _slice_gaussian_full):
+            For v_12 shape [N, 3*C] interpreted as [N, 3, C]:
+            - First C values (x-axis shifts) are scaled by scale_x
+            - Next C values (y-axis shifts) are scaled by scale_y
+            - Last C values (z-axis shifts) are scaled by scale_z
+            - Blocked pattern: [x0...x(C-1), y0...y(C-1), z0...z(C-1)]
         """
         if not self.use_view_dependent_pos:
             return None
 
-        # Apply tanh activation to bound values to [-1, 1]
-        v_12_activated = self.v_12_activaton(self._v_12_direction)  # [N, 3*C] remove activation for ablation
+        # Apply normalization and max_pos_shift
+        # v_12_activated = self.v_12_activaton(self._v_12_direction)  # [N, 3*C] remove activation for ablation
+        v_12_activated = F.normalize(self._v_12_direction, dim=1) * self.max_pos_shift
 
-        return v_12_activated
+        # Expand scale: [N, 3] -> [N, 3*C] by repeating each element C times
+        # E.g., [sx, sy, sz] -> [sx, sx, sx, sy, sy, sy, sz, sz, sz] for C=3
+        C = self.input_dim - 3  # number of conditional dimensions (3 for 6DGS, 4 for 7DGS)
+        spatial_scale = self.get_scaling.repeat_interleave(C, dim=1)  # [N, 3*C]
+
+        v_12_scaled = v_12_activated * spatial_scale
+
+        return v_12_scaled
     
     @property
     def get_v_12_v2(self):
@@ -534,8 +548,7 @@ class GaussianModel:
             lambda_view = torch.zeros(self._xyz.shape[0], device=self._xyz.device)
             lambda_time = None
 
-        is_v_12_v1 = True  # Use v_12_v2 (decoupled position shift)
-
+        is_v_12_v1 = False  # Use v_12_v2 (decoupled position shift)
         if is_v_12_v1:
             v_12 = self.get_v_12_v1  # [N, 3*C] with tanh activation
             x_cond, opacity_scale = slice_gaussian_full(
@@ -545,7 +558,6 @@ class GaussianModel:
                 v_12=v_12 if self.use_view_dependent_pos else None,  # [N, 3*C] or None
                 L_22_inv=self.get_L_22_inv,      # [N, C*(C+1)/2] full Cholesky (block-diagonal for C=4)
                 lambda_opc=lambda_opc,
-                scale=self.get_scaling,            # [N, 3]
                 lambda_view=lambda_view,         # [N] learnable conditioning strength for view (or zeros)
                 lambda_time=lambda_time,         # [N] or None, learnable conditioning strength for time
                 use_beta=self.use_beta,          # Use beta-based opacity (UBS-style)
@@ -679,8 +691,8 @@ class GaussianModel:
         # - use_opacity_pos_decouple=True: 0.0 is exact value (no sigmoid) -> λ=0 (decoupled)
         # - use_opacity_pos_decouple=False: 0.0 is logit -> sigmoid(0)=0.5 (moderate coupling)
         if self.use_view_dependent_pos:
-            lambda_view = torch.zeros((num_gaussians,), device=device)
-            lambda_time = torch.zeros((num_gaussians,), device=device) if self.input_dim == 7 else torch.empty(0, device=device)
+            lambda_view = torch.full((num_gaussians, ), -1.0, device=device)
+            lambda_time = torch.full((num_gaussians, ), -1.0, device=device) if self.input_dim == 7 else torch.empty(0, device=device)
         else:
             lambda_view = torch.empty(0, device=device)
             lambda_time = torch.empty(0, device=device)
