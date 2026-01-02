@@ -162,7 +162,7 @@ for dir in "$base_dir"*/; do
 
         output_dir="output/mcmc/ndgs/tandt_pbr/${scene_name}"
         echo "Processing ${scene_name} with mode ndgs (MCMC)..."
-        run_experiment "ndgs" "$output_dir" "$dir" "$scene_name" ""
+        run_experiment "ndgs" "$output_dir" "$dir" "$scene_name" "--use_rot_scale_l_triangle True"
     fi
 done
 

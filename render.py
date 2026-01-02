@@ -166,12 +166,6 @@ def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_
         GaussianModel = get_gaussian_model(mode)
         if "ubs" in mode:
             gaussians = GaussianModel(sh_degree=dataset.sh_degree, input_dim=dataset.input_dim)
-        elif mode == "ndgs-v2":
-            # NDGS V2 mode: returns v_cond with Schur complement, lambda controls V_22_inv interpolation
-            gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim,
-                                        use_rot_scale_l_triangle=dataset.use_rot_scale_l_triangle,
-                                        use_view_dependent_pos=dataset.use_view_dependent_pos,
-                                        lambda_opc=dataset.lambda_opc)
         elif "ndgs" in mode:
             gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim,
                                         use_rot_scale_l_triangle=dataset.use_rot_scale_l_triangle,

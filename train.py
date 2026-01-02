@@ -89,13 +89,6 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
     # For NDGS mode, pass the use_rot_scale_l_triangle flag
     if "ubs" in mode:
         gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim)
-    elif mode == "ndgs-v2":
-        # NDGS V2 mode: returns v_cond with Schur complement, lambda controls V_22_inv interpolation
-        # Note: Uses default learnable_lambda_view=True and lambda_view=0.5
-        gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim,
-                                    use_rot_scale_l_triangle=dataset.use_rot_scale_l_triangle,
-                                    use_view_dependent_pos=dataset.use_view_dependent_pos,
-                                    lambda_opc=dataset.lambda_opc)
     elif "ndgs" in mode:
         gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim,
                                     use_rot_scale_l_triangle=dataset.use_rot_scale_l_triangle,

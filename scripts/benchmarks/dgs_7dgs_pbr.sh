@@ -159,44 +159,4 @@ for dir in "$base_dir"*/; do
     fi
 done
 
-# # ============================================
-# # 5. NDGS V2 no position shift mode
-# # ============================================
-# echo "=============================================="
-# echo "Running NDGS V2 (no position shift) mode benchmarks"
-# echo "=============================================="
-
-# for dir in "$base_dir"*/; do
-#     if [ -d "$dir" ]; then
-#         scene_name=$(basename "${dir%/}")
-#         if [[ "$scene_name" == *.zip ]]; then
-#             continue
-#         fi
-
-#         output_dir="output/standard/ndgs_v2_no_pos/7dgs_pbr/${scene_name}"
-#         echo "Processing ${scene_name} with mode ndgs-v2 (no pos)..."
-#         run_experiment "ndgs-v2" "$output_dir" "$dir" "--use_rot_scale_l_triangle True --use_view_dependent_pos False --lambda_opc 0.2"
-#     fi
-# done
-
-# # ============================================
-# # 6. NDGS V2 with position shift mode
-# # ============================================
-# echo "=============================================="
-# echo "Running NDGS V2 (with position shift) mode benchmarks"
-# echo "=============================================="
-
-# for dir in "$base_dir"*/; do
-#     if [ -d "$dir" ]; then
-#         scene_name=$(basename "${dir%/}")
-#         if [[ "$scene_name" == *.zip ]]; then
-#             continue
-#         fi
-
-#         output_dir="output/standard/ndgs_v2_with_pos/7dgs_pbr/${scene_name}"
-#         echo "Processing ${scene_name} with mode ndgs-v2 (with pos)..."
-#         run_experiment "ndgs-v2" "$output_dir" "$dir" "--use_rot_scale_l_triangle True --use_view_dependent_pos True --lambda_opc 0.2"
-#     fi
-# done
-
 echo "Benchmark completed!"

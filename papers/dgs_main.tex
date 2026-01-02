@@ -460,6 +460,48 @@ To illustrate this structure, consider 6DGS with 3 spatial and 3 view dimensions
 \end{equation}
 where $s_1, s_2, s_3$ are spatial scales, $s_4, s_5, s_6$ are query dimension scales, and $\ell_{ij} \in [-1,1]$ are bounded correlations.
 
+% \resizebox{\textwidth}{!}{%
+% \begin{equation}    
+% \boldsymbol{\Sigma} = \left(\begin{array}{rrrrrr}
+% s_1^2 
+% &  
+% &  
+% &  
+% &  
+% &  \\
+% s_1 \ell_{21} 
+% & \ell_{21}^2 + s_2^2 
+% &  
+% &  
+% &  
+% &  \\
+% s_1 \ell_{31} 
+% & \ell_{21}\ell_{31} + s_2\ell_{32} 
+% & \ell_{31}^2 + \ell_{32}^2 + s_3^2 
+% &  
+% &  
+% &  \\
+% s_1 \ell_{41} 
+% & \ell_{21}\ell_{41} + s_2\ell_{42} 
+% & \ell_{31}\ell_{41} + \ell_{32}\ell_{42} + s_3\ell_{43} 
+% & \ell_{41}^2 + \ell_{42}^2 + \ell_{43}^2 + s_4^2 
+% &  
+% &  \\
+% s_1 \ell_{51} 
+% & \ell_{21}\ell_{51} + s_2\ell_{52} 
+% & \ell_{31}\ell_{51} + \ell_{32}\ell_{52} + s_3\ell_{53} 
+% & \ell_{41}\ell_{51} + \ell_{42}\ell_{52} + \ell_{43}\ell_{53} + s_4\ell_{54} 
+% & \ell_{51}^2 + \ell_{52}^2 + \ell_{53}^2 + \ell_{54}^2 + s_5^2 
+% &  \\
+% s_1 \ell_{61} 
+% & \ell_{21}\ell_{61} + s_2\ell_{62} 
+% & \ell_{31}\ell_{61} + \ell_{32}\ell_{62} + s_3\ell_{63} 
+% & \ell_{41}\ell_{61} + \ell_{42}\ell_{62} + \ell_{43}\ell_{63} + s_4\ell_{64} 
+% & \ell_{51}\ell_{61} + \ell_{52}\ell_{62} + \ell_{53}\ell_{63} + \ell_{54}\ell_{64} + s_5\ell_{65} 
+% & \ell_{61}^2 + \ell_{62}^2 + \ell_{63}^2 + \ell_{64}^2 + \ell_{65}^2 + s_6^2
+% \end{array}\right)
+% \end{equation}}
+
 The displacement block $\boldsymbol{\Sigma}_{pq} = (\mathbf{L}\mathbf{L}^\top)_{1:3,4:6}$ emerges from matrix multiplication. Computing via row-column dot products yields:
 \begin{equation}
 \boldsymbol{\Sigma}_{pq} = \left(\begin{array}{rrr}

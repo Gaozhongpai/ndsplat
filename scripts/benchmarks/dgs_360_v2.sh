@@ -130,36 +130,4 @@ for scene_name in "${SCENES[@]}"; do
     fi
 done
 
-# # ============================================
-# # 5. NDGS V2 no position shift mode
-# # ============================================
-# echo "=============================================="
-# echo "Running NDGS V2 (no position shift) mode benchmarks"
-# echo "=============================================="
-
-# for scene_name in "${SCENES[@]}"; do
-#     dir="${base_dir}${scene_name}"
-#     if [ -d "$dir" ]; then
-#         output_dir="output/standard/ndgs_v2_no_pos/360_v2/${scene_name}"
-#         echo "Processing ${scene_name} with mode ndgs-v2 (no pos)..."
-#         run_experiment "ndgs-v2" "$output_dir" "$dir" "--use_rot_scale_l_triangle True --use_view_dependent_pos False"
-#     fi
-# done
-
-# # ============================================
-# # 6. NDGS V2 with position shift mode
-# # ============================================
-# echo "=============================================="
-# echo "Running NDGS V2 (with position shift) mode benchmarks"
-# echo "=============================================="
-
-# for scene_name in "${SCENES[@]}"; do
-#     dir="${base_dir}${scene_name}"
-#     if [ -d "$dir" ]; then
-#         output_dir="output/standard/ndgs_v2_with_pos/360_v2/${scene_name}"
-#         echo "Processing ${scene_name} with mode ndgs-v2 (with pos)..."
-#         run_experiment "ndgs-v2" "$output_dir" "$dir" "--use_rot_scale_l_triangle True --use_view_dependent_pos True"
-#     fi
-# done
-
 echo "Benchmark completed!"

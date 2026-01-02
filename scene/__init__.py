@@ -26,7 +26,7 @@ def get_gaussian_model(mode: str):
     """Factory function to get the appropriate GaussianModel class based on mode.
 
     Args:
-        mode: One of "ndgs", "ndgs-v2", "ddgs", "3dgs", "ubs", "ndgs-2sh", "ndgs-color", "dgs", "dgs-color"
+        mode: One of "ndgs", "ddgs", "3dgs", "ubs", "ndgs-2sh", "ndgs-color", "dgs", "dgs-color"
 
     Returns:
         GaussianModel class for the specified mode
@@ -44,7 +44,7 @@ def get_gaussian_model(mode: str):
     elif mode == "dgs":  ## Full DGS with view-dependent position, time-dependent rotation
         from scene.gaussian_model_dgs_full import GaussianModel
     else:
-        raise ValueError(f"Unknown mode: {mode}. Must be one of: ndgs, ndgs-v2, ddgs, 3dgs, ubs, ndgs-2sh, ndgs-color, dgs, dgs-color")
+        raise ValueError(f"Unknown mode: {mode}. Must be one of: ndgs, ddgs, 3dgs, ubs, ndgs-2sh, ndgs-color, dgs, dgs-color")
     return GaussianModel
 
 
@@ -143,7 +143,7 @@ class Scene:
             if "ddgs" in args.mode:
                 self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent, args.source_path)
             elif "ubs" in args.mode or "ndgs" in args.mode:
-                # UBS and N-DGS models (including ndgs-v2, ndgs-color) support MCMC initialization sampling
+                # UBS and N-DGS models support MCMC initialization sampling
                 self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent,
                                                 mcmc_cap_max=mcmc_cap_max,
                                                 densification_strategy=densification_strategy)
