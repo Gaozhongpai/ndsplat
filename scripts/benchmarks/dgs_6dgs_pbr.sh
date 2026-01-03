@@ -73,25 +73,25 @@ for dir in "$base_dir"*/; do
 done
 
 
-# ============================================
-# 2. opacity_pos_woscale mode (opacity + position)
-# ============================================
-echo "=============================================="
-echo "Running opacity_pos_woscale mode benchmarks"
-echo "=============================================="
+# # ============================================
+# # 2. opacity_pos_woscale mode (opacity + position)
+# # ============================================
+# echo "=============================================="
+# echo "Running opacity_pos_woscale mode benchmarks"
+# echo "=============================================="
 
-for dir in "$base_dir"*/; do
-    if [ -d "$dir" ]; then
-        scene_name=$(basename "${dir%/}")
-        if [[ "$scene_name" == *.zip ]]; then
-            continue
-        fi
+# for dir in "$base_dir"*/; do
+#     if [ -d "$dir" ]; then
+#         scene_name=$(basename "${dir%/}")
+#         if [[ "$scene_name" == *.zip ]]; then
+#             continue
+#         fi
 
-        output_dir="output/standard/opacity_pos_woscale/tandt_pbr/${scene_name}"
-        echo "Processing ${scene_name} with mode opacity_pos_woscale..."
-        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --l_22_inv_init_scale 2.0"
-    fi
-done
+#         output_dir="output/standard/opacity_pos_woscale/tandt_pbr/${scene_name}"
+#         echo "Processing ${scene_name} with mode opacity_pos_woscale..."
+#         run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --l_22_inv_init_scale 2.0"
+#     fi
+# done
 
 # ============================================
 # 2. opacity_pos mode (opacity + position)
@@ -109,6 +109,27 @@ for dir in "$base_dir"*/; do
 
         output_dir="output/standard/opacity_pos/tandt_pbr/${scene_name}"
         echo "Processing ${scene_name} with mode opacity_pos..."
+        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --l_22_inv_init_scale 2.0"
+    fi
+done
+
+
+# ============================================
+# 2. opacity_pos_update mode (opacity + position)
+# ============================================
+echo "=============================================="
+echo "Running opacity_pos_update mode benchmarks"
+echo "=============================================="
+
+for dir in "$base_dir"*/; do
+    if [ -d "$dir" ]; then
+        scene_name=$(basename "${dir%/}")
+        if [[ "$scene_name" == *.zip ]]; then
+            continue
+        fi
+
+        output_dir="output/standard/opacity_pos_update/tandt_pbr/${scene_name}"
+        echo "Processing ${scene_name} with mode opacity_pos_update..."
         run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --l_22_inv_init_scale 2.0"
     fi
 done

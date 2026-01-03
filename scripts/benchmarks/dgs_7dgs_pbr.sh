@@ -112,6 +112,35 @@ for dir in "$base_dir"*/; do
     fi
 done
 
+
+# ============================================
+# 2. opacity_pos_update mode (opacity + position)
+# ============================================
+echo "=============================================="
+echo "Running opacity_pos_update mode benchmarks"
+echo "=============================================="
+
+for dir in "$base_dir"*/; do
+    if [ -d "$dir" ]; then
+        scene_name=$(basename "${dir%/}")
+        if [[ "$scene_name" == *.zip ]]; then
+            continue
+        fi
+
+        # Set l_22_inv_init_scale: 2 for cloud, 0.2 for others
+        if [[ "$scene_name" == "cloud" ]]; then
+            l_22_scale=2.5
+        else
+            l_22_scale=0.4
+        fi
+
+        output_dir="output/standard/opacity_pos_update/7dgs_pbr/${scene_name}"
+        echo "Processing ${scene_name} with mode opacity_pos_update (l_22_inv_init_scale=${l_22_scale})..."
+        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --l_22_inv_init_scale ${l_22_scale}"
+    fi
+done
+
+
 # ============================================
 # 3. opacity_pos_decouple mode (decoupled λ=0)
 # ============================================

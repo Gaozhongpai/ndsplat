@@ -99,6 +99,22 @@ for scene_name in "${SCENES[@]}"; do
 done
 
 # ============================================
+# 2. opacity_pos_update mode (opacity + position)
+# ============================================
+echo "=============================================="
+echo "Running opacity_pos_update mode benchmarks"
+echo "=============================================="
+
+for scene_name in "${SCENES[@]}"; do
+    dir="${base_dir}${scene_name}"
+    if [ -d "$dir" ]; then
+        output_dir="output/standard/opacity_pos_update/360_v2/${scene_name}"
+        echo "Processing ${scene_name} with mode opacity_pos_update..."
+        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True"
+    fi
+done
+
+# ============================================
 # 3. opacity_pos_decouple mode (decoupled λ=0)
 # ============================================
 echo "=============================================="
