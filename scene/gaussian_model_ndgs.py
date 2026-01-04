@@ -27,11 +27,19 @@ from utils.ndgs_utils import strip_lower_diag
 # Import gsplat functions for N-DGS operations
 from gsplat import (
     slice_gaussian_ndgs_test,
-    slice_gaussian_ndgs,
-    l_triangle_to_covar,
-    l_triangle_to_rotmat,
-    rot_scale_l_triangle_to_covar
+    _slice_gaussian_ndgs as slice_gaussian_ndgs,
+    _l_triangle_to_covar as l_triangle_to_covar,
+    _l_triangle_to_rotmat as l_triangle_to_rotmat,
+    _rot_scale_l_triangle_to_covar as rot_scale_l_triangle_to_covar
 )
+
+# from gsplat import (
+#     slice_gaussian_ndgs_test,
+#     slice_gaussian_ndgs,
+#     l_triangle_to_covar,
+#     l_triangle_to_rotmat,
+#     rot_scale_l_triangle_to_covar
+# )
 
 # Import TCGS rasterizer
 from tcgs_speedy_rasterizer import (

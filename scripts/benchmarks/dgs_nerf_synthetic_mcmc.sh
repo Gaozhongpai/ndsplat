@@ -133,6 +133,27 @@ for dir in "$base_dir"*/; do
 done
 
 # ============================================
+# 3. opacity_pos_update mode with MCMC (opacity + position)
+# ============================================
+echo "=============================================="
+echo "Running opacity_pos_update mode benchmarks (MCMC)"
+echo "=============================================="
+
+for dir in "$base_dir"*/; do
+    if [ -d "$dir" ]; then
+        clean_dir="${dir%/}"
+        scene_name=$(basename "$clean_dir")
+        if [[ "$scene_name" == "README.txt" ]] || [[ "$scene_name" == *.zip ]]; then
+            continue
+        fi
+
+        output_dir="output/mcmc/opacity_pos_update/nerf_synthetic/${scene_name}"
+        echo "Processing ${scene_name} with mode opacity_pos_update (MCMC)..."
+        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True"
+    fi
+done
+
+# ============================================
 # 4. NDGS mode with MCMC (full Cholesky precision)
 # ============================================
 echo "=============================================="

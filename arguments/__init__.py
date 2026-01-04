@@ -87,6 +87,7 @@ class ModelParams(ParamGroup):
         self.use_opacity_pos_decouple = False  # If True: decouple position and opacity by setting lambda_view=lambda_time=0 (not learnable)
         self.use_beta = False  # If True: use beta-based opacity (UBS-style) instead of exponential
         self.l_22_inv_init_scale = 1.0  # Initialization scale for L_22_inv diagonal (1.0 for standard, 2.0 for PBR scenes)
+        self.lambda_init = -1.2  # Initial value for lambda_view and lambda_time parameters
         self.lambda_opc = 0.35  # Default lambda_opc for opacity scaling (0.35 standard, 0.01 for dnerf, 0.2 for PBR)
         super().__init__(parser, "Loading Parameters", sentinel)
 

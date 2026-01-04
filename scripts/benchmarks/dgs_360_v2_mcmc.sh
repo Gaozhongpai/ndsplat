@@ -150,6 +150,22 @@ for scene_name in "${SCENES[@]}"; do
 done
 
 # ============================================
+# 3. opacity_pos_update mode with MCMC (opacity + position)
+# ============================================
+echo "=============================================="
+echo "Running opacity_pos_update mode benchmarks (MCMC)"
+echo "=============================================="
+
+for scene_name in "${SCENES[@]}"; do
+    scene_dir="${base_dir}${scene_name}"
+    if [ -d "$scene_dir" ]; then
+        output_dir="output/mcmc/opacity_pos_update/360_v2/${scene_name}"
+        echo "Processing ${scene_name} with mode opacity_pos_update (MCMC)..."
+        run_experiment "dgs" "$output_dir" "$scene_dir" "$scene_name" "--use_view_dependent_pos True"
+    fi
+done
+
+# ============================================
 # 4. NDGS mode with MCMC (full Cholesky precision)
 # ============================================
 echo "=============================================="

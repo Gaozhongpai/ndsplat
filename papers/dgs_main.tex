@@ -124,7 +124,8 @@ Despite their expressive power, these N-dimensional formulations suffer from a f
 
 \textbf{Our Insight.} Conditional Gaussian formulas are elegant mathematically but computationally inefficient. Each conditioning effect can be \textbf{directly parameterized} with efficient, independent parameters instead of being implicitly derived through matrix algebra. Opacity modulation only needs a precision matrix for distance computation---parameterize it directly via Cholesky factors. Position shifts only need a displacement matrix scaled by query deviations---parameterize it directly with bounded weights. By replacing implicit derivation with explicit parameters, we eliminate matrix inversions while gaining fine-grained control over each effect independently.
 
-We introduce \textbf{\modelname{}}, a direct parameterization for efficient conditional Gaussian splatting. The `\textbf{d}' signifies our principle: \textbf{d}irect parameterization---\textbf{d}isplacement matrices for position and \textbf{d}ecay factors for opacity. Our key contributions are:
+We introduce \textbf{\modelname{}}, a direct parameterization for efficient conditional Gaussian splatting. The `\textbf{d}' signifies our principle: \textbf{d}irect parameterization---explicit \textbf{d}isplacement matrices for position and \textbf{d}ecay factors for opacity, enabling \textbf{d}ynamic Gaussian behavior. Like N-DGS, we enable Gaussians to adaptively shift position and modulate opacity based on queries, but replace implicit covariance derivation with efficient explicit parameters. Our key contributions are:
+
 
 \begin{enumerate}[leftmargin=*]
 \item \textbf{Direct Opacity Parameterization:} We directly parameterize opacity decay via Cholesky-factored precision matrices, eliminating the need for matrix inversions while guaranteeing numerical stability through direct triangular operations.
@@ -160,7 +161,7 @@ Our work addresses these limitations by introducing direct parameterization of c
 Our work builds upon the family of Gaussian Splatting methods. To contextualize our contribution, we first detail the progression from static 3D models to the more complex 6D and 7D formulations, highlighting the trade-offs between expressive power and computational cost at each step.
 
 \paragraph{3D Gaussian Splatting}
-3D Gaussian Splatting (3DGS) revolutionized novel view synthesis by representing scenes as a collection of anisotropic 3D Gaussians. Each Gaussian is a primitive defined by a set of learnable attributes that describe its geometry and appearance. Its geometry is determined by a mean vector \(\boldsymbol{\mu} \in \mathbb{R}^3\) specifying its center in 3D space, and a covariance matrix \(\boldsymbol{\Sigma} \in \mathbb{R}^{3 \times 3}\) defining its shape, scale, and orientation. To ensure physical plausibility and simplify optimization, \(\boldsymbol{\Sigma}\) is parameterized by a scaling matrix \(\mathbf{S} = \operatorname{diag}(s_x, s_y, s_z)\) and a rotation matrix \(\mathbf{R}\) (represented as a quaternion), such that \(\boldsymbol{\Sigma} = \mathbf{R} \mathbf{S} \mathbf{S}^\top \mathbf{R}^\top\). The appearance of each Gaussian is governed by a scalar opacity \(\alpha \in [0, 1]\) that controls its transparency, and a view-dependent color modeled using Spherical Harmonics (SH). The color \(c\) for a given viewing direction \(d\) is computed as a sum over the SH basis functions \(Y_{\ell m}\):
+3D Gaussian Splatting (3DGS) revolutionized novel view synthesis by representing scenes as a collection of anisotropic 3D Gaussians. Each Gaussian is a primitive defined by a set of learnable attributes that describe its geometry and appearance. Its geometry is determined by a mean vector \(\boldsymbol{\mu} \in \mathbb{R}^3\) specifying its center in 3D space, and a covariance matrix \(\boldsymbol{\Sigma} \in \mathbb{R}^{3 \times 3}\) defining its shape, scale, and orientation. To ensure physical plausibility and simplify optimization, \(\boldsymbol{\Sigma}\) is parameterized by a diagonal scaling matrix \(\mathbf{S} = \operatorname{diag}(s_x, s_y, s_z)\) and a rotation matrix \(\mathbf{R}\) (represented as a quaternion), such that \(\boldsymbol{\Sigma} = \mathbf{R} \mathbf{S} \mathbf{S}^\top \mathbf{R}^\top\). The appearance of each Gaussian is governed by a scalar opacity \(\alpha \in [0, 1]\) that controls its transparency, and a view-dependent color modeled using Spherical Harmonics (SH). The color \(c\) for a given viewing direction \(d\) is computed as a sum over the SH basis functions \(Y_{\ell m}\):
 \begin{equation}
 c(d) = \sum_{\ell=0}^{N} \sum_{m=-\ell}^{\ell} \beta_{\ell m} Y_{\ell m}(d),
 \end{equation}
@@ -200,7 +201,7 @@ Our approach directly parameterizes conditional Gaussian slicing with two explic
 \begin{align}
 \alpha_{\text{cond}} &= \alpha \cdot \exp\left(-\|\mathbf{L}^\top \boldsymbol{\delta}\|_2^2\right), & &\text{(Opacity)} \\
 \mu_{\text{cond}} &= \mu_p + \mathbf{V}_{pq} \cdot \tilde{\mathbf{V}}_{qq} \cdot \boldsymbol{\delta}, & &\text{(Position)} \end{align}
-where $\mathbf{L} \in \mathbb{R}^{C \times C}$ is the directly parameterized Cholesky factor, $\mathbf{V}_{qq} = \mathbf{L}\mathbf{L}^\top$ is the precision matrix computed directly from $\mathbf{L}$ without inversion, $\mathbf{V}_{pq} = \mathbf{S}\boldsymbol{\Theta}_{pq} \in \mathbb{R}^{3 \times C}$ is the displacement matrix (spatial scale $\mathbf{S}$ times normalized $\boldsymbol{\Theta}_{pq}$ with $\|\boldsymbol{\Theta}_{pq}\|_F = 1$), and $\tilde{\mathbf{V}}_{qq} = \text{diag}(\boldsymbol{\Lambda}) \mathbf{V}_{qq}$ is the scaled precision with learnable per-dimension coupling strengths $\boldsymbol{\Lambda} \in [0,1]^C$ (dimensions of the same type share parameters). The spatial covariance $\boldsymbol{\Sigma}_{pp}$ remains independent of the query, using the standard 3DGS quaternion-scale parameterization ($\boldsymbol{\Sigma}_{pp} = \mathbf{R}\mathbf{S}\mathbf{S}^\top \mathbf{R}^\top$) for seamless compatibility with existing pipelines, including densification strategies.
+where $\mathbf{L} \in \mathbb{R}^{C \times C}$ is the directly parameterized Cholesky factor, $\mathbf{V}_{qq} = \mathbf{L}\mathbf{L}^\top$ is the precision matrix computed directly from $\mathbf{L}$ without inversion, $\mathbf{V}_{pq} = \bar{s}\boldsymbol{\Theta}_{pq} \in \mathbb{R}^{3 \times C}$ is the displacement matrix (mean spatial scale $\bar{s}$ times normalized $\boldsymbol{\Theta}_{pq}$ with $\|\boldsymbol{\Theta}_{pq}\|_F = 1$), and $\tilde{\mathbf{V}}_{qq} = \text{diag}(\boldsymbol{\Lambda}) \mathbf{V}_{qq}$ is the scaled precision with learnable per-dimension coupling strengths $\boldsymbol{\Lambda} \in [0,1]^C$ (dimensions of the same type share parameters). The spatial covariance $\boldsymbol{\Sigma}_{pp}$ remains independent of the query, using the standard 3DGS quaternion-scale parameterization ($\boldsymbol{\Sigma}_{pp} = \mathbf{R}\mathbf{S}\mathbf{S}^\top \mathbf{R}^\top$) for seamless compatibility with existing pipelines, including densification strategies.
 
 For 7DGS ($C=4$), we further \textbf{separate view and time} by using a block-diagonal precision matrix with zero cross-terms:
 \begin{equation}
@@ -250,9 +251,9 @@ In N-DGS, position is computed as $\boldsymbol{\mu}_{\text{cond}} = \boldsymbol{
 
 We replace this implicit derivation with \textbf{direct parameterization} of position shifts, combined with learnable coupling strength control:
 \begin{equation}
-\boldsymbol{\mu}_{\text{cond}} = \boldsymbol{\mu}_p + \underbrace{\mathbf{S} \boldsymbol{\Theta}_{pq}}_{\mathbf{V}_{pq}} \cdot \underbrace{\text{diag}(\Lambda) \mathbf{V}_{qq}}_{\tilde{\mathbf{V}}_{qq}} \cdot \boldsymbol{\delta},
+\boldsymbol{\mu}_{\text{cond}} = \boldsymbol{\mu}_p + \underbrace{\bar{s} \boldsymbol{\Theta}_{pq}}_{\mathbf{V}_{pq}} \cdot \underbrace{\text{diag}(\Lambda) \mathbf{V}_{qq}}_{\tilde{\mathbf{V}}_{qq}} \cdot \boldsymbol{\delta},
 \end{equation}
-where $\mathbf{S} = \text{diag}(s_x, s_y, s_z)$ is the spatial scale matrix, $\boldsymbol{\Theta}_{pq} \in \mathbb{R}^{3 \times C}$ are learnable parameters normalized to unit Frobenius norm ($\|\boldsymbol{\Theta}_{pq}\|_F = 1$), $\text{diag}(\boldsymbol{\Lambda}) \in \mathbb{R}^{C \times C}$ contains learnable per-dimension coupling strengths in $[0,1]$, and $\mathbf{V}_{qq} = \mathbf{L}\mathbf{L}^\top$ is the precision matrix shared with opacity conditioning. The coupling strength $\boldsymbol{\Lambda}$ controls how strongly position shifts respond to query deviations:
+where $\bar{s} = \text{mean}(s_x, s_y, s_z)$ is the spatial scale, $\boldsymbol{\Theta}_{pq} \in \mathbb{R}^{3 \times C}$ are learnable parameters normalized to unit Frobenius norm ($\|\boldsymbol{\Theta}_{pq}\|_F = 1$), $\text{diag}(\boldsymbol{\Lambda}) \in \mathbb{R}^{C \times C}$ contains learnable per-dimension coupling strengths in $[0,1]$, and $\mathbf{V}_{qq} = \mathbf{L}\mathbf{L}^\top$ is the precision matrix shared with opacity conditioning. The coupling strength $\boldsymbol{\Lambda}$ controls how strongly position shifts respond to query deviations:
 \begin{itemize}[leftmargin=*]
 \item When $\Lambda = \mathbf{0}$: $\tilde{\mathbf{V}}_{qq} = \mathbf{0}$, position becomes query-independent ($\boldsymbol{\mu}_{\text{cond}} = \boldsymbol{\mu}_p$, no conditioning).
 \item When $\Lambda = \mathbf{1}$: $\tilde{\mathbf{V}}_{qq} = \mathbf{V}_{qq}$, position and opacity couple through the shared precision matrix $\mathbf{V}_{qq}$ (similar to N-DGS, but with direct $\mathbf{V}_{pq}$ instead of derived $\boldsymbol{\Sigma}_{pq}$).
@@ -260,7 +261,7 @@ where $\mathbf{S} = \text{diag}(s_x, s_y, s_z)$ is the spatial scale matrix, $\b
 \end{itemize}
 This direct parameterization eliminates covariance inversion while providing fine-grained control over position conditioning strength. Each Gaussian learns optimal per-dimension coupling during training.
 
-Following N-DGS's design principle that displacement should scale with spatial extent (so small Gaussians produce small displacements), the displacement matrix $\mathbf{V}_{pq} = \mathbf{S} \boldsymbol{\Theta}_{pq}$ combines spatial scaling with normalized learnable parameters. By normalizing $\boldsymbol{\Theta}_{pq}$ to unit Frobenius norm ($\|\boldsymbol{\Theta}_{pq}\|_F = 1$), displacements in each spatial dimension scale proportionally with the corresponding Gaussian extent ($s_x, s_y, s_z$), with displacement magnitude bounded by $\|\mathbf{V}_{pq}^{(i)}\|_2 \leq s_i\sqrt{C}$ for row $i$. This provides an inductive bias coupling displacement scale to Gaussian anisotropy, while allowing each Gaussian to adaptively learn displacement direction. (See Appendix~\ref{sec:spatial_scaling_proof} for detailed comparison showing our direct parameterization provides tighter displacement bounds than N-DGS.)
+Inspired by N-DGS's design principle that displacement should scale with spatial extent (so small Gaussians produce small displacements), our displacement matrix $\mathbf{V}_{pq} = \bar{s} \boldsymbol{\Theta}_{pq}$ adopts this spatial scaling idea but goes beyond their implicit Cholesky-based approach through explicit parameterization. By normalizing $\boldsymbol{\Theta}_{pq}$ to unit Frobenius norm ($\|\boldsymbol{\Theta}_{pq}\|_F = 1$), displacements scale proportionally with the average Gaussian extent $\bar{s} = \text{mean}(s_x, s_y, s_z)$, with each row uniformly bounded by $\|\mathbf{V}_{pq}^{(i)}\|_2 \leq \bar{s}$. This preserves the inductive bias coupling displacement scale to Gaussian size, while enabling tighter bounds, uniform treatment across spatial dimensions, and better handling of anisotropic Gaussians. (See Appendix~\ref{sec:spatial_scaling_proof} for detailed comparison showing how our direct parameterization realizes this principle more effectively than N-DGS.)
 
 
 \subsection{CUDA Implementation}
@@ -281,8 +282,8 @@ Since the original N-DGS methods (6DGS and 7DGS) use PyTorch's autograd for cond
 \State $\boldsymbol{\delta} \gets \text{query} - \mu_q$ \Comment{Compute query deviation}
 \State $\alpha_{\text{cond}} \gets \alpha \cdot \exp(-\|\mathbf{L}^\top \boldsymbol{\delta}\|^2)$ \Comment{Conditional opacity}
 \State \Return $\alpha_{\text{cond}}, \mu_p$ \textbf{if} \textit{d}GS-O variant \Comment{Early exit for opacity-only: skip position conditioning}
-\State $\mathbf{V}_{pq} \gets \mathbf{S} \cdot \boldsymbol{\Theta}_{pq}$ \Comment{Construct displacement matrix ($\boldsymbol{\Theta}_{pq}$ normalized)}
-\State $\tilde{\mathbf{V}}_{qq} \gets \text{diag}(\Lambda) \mathbf{L}\mathbf{L}^\top$ \Comment{Scaled precision for per-dimension coupling}
+\State $\mathbf{V}_{pq} \gets \text{mean}(\text{diag}(\mathbf{S})) \cdot \boldsymbol{\Theta}_{pq}$ \Comment{Construct displacement matrix ($\boldsymbol{\Theta}_{pq}$ normalized)}
+\State $\tilde{\mathbf{V}}_{qq} \gets \text{diag}(\boldsymbol{\Lambda}) \mathbf{L}\mathbf{L}^\top$ \Comment{Scaled precision for per-dimension coupling}
 \State $\mu_{\text{cond}} \gets \mu_p + \mathbf{V}_{pq} \cdot \tilde{\mathbf{V}}_{qq} \cdot \boldsymbol{\delta}$ \Comment{Conditional position}
 \State \Return $\alpha_{\text{cond}}$, $\mu_{\text{cond}}$
 \end{algorithmic}
@@ -308,7 +309,7 @@ We compare three configurations: (1) \textbf{N-DGS}: full N-DGS formulation with
 
 \begin{table}[t]
 \centering
-\caption{Comparison of methods on Mip-NeRF 360 and NeRF Synthetic datasets with MCMC densification. Mean values across all scenes are reported. Number of Gaussians (K) and train time (min). FPS$_{\text{PyTorch}}$ and FPS$_{\text{CUDA}}$ represent FPS where conditional Gaussian operations are implemented in PyTorch and CUDA, respectively. Note that, N-DGS, \textit{d}GS-O, and \textit{d}GS are integrated with TCGS to speed up rendering.}
+\caption{Comparison of methods on Mip-NeRF 360, NeRF Synthetic, and 6DGS PBR datasets with MCMC densification. Mean values across all scenes are reported. Number of Gaussians (K) and train time (min). FPS$_{\text{PyTorch}}$ and FPS$_{\text{CUDA}}$ represent FPS where conditional Gaussian operations are implemented in PyTorch and CUDA, respectively. Note that, N-DGS, \textit{d}GS-O, and \textit{d}GS are integrated with TCGS to speed up rendering.}
 \label{tab:mcmc_comparison}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{@{}cl|rrrr|ccc@{}}
@@ -316,16 +317,22 @@ We compare three configurations: (1) \textbf{N-DGS}: full N-DGS formulation with
 Dataset & Method & \#Gauss $\downarrow$ & Train $\downarrow$ & FPS$_{\text{PyTorch}}$ $\uparrow$& FPS$_{\text{CUDA}}$ $\uparrow$& PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ \\
 \midrule
 \multirow{4}{*}{\makecell{\texttt{Mip-NeRF}\\\texttt{360}}}
-& 3DGS & 3,104 & \bf 40.16 & - & 47.62 & 27.06 & 0.788 & \bf 0.237 \\
-& N-DGS & 2,852 & 51.23 & - & 75.31 & 26.88 & 0.775 & 0.263 \\
-& \textit{d}GS-O (\textbf{Ours}) & 2,852 & 48.11 & - & 200.17 & 27.36 & 0.788 & 0.242 \\
-& \textit{d}GS (\textbf{Ours}) & 2,574 & 49.85 & - & \bf 200.56 & \bf 27.62 & \bf 0.789 & 0.243 \\
+& 3DGS & 3,104 & \bf 40.16 & 47.62 & - & 27.06 & 0.788 & 0.237 \\
+& N-DGS & 2,852 & 51.23 & 33.79 & 75.31 & 26.88 & 0.775 & 0.263 \\
+& \textit{d}GS-O (\textbf{Ours}) & 2,852 & 48.11 & \bf 91.43 & 200.17 & 27.36 & 0.788 & 0.242 \\
+& \textit{d}GS (\textbf{Ours}) & 2,574 & 49.85 & 43.72 & \bf 200.56 & \bf 27.67 & \bf 0.794 & \bf 0.227 \\
 \midrule
 \multirow{4}{*}{\makecell{\texttt{NeRF}\\\texttt{Synthetic}}}
-& 3DGS & 300 & \bf 7.80 & - & 303.09 & 33.72 & 0.971 & 0.028 \\
-& N-DGS & 300 & 10.43 & - & 348.95 & 34.04 & \bf 0.973 & 0.027 \\
-& \textit{d}GS-O (\textbf{Ours}) & 300 & 9.71 & - & \bf 587.84 & 34.25 & \bf 0.973 & \bf 0.026 \\
-& \textit{d}GS (\textbf{Ours}) & 300 & 10.18 & - & 544.47 & \bf 34.32 & \bf 0.973 & \bf 0.026 \\
+& 3DGS & 300 & \bf 7.80 & 303.09 & - & 33.72 & 0.971 & 0.028 \\
+& N-DGS & 300 & 10.43 & 179.12 & 348.95 & 34.04 & \bf 0.973 & 0.027 \\
+& \textit{d}GS-O (\textbf{Ours}) & 300 & 9.71 & \bf 400.96 & 587.84 & 34.25 & \bf 0.973 & \bf 0.026 \\
+& \textit{d}GS (\textbf{Ours}) & 300 & 10.26 & 267.33 & \bf 593.94 & \bf 34.34 & \bf 0.973 & \bf 0.026 \\
+\midrule
+\multirow{4}{*}{\makecell{\texttt{6DGS}\\\texttt{PBR}}}
+& 3DGS & 163 & 53.28& 183.78 & - & 30.89 & 0.938 & 0.077 \\
+& N-DGS & 163 & 54.80 & 292.60 & 476.79 & 40.06 & \bf 0.976 & 0.039 \\
+& \textit{d}GS-O (\textbf{Ours}) & 163 & 48.72  & \bf 467.06 & \bf 588.23& 39.51 & 0.971 & 0.046 \\
+& \textit{d}GS (\textbf{Ours}) & 163 & \bf 47.54 & 364.74 & 551.02 & \bf 40.34 & \bf 0.976 & \bf 0.038 \\
 \bottomrule
 \end{tabular}}
 \end{table}
@@ -345,24 +352,24 @@ Dataset & Method & \#Gauss $\downarrow$ & Train $\downarrow$ & FPS$_{\text{PyTor
 \midrule
 Dataset & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ \\
 \midrule
-\texttt{NeRF Synthetic} & 33.38 & 0.970 & 0.032 & \textbf{33.84} & \textbf{0.971} & 0.030 & \textbf{33.84} & \textbf{0.971} & \textbf{0.029} \\
-\texttt{Mip-NeRF 360} & 26.40 & 0.739 & 0.316 & 27.18 & 0.779 & 0.252 & \textbf{27.33} & \textbf{0.781} & \textbf{0.250} \\
-\texttt{6DGS PBR} & 37.11 & 0.971 & 0.054 & 36.54 & 0.965 & 0.059 & \textbf{37.77} & \textbf{0.972} & \textbf{0.051} \\
+\texttt{NeRF Synthetic} & 33.38 & 0.970 & 0.032 & 33.84 & 0.971 & 0.030 & \textbf{33.91} & \textbf{0.972} & \textbf{0.029} \\
+\texttt{Mip-NeRF 360} & 26.40 & 0.739 & 0.316 & 27.18 & 0.779 & 0.252 & \textbf{27.37} & \textbf{0.781} & \textbf{0.251} \\
+\texttt{6DGS PBR} & 37.11 & 0.971 & 0.054 & 36.54 & 0.965 & 0.059 & \textbf{37.75} & \textbf{0.972} & \textbf{0.052} \\
 \midrule
-\texttt{D-NeRF} & 33.13 & 0.968 & 0.038 & 30.92 & 0.959 & 0.044 & \textbf{33.52} & \textbf{0.970} & \textbf{0.033} \\
-\texttt{7DGS PBR} & \textbf{31.75} & \textbf{0.955} & 0.055 & 31.70 & \textbf{0.955} & \textbf{0.053} & 31.72 & \textbf{0.955} & \textbf{0.053} \\
+\texttt{D-NeRF} & 33.13 & 0.968 & 0.038 & 30.92 & 0.959 & 0.044 & \textbf{33.59} & \textbf{0.971} & \textbf{0.032} \\
+\texttt{7DGS PBR} & 31.75 & 0.955 & 0.055 & 31.70 & 0.955 & 0.053 & \textbf{32.18} & \textbf{0.956} & \textbf{0.050} \\
 \midrule
 \midrule
 \multicolumn{10}{c}{\textbf{Efficiency Metrics}} \\
 \midrule
 Dataset & \#Gauss $\downarrow$ & Time $\downarrow$ & FPS $\uparrow$ & \#Gauss $\downarrow$ & Time $\downarrow$ & FPS $\uparrow$ & \#Gauss $\downarrow$ & Time $\downarrow$ & FPS $\uparrow$ \\
 \midrule
-\texttt{NeRF Synthetic} & \textbf{171} & 6.35 & 615.57 & 201 & \textbf{5.83} & \textbf{754.98} & 209 & 6.42 & 687.87 \\
-\texttt{Mip-NeRF 360} & \textbf{1273} & 27.09 & 147.46 & 2363 & \textbf{25.58} & \textbf{279.30} & 2557 & 28.98 & 230.86 \\
-\texttt{6DGS PBR} & \textbf{84} & \textbf{26.77} & 678.40 & 118 & 30.72 & \textbf{696.31} & 140 & 32.90 & 627.62 \\
+\texttt{NeRF Synthetic} & \textbf{171} & 6.35 & 615.57 & 201 & \textbf{5.83} & \textbf{754.98} & 201 & 6.84 & 704.84 \\
+\texttt{Mip-NeRF 360} & \textbf{1273} & 27.09 & 147.46 & 2363 & \textbf{25.58} & \textbf{279.30} & 2463 & 28.21 & 237.82 \\
+\texttt{6DGS PBR} & \textbf{84} & \textbf{26.77} & 678.40 & 118 & 30.72 & \textbf{696.31} & 134 & 33.80 & 653.44 \\
 \midrule
-\texttt{D-NeRF} & \textbf{69} & 14.08 & 852.01 & 70 & \textbf{13.20} & \textbf{948.77} & 90 & 16.26 & 791.64 \\
-\texttt{7DGS PBR} & \textbf{162} & 38.14 & 709.83 & 227 & \textbf{34.58} & \textbf{835.24} & 207 & 37.37 & 752.48 \\
+\texttt{D-NeRF} & \textbf{69} & 14.08 & 852.01 & 70 & \textbf{13.20} & \textbf{948.77} & 85 & 15.56 & 818.41 \\
+\texttt{7DGS PBR} & \textbf{162} & 38.14 & 709.83 & 227 & \textbf{34.58} & \textbf{835.24} & 226 & 36.96 & 753.77 \\
 \bottomrule
 \end{tabular}%
 }
@@ -379,20 +386,20 @@ For 7DGS PBR, the results are highly competitive: \textit{d}GS-O achieves 31.70 
 
 \subsection{Ablation Study}
 
-To understand the contribution of each component in our approach, we conduct an ablation study comparing three configurations: (1) \textbf{\textit{d}GS-O}: opacity conditioning only without position displacement, (2) \textbf{\textit{d}GS w/o $\mathbf{S}$}: position displacement without spatial scaling, and (3) \textbf{\textit{d}GS}: our full method with per-dimension spatial scaling. Table~\ref{tab:ablation} shows results on NeRF Synthetic and 6DGS PBR datasets. Spatial scaling is critical for quality: adding spatial scaling to position displacement improves PSNR by 2.58 dB on NeRF Synthetic (33.84 vs 31.26) and 2.99 dB on 6DGS PBR (37.77 vs 34.78). Notably, position displacement without proper scaling (dGS w/o $\mathbf{S}$) performs worse than using no position displacement at all (dGS-O), with drops of -2.58 dB on NeRF Synthetic and -1.76 dB on 6DGS PBR. This validates our design choice to respect Gaussian anisotropy in the displacement parameterization.
+To understand the contribution of each component in our approach, we conduct an ablation study comparing three configurations: (1) \textbf{\textit{d}GS-O}: opacity conditioning only without position displacement, (2) \textbf{\textit{d}GS w/o $\bar{s}$}: position displacement without spatial scaling, and (3) \textbf{\textit{d}GS}: our full method with spatial scaling. Table~\ref{tab:ablation} shows results on NeRF Synthetic and 6DGS PBR datasets. Spatial scaling is critical for quality: adding spatial scaling to position displacement improves PSNR by 2.58 dB on NeRF Synthetic (33.84 vs 31.26) and 2.99 dB on 6DGS PBR (37.77 vs 34.78). Notably, position displacement without proper scaling (dGS w/o $\bar{s}$) performs worse than using no position displacement at all (dGS-O), with drops of -2.58 dB on NeRF Synthetic and -1.76 dB on 6DGS PBR. This validates our design choice to scale displacement by Gaussian size in the displacement parameterization.
 
 \begin{table}[h]
 \centering
-\caption{Ablation study on NeRF Synthetic and 6DGS PBR datasets. \textit{d}GS w/o $\mathbf{S}$ removes spatial scaling while \textit{d}GS uses per-dimension spatial scaling.}
+\caption{Ablation study on NeRF Synthetic and 6DGS PBR datasets. \textit{d}GS w/o $\bar{s}$ removes spatial scaling while \textit{d}GS uses spatial scaling.}
 \label{tab:ablation}
 \begin{tabular}{l|ccc|ccc}
 \toprule
  & \multicolumn{3}{c|}{NeRF Synthetic} & \multicolumn{3}{c}{6DGS PBR} \\
 Configuration & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ \\
 \midrule
-\textit{d}GS-O & \textbf{33.84} & \textbf{0.971} & 0.030 & 36.54 & 0.965 & 0.059 \\
-\textit{d}GS w/o $\mathbf{S}$ & 31.26 & 0.957 & 0.046 & 34.78 & 0.951 & 0.075 \\
-\textit{d}GS (full) & \textbf{33.84} & \textbf{0.971} & \textbf{0.029} & \textbf{37.77} & \textbf{0.972} & \textbf{0.051} \\
+\textit{d}GS-O & 33.84 & 0.971 & 0.030 & 36.54 & 0.965 & 0.059 \\
+\textit{d}GS w/o $\bar{s}$ & 31.26 & 0.957 & 0.046 & 34.78 & 0.951 & 0.075 \\
+\textit{d}GS (full) & \textbf{33.91} & \textbf{0.972} & \textbf{0.029} & \textbf{37.75} & \textbf{0.972} & \textbf{0.052} \\
 \bottomrule
 \end{tabular}%
 \end{table}
@@ -510,19 +517,19 @@ Cross-terms from spatial correlations $\ell_{ik}$ (where $k < i$) accumulate in 
 \end{equation}
 For large $s_i$, this approximates $s_i \sqrt{C}$, but the constant offset $(i-1)\sqrt{C}$ can dominate for small Gaussians. This bound also introduces an asymmetry across spatial dimensions: even when $s_1 = s_2 = s_3$, row $i$ accumulates more cross-terms than row 1, allowing arbitrarily different displacement magnitudes depending on the spatial dimension ordering. While N-DGS uses zero initialization of $\ell_{ij}$ to ensure displacement initially scales with $s_i$, training can learn non-zero correlations that introduce both the offset and this asymmetry.
 
-\textbf{Our method: Explicit coupling via diagonal scaling.} We directly parameterize $\mathbf{V}_{pq} = \mathbf{S} \boldsymbol{\Theta}_{pq}$, where $\mathbf{S} = \text{diag}(s_x, s_y, s_z)$ is the diagonal scale matrix and $\boldsymbol{\Theta}_{pq} \in \mathbb{R}^{3 \times C}$ are learnable parameters normalized to unit Frobenius norm ($\|\boldsymbol{\Theta}_{pq}\|_F = 1$). This gives:
+\textbf{Our method: Explicit coupling via scalar scaling.} We directly parameterize $\mathbf{V}_{pq} = \bar{s} \boldsymbol{\Theta}_{pq}$, where $\bar{s} = \text{mean}(s_x, s_y, s_z)$ is the average spatial scale and $\boldsymbol{\Theta}_{pq} \in \mathbb{R}^{3 \times C}$ are learnable parameters normalized to unit Frobenius norm ($\|\boldsymbol{\Theta}_{pq}\|_F = 1$). This gives:
 \begin{equation}
-\|\mathbf{V}_{pq}^{(i)}\|_2 = s_i \|\boldsymbol{\Theta}_{i,:}\|_2 \leq s_i \sqrt{C}.
+\|\mathbf{V}_{pq}^{(i)}\|_2 = \bar{s} \|\boldsymbol{\Theta}_{i,:}\|_2 \leq \bar{s}.
 \end{equation}
-Each element in row $i$ scales with $s_i$ with no cross-terms from other spatial dimensions, ensuring displacement scales exactly with $s_i$ even for tiny Gaussians. The unit Frobenius norm constraint ensures bounded displacements while allowing flexible direction learning.
+Each element in row $i$ scales uniformly with $\bar{s}$ with no cross-terms from other spatial dimensions, ensuring displacement scales with the average Gaussian size even for tiny Gaussians. The unit Frobenius norm constraint ensures bounded displacements while allowing flexible direction learning.
 
 \textbf{Key difference.} Both methods bound displacement by spatial scale, but differ fundamentally:
 \begin{itemize}[leftmargin=*]
-\item \textbf{N-DGS}: Displacement emerges \textit{implicitly} from Cholesky structure with bound $\sqrt{C}(i-1 + s_i)$. Cross-terms can allow disproportionately large displacements for small Gaussians and introduce asymmetry across spatial dimensions.
-\item \textbf{\modelname{}}: Displacement is \textit{explicitly} parameterized with tight bound $s_i\sqrt{C}$, ensuring proper scaling across all Gaussian sizes and symmetric treatment of all spatial dimensions.
+\item \textbf{N-DGS}: Displacement emerges \textit{implicitly} from Cholesky structure with bound $\sqrt{C}(i-1 + s_i)$. Cross-terms can allow disproportionately large displacements for small Gaussians and introduce asymmetry across spatial dimensions. For highly anisotropic Gaussians (e.g., $s_x \gg s_y, s_z$), displacement along each axis $i$ is constrained by its individual scale $s_i$, allowing excessive motion along large axes while limiting movement along smaller dimensions.
+\item \textbf{\modelname{}}: Displacement is \textit{explicitly} parameterized with tight bound $\bar{s}$, ensuring proper scaling across all Gaussian sizes with uniform treatment of all spatial dimensions. Critically, using the mean $\bar{s}$ enables balanced displacement control: it allows sufficient movement along smaller dimensions while preventing excessive motion along larger axes, ensuring the Gaussian can move uniformly in all directions regardless of anisotropy.
 \end{itemize}
 
-Empirically, removing spatial scaling (ablation: \textit{d}GS w/o $\mathbf{S}$) degrades PSNR by 2.59 dB on NeRF Synthetic (Table~\ref{tab:ablation}), confirming that displacement scaling is critical. Our direct parameterization provides tighter bounds, avoids dimension-ordering artifacts, and enables learnable per-dimension coupling strength control via $\Lambda$.
+Empirically, removing spatial scaling (ablation: \textit{d}GS w/o $\bar{s}$) degrades PSNR by 2.59 dB on NeRF Synthetic (Table~\ref{tab:ablation}), confirming that displacement scaling is critical. Our direct parameterization provides tighter bounds, avoids dimension-ordering artifacts, and enables learnable per-dimension coupling strength control via $\Lambda$.
 
 
 \section{Detailed Per-Scene Results}
@@ -558,38 +565,38 @@ This section provides comprehensive per-scene breakdowns for all experiments. Ta
 
     % ---------------- nerf_synthetic ----------------
 & \multicolumn{1}{c|@{\hskip 2pt}}{\multirow{9}[4]{*}{\begin{sideways}NeRF Synthetic\end{sideways}}}
-    & \texttt{chair}     & 35.75 & 0.986 & 0.013 & 36.36 & \bf 0.988 & \bf 0.012 & \bf 36.46 & \bf 0.988 & \bf 0.012 \\
-    & & \texttt{drums}     & 26.75 & 0.956 & 0.036 & 26.80 & 0.957 & 0.035 & \bf 26.84 & \bf 0.958 & \bf 0.034 \\
-    & & \texttt{ficus}     & 33.54 & 0.984 & 0.014 & \bf 35.30 & \bf 0.988 & \bf 0.011 & 35.05 & \bf 0.988 & \bf 0.011 \\
-    & & \texttt{hotdog}    & 38.10 & 0.985 & 0.022 & \bf 38.13 & \bf 0.986 & \bf 0.020 & 37.99 & \bf 0.986 & \bf 0.020 \\
-    & & \texttt{lego}      & 35.63 & 0.981 & 0.019 & \bf 35.87 & \bf 0.982 & \bf 0.017 & 35.77 & \bf 0.982 & \bf 0.017 \\
-    & & \texttt{materials} & 30.78 & 0.967 & 0.033 & 31.00 & 0.967 & 0.030 & \bf 31.42 & \bf 0.970 & \bf 0.028 \\
-    & & \texttt{mic}       & 35.63 & 0.992 & 0.006 & 36.12 & \bf 0.993 & \bf 0.005 & \bf 36.13 & \bf 0.993 & \bf 0.005 \\
-    & & \texttt{ship}      & 30.85 & 0.906 & 0.112 & \bf 31.16 & \bf 0.908 & \bf 0.107 & 31.08 & \bf 0.908 & \bf 0.107 \\
+    & \texttt{chair}     & 35.75 & 0.986 & 0.013 & \bf 36.36 & \bf 0.988 & \bf 0.012 &  36.26 & \bf 0.988 & \bf 0.012 \\
+    & & \texttt{drums}     & 26.75 & 0.956 & 0.036 & 26.80 & 0.957 & 0.035 & \bf 26.92 & \bf 0.958 & \bf 0.034 \\
+    & & \texttt{ficus}     & 33.54 & 0.984 & 0.014 & \bf 35.30 & \bf 0.988 & \bf 0.011 & 35.03 & 0.988 & \bf 0.011 \\
+    & & \texttt{hotdog}    & 38.10 & 0.985 & 0.022 & \bf 38.13 & \bf 0.986 & \bf 0.020 & \bf 38.15 & \bf 0.986 & \bf 0.020 \\
+    & & \texttt{lego}      & 35.63 & 0.981 & 0.019 & \bf 35.87 & \bf 0.982 & \bf 0.017 & 35.79 & \bf 0.982 & \bf 0.017 \\
+    & & \texttt{materials} & 30.78 & 0.967 & 0.033 & 31.00 & 0.967 & 0.030 & \bf 31.76 & \bf 0.972 & \bf 0.027 \\
+    & & \texttt{mic}       & 35.63 & 0.992 & 0.006 & 36.12 & \bf 0.993 & \bf 0.005 & \bf 36.25 & \bf 0.993 & \bf 0.005 \\
+    & & \texttt{ship}      & 30.85 & 0.906 & 0.112 & \bf 31.16 & \bf 0.908 & 0.107 & 31.13 & \bf 0.908 & \bf 0.106 \\
 \cmidrule{3-12}
     & & \texttt{avg}
       & 33.38
       & 0.970
       & 0.032
-      & \bf 33.84
-      & \bf 0.971
+      & 33.84
+      & 0.971
       & 0.030
-      & \bf 33.84
-      & \bf 0.971
+      & \bf 33.91
+      & \bf 0.972
       & \bf 0.029 \\
     \cmidrule{2-12}
 
     % ---------------- mipnerf360 ----------------
 & \multicolumn{1}{c|@{\hskip 2pt}}{\multirow{10}[4]{*}{\begin{sideways}Mip-NeRF 360\end{sideways}}}
-        & \texttt{bicycle}   & 22.33 & 0.554 & 0.447 & \bf 23.49 & \bf 0.644 & \bf 0.327 & 23.31 & 0.646 & \bf 0.315 \\
-        & & \texttt{bonsai}    & 33.20 & 0.940 & 0.208 & 33.22 & \bf 0.949 & \bf 0.180 & \bf 33.43 & 0.951 & \bf 0.173 \\
-        & & \texttt{counter}   & 29.26 & 0.895 & 0.236 & 29.73 & 0.917 & \bf 0.185 & \bf 29.91 & \bf 0.920 & \bf 0.179 \\
-        & & \texttt{flowers}   & 18.90 & 0.409 & 0.507 & \bf 19.61 & \bf 0.453 & \bf 0.443 & 19.75 & 0.454 & 0.452 \\
-        & & \texttt{garden}    & 26.19 & 0.809 & 0.205 & 26.77 & 0.842 & \bf 0.145 & \bf 27.12 & \bf 0.850 & \bf 0.135 \\
-        & & \texttt{kitchen}   & 31.17 & 0.922 & 0.137 & 31.72 & 0.930 & \bf 0.121 & \bf 32.04 & \bf 0.933 & \bf 0.116 \\
-        & & \texttt{room}      & 31.60 & 0.910 & 0.243 & 31.83 & 0.927 & \bf 0.199 & \bf 32.07 & \bf 0.930 & \bf 0.193 \\
-        & & \texttt{stump}     & 23.32 & 0.638 & 0.413 & \bf 26.01 & \bf 0.750 & \bf 0.275 & 25.95 & 0.739 & 0.296 \\
-        & & \texttt{treehill}  & 21.66 & 0.571 & 0.448 & \bf 22.21 & \bf 0.603 & \bf 0.393 & 22.36 & 0.607 & 0.386 \\
+        & \texttt{bicycle}   & 22.33 & 0.554 & 0.447 & 23.49 & 0.644 & 0.327 & \bf 23.51 & \bf 0.648 & \bf 0.318 \\
+        & & \texttt{bonsai}    & 33.20 & 0.940 & 0.208 & 33.22 & 0.949 & 0.180 & \bf 33.46 & \bf 0.951 & \bf 0.175 \\
+        & & \texttt{counter}   & 29.26 & 0.895 & 0.236 & 29.73 & 0.917 &  0.185 & \bf 29.93 & \bf 0.920 & \bf 0.181 \\
+        & & \texttt{flowers}   & 18.90 & 0.409 & 0.507 &  19.61 & \bf 0.453 & \bf 0.443 & \bf 19.71 & 0.452 & 0.455 \\
+        & & \texttt{garden}    & 26.19 & 0.809 & 0.205 & 26.77 & 0.842 &  0.145 & \bf 27.13 & \bf 0.849 & \bf 0.137 \\
+        & & \texttt{kitchen}   & 31.17 & 0.922 & 0.137 & 31.72 & 0.930 &  0.121 & \bf 32.04 & \bf 0.933 & \bf 0.116 \\
+        & & \texttt{room}      & 31.60 & 0.910 & 0.243 & 31.83 & 0.927 & 0.199 & \bf 32.25 & \bf 0.929 & \bf 0.195 \\
+        & & \texttt{stump}     & 23.32 & 0.638 & 0.413 & \bf 26.01 &  0.750 & \bf 0.275 & 26.00 & \bf 0.742 & 0.295 \\
+        & & \texttt{treehill}  & 21.66 & 0.571 & 0.448 & 22.21 & 0.603 & 0.393 & \bf 22.31 & \bf 0.606 & \bf 0.389 \\
     \cmidrule{3-12}
         & & \texttt{avg}
           & 26.40
@@ -598,20 +605,20 @@ This section provides comprehensive per-scene breakdowns for all experiments. Ta
           & 27.18
           & 0.779
           & 0.252
-          & \bf 27.33
+          & \bf 27.37
           & \bf 0.781
-          & \bf 0.250 \\
+          & \bf 0.251 \\
 \cmidrule{2-12}
 
   % ---------------- tandt_pbr ----------------
 & \multicolumn{1}{c|@{\hskip 2pt}}{\multirow{8}[4]{*}{\begin{sideways}6DGS PBR\end{sideways}}}
-    & \texttt{bunny\_cloud} & 40.87 & 0.993 & 0.045 & \bf 43.44 & 0.993 & 0.042 & 43.33 & \bf 0.993 & \bf 0.040 \\
-    & & \texttt{cloud}     & 41.93 & 0.991 & 0.052 & \bf 43.47 & 0.992 & 0.048 & 43.45 & \bf 0.992 & \bf 0.045 \\
-    & & \texttt{dragon}    & 35.69 & \bf 0.943 & 0.041 & 34.42 & 0.914 & 0.051 & \bf 37.11 & 0.941 & \bf 0.038 \\
-    & & \texttt{explosion} & \bf 40.97 & \bf 0.989 & \bf 0.037 & 37.81 & 0.983 & 0.041 & 39.34 & 0.986 & \bf 0.037 \\
-    & & \texttt{rvr\_x}     & 33.48 & 0.964 & 0.057 & 31.81 & 0.956 & 0.067 & \bf 34.63 & \bf 0.971 & \bf 0.046 \\
-    & & \texttt{smoke}     & \bf 40.02 & \bf 0.990 & \bf 0.041 & 38.20 & 0.989 & 0.049 & 39.55 & \bf 0.990 & 0.047 \\
-    & & \texttt{suzanne}   & 26.81 & 0.929 & \bf 0.106 & 26.65 & 0.927 & 0.112 & \bf 27.00 & \bf 0.930 & \bf 0.106 \\
+    & \texttt{bunny\_cloud} & 40.87 & 0.993 & 0.045 & 43.44 & 0.993 & 0.042 & \bf 44.14 & \bf 0.993 & \bf 0.040 \\
+    & & \texttt{cloud}     & 41.93 & 0.991 & 0.052 & 43.47 & 0.992 & 0.048 & \bf 43.53 & \bf 0.992 & \bf 0.045 \\
+    & & \texttt{dragon}    & \bf 35.69 & \bf 0.947 & \bf 0.039 & 34.42 & 0.914 & 0.051 &  36.68 &  0.947 & 0.039 \\
+    & & \texttt{explosion} & \bf 40.97 & \bf 0.989 & \bf 0.037 & 37.81 & 0.983 & 0.041 & 38.95 & 0.985 & 0.039 \\
+    & & \texttt{rvr\_x}     & 33.48 & 0.964 & 0.057 & 31.81 & 0.956 & 0.067 & \bf 34.62 & \bf 0.970 & \bf 0.048 \\
+    & & \texttt{smoke}     & \bf 40.02 & \bf 0.990 & \bf 0.041 & 38.20 & 0.989 & 0.049 & 39.28 & \bf 0.990 & 0.047 \\
+    & & \texttt{suzanne}   & 26.81 & 0.929 & \bf 0.106 & 26.65 & 0.927 & 0.112 & \bf 27.03 & \bf 0.930 & 0.107 \\
 \cmidrule{3-12}
     & & \texttt{avg}
       & 37.11
@@ -620,9 +627,9 @@ This section provides comprehensive per-scene breakdowns for all experiments. Ta
       & 36.54
       & 0.965
       & 0.059
-      & \bf 37.77
+      & \bf 37.75
       & \bf 0.972
-      & \bf 0.051 \\
+      & \bf 0.052 \\
 
     \midrule
     \midrule
@@ -651,34 +658,34 @@ This section provides comprehensive per-scene breakdowns for all experiments. Ta
 
 
 & \multirow{7}{*}{\begin{sideways}7DGS PBR\end{sideways}}
-    & \texttt{cloud}    & 29.28 & 0.955 & 0.075 & 29.34 & 0.955 & 0.075 & \bf 29.60 & 0.955 & \bf 0.074 \\
-    & & \texttt{dust}     & 36.85 & 0.955 & 0.038 & \bf 36.87 & 0.955 & \bf 0.037 & 36.63 & 0.954 & \bf 0.037 \\
-    & & \texttt{flame}    & \bf 31.64 & \bf 0.937 & \bf 0.062 & 30.38 & 0.933 & 0.066 & 30.32 & 0.932 & 0.066 \\
-    & & \texttt{heart1}   & 34.66 & 0.983 & 0.023 & 35.14 & \bf 0.985 & 0.021 & \bf 35.25 & \bf 0.985 & \bf 0.020 \\
-    & & \texttt{heart2}   & 30.99 & 0.959 & 0.057 & 31.29 & \bf 0.962 & 0.052 & \bf 31.36 & \bf 0.962 & \bf 0.051 \\
-    & & \texttt{suzanne}  & 27.09 & \bf 0.941 & 0.072 & \bf 27.20 & 0.940 & \bf 0.069 & 27.19 & 0.940 & 0.072 \\
+    & \texttt{cloud}    & 29.28 & 0.955 & 0.075 & 29.34 & 0.955 & 0.075 & \bf 29.82 & \bf 0.955 & \bf 0.074 \\
+    & & \texttt{dust}     & 36.85 & 0.955 & 0.038 & 36.87 & 0.955 &  0.037 & \bf 38.39 & \bf 0.958 & \bf 0.031 \\
+    & & \texttt{flame}    & \bf 31.64 & \bf 0.937 & \bf 0.062 & 30.38 & 0.933 & 0.066 & 31.52 & 0.936 & 0.060 \\
+    & & \texttt{heart1}   & 34.66 & 0.983 & 0.023 & \bf 35.14 & \bf 0.985 & 0.021 & 35.25 & \bf 0.986 & \bf 0.018 \\
+    & & \texttt{heart2}   & 30.99 & 0.959 & 0.057 & \bf 31.29 & \bf 0.962 & 0.052 & 31.01 & \bf 0.962 & \bf 0.049 \\
+    & & \texttt{suzanne}  & 27.09 & \bf 0.941 & 0.072 & \bf 27.20 & 0.940 & \bf 0.069 & 27.07 & 0.940 & 0.070 \\
     \cmidrule{3-12}
         & & \texttt{avg}
-          & \bf 31.75
-          & \bf 0.955
+          & 31.75
+          & 0.955
           & 0.055
           & 31.70
-          & \bf 0.955
-          & \bf 0.053
-          & 31.72
-          & \bf 0.955
-          & \bf 0.053 \\
+          & 0.955
+          & 0.053
+          & \bf 32.18
+          & \bf 0.956
+          & \bf 0.050 \\
     \cmidrule{2-12}
 
 & \multirow{9}{*}{\begin{sideways}D-NeRF\end{sideways}}
-        & \texttt{bouncingballs}  & \bf 34.00 & \bf 0.981 & 0.025 & 32.52 & 0.978 & 0.028 & 33.04 & 0.979 & \bf 0.025 \\
-        & & \texttt{hellwarrior}& 32.76 & 0.932 & 0.093 & 33.54 & 0.941 & 0.085 & \bf 34.35 & \bf 0.945 & \bf 0.075 \\
-        & & \texttt{hook}     & 31.15 & 0.960 & 0.044 & 28.55 & 0.937 & 0.062 & \bf 32.87 & \bf 0.969 & \bf 0.031 \\
-        & & \texttt{jumpingjacks}  & \bf 31.22 & \bf 0.967 & 0.043 & 28.62 & 0.952 & 0.054 & 30.78 & 0.965 & \bf 0.039 \\
-        & & \texttt{lego}     & \bf 28.33 & \bf 0.943 & 0.055 & 27.13 & 0.939 & \bf 0.055 & 27.50 & 0.936 & 0.058 \\
-        & & \texttt{mutant}   & 39.38 & 0.993 & 0.007 & 34.55 & 0.981 & 0.019 & \bf 40.28 & \bf 0.994 & \bf 0.006 \\
-        & & \texttt{standup}  & 38.50 & 0.988 & 0.013 & 33.02 & 0.972 & 0.029 & \bf 39.01 & \bf 0.989 & \bf 0.009 \\
-        & & \texttt{trex}     & 29.68 & 0.978 & 0.023 & 29.42 & 0.975 & 0.022 & \bf 30.36 & \bf 0.979 & \bf 0.019 \\
+        & \texttt{bouncingballs}  & \bf 34.00 & \bf 0.981 & 0.025 & 32.52 & 0.978 & 0.028 &  33.59 & \bf 0.981 & \bf 0.023 \\
+        & & \texttt{hellwarrior}& 32.76 & 0.932 & 0.093 & 33.54 & 0.941 & 0.085 & \bf 34.64 & \bf 0.947 & \bf 0.073 \\
+        & & \texttt{hook}     & 31.15 & 0.960 & 0.044 & 28.55 & 0.937 & 0.062 & \bf 32.94 & \bf 0.970 & \bf 0.030 \\
+        & & \texttt{jumpingjacks}  & \bf 31.22 & \bf 0.967 & 0.043 & 28.62 & 0.952 & 0.054 & 30.86 & 0.965 & \bf 0.039 \\
+        & & \texttt{lego}     & \bf 28.33 & \bf 0.943 & 0.055 & 27.13 & 0.939 &  0.055 & 28.06 & 0.942 & \bf 0.054 \\
+        & & \texttt{mutant}   & 39.38 & 0.993 & 0.007 & 34.55 & 0.981 & 0.019 & \bf 39.84 & \bf 0.993 & \bf 0.006 \\
+        & & \texttt{standup}  & 38.50 & 0.988 & 0.013 & 33.02 & 0.972 & 0.029 & \bf 38.76 & \bf 0.990 & \bf 0.009 \\
+        & & \texttt{trex}     & 29.68 & 0.978 & 0.023 & 29.42 & 0.975 & 0.022 & \bf 30.08 & \bf 0.978 & \bf 0.021 \\
     \cmidrule{3-12}
         & & \texttt{avg}
           & 33.13
@@ -687,9 +694,9 @@ This section provides comprehensive per-scene breakdowns for all experiments. Ta
           & 30.92
           & 0.959
           & 0.044
-          & \bf 33.52
-          & \bf 0.970
-          & \bf 0.033 \\
+          & \bf 33.59
+          & \bf 0.971
+          & \bf 0.032 \\
     \bottomrule
     \end{tabular}
     }
@@ -727,14 +734,14 @@ This section provides comprehensive per-scene breakdowns for all experiments. Ta
 
     % ---------------- nerf_synthetic ----------------
 & \multicolumn{1}{c|@{\hskip 2pt}}{\multirow{9}[4]{*}{\begin{sideways}NeRF Synthetic\end{sideways}}}
-    & \texttt{chair}     & \bf 178 & 6.11 & 635.27 & 206 & \bf 5.54 & \bf 713.54 & 210 & 5.95 & 657.40 \\
-    & & \texttt{drums}     & \bf 193 & 6.19 & 476.51 & 239 & \bf 5.62 & \bf 683.86 & 255 & 6.26 & 630.71 \\
-    & & \texttt{ficus}     & \bf 117 & \bf 4.27 & \bf 973.46 & 147 & \bf 4.27 & \bf 973.46 & 135 & 4.61 & 874.50 \\
-    & & \texttt{hotdog}    & \bf 98 & \bf 5.56 & \bf 982.05 & \bf 98 & \bf 5.56 & \bf 982.05 & 113 & 6.37 & 855.21 \\
-    & & \texttt{lego}      & \bf 186 & 7.06 & 480.97 & 220 & \bf 5.67 & \bf 697.44 & 234 & 6.29 & 646.60 \\
-    & & \texttt{materials} & \bf 136 & \bf 5.09 & \bf 767.74 & 182 & \bf 5.09 & 759.30 & 192 & 5.62 & 683.97 \\
-    & & \texttt{mic}       & \bf 188 & \bf 5.84 & \bf 625.05 & 260 & 6.21 & \bf 625.05 & 259 & 6.64 & 587.10 \\
-    & & \texttt{ship}      & 271 & \bf 8.68 & \bf 605.15 & \bf 256 & \bf 8.68 & \bf 605.15 & 271 & 9.66 & 567.49 \\
+    & \texttt{chair}     & \bf 178 & 6.11 & 635.27 & 206 & \bf 5.54 & \bf 713.54 & 199 & 5.86 & 677.38 \\
+    & & \texttt{drums}     & \bf 193 & 6.19 & 476.51 & 239 & \bf 5.62 & \bf 683.86 & 242 & 6.04 & 646.90 \\
+    & & \texttt{ficus}     & \bf 117 & 4.58 & 840.56 & 147 & \bf 4.27 & \bf 973.46 & 136 & 4.53 & 900.59 \\
+    & & \texttt{hotdog}    & 102 & 6.04 & 871.45 & \bf 98 & \bf 5.56 & \bf 982.05 & 104 & 6.02 & 876.19 \\
+    & & \texttt{lego}      & \bf 186 & 7.06 & 480.97 & 220 & \bf 5.67 & \bf 697.44 & 225 & 6.23 & 669.15 \\
+    & & \texttt{materials} & \bf 136 & 5.38 & 767.74 & 182 & \bf 5.09 & 759.30 & 180 & 5.54 & 689.29 \\
+    & & \texttt{mic}       & \bf 188 & 5.84 & 486.29 & 260 & 6.21 & \bf 625.05 & 260 & 11.17 & 594.08 \\
+    & & \texttt{ship}      & 271 & 9.60 & 365.77 & \bf 256 & \bf 8.68 & \bf 605.15 & 259 & 9.28 & 585.17 \\
 \cmidrule{3-12}
     & & \texttt{avg}
       & \bf 171
@@ -743,22 +750,22 @@ This section provides comprehensive per-scene breakdowns for all experiments. Ta
       & 201
       & \bf 5.83
       & \bf 754.98
-      & 209
-      & 6.42
-      & 687.87 \\
+      & 201
+      & 6.84
+      & 704.84 \\
     \cmidrule{2-12}
 
     % ---------------- mipnerf360 ----------------
 & \multicolumn{1}{c|@{\hskip 2pt}}{\multirow{10}[4]{*}{\begin{sideways}Mip-NeRF 360\end{sideways}}}
-        & \texttt{bicycle}   & \bf 2243 & \bf 32.54 & 70.31 & 4452 & 33.46 & \bf 144.01 & 4779 & 39.05 & 115.25 \\
-        & & \texttt{bonsai}    & \bf 751 & 23.49 & 186.80 & 1048 & \bf 20.02 & \bf 419.45 & 1165 & 22.13 & 348.71 \\
-        & & \texttt{counter}   & \bf 555 & 22.79 & 237.17 & 880 & \bf 22.41 & \bf 430.22 & 946 & 24.54 & 369.79 \\
-        & & \texttt{flowers}   & \bf 1547 & 26.28 & 100.84 & 2587 & \bf 24.43 & \bf 237.63 & 2807 & 26.86 & 188.20 \\
-        & & \texttt{garden}    & \bf 2674 & 38.90 & 58.64 & 3552 & \bf 29.36 & \bf 174.37 & 3974 & 35.59 & 134.47 \\
-        & & \texttt{kitchen}   & \bf 770 & 27.28 & 178.89 & 1148 & \bf 24.95 & \bf 354.03 & 1203 & 26.74 & 307.75 \\
-        & & \texttt{room}      & \bf 792 & 24.62 & 177.95 & 1286 & \bf 23.81 & \bf 351.34 & 1390 & 26.46 & 291.81 \\
-        & & \texttt{stump}     & \bf 644 & 21.29 & 212.22 & 3272 & \bf 27.56 & 199.15 & 3418 & 30.83 & \bf 160.52 \\
-        & & \texttt{treehill}  & \bf 1481 & 26.62 & 104.35 & 3042 & \bf 24.22 & \bf 203.51 & 3334 & 28.60 & 161.27 \\
+        & \texttt{bicycle}   & \bf 2243 & \bf 32.54 & 70.31 & 4452 & 33.46 & \bf 144.01 & 4644 & 38.30 & 118.20 \\
+        & & \texttt{bonsai}    & \bf 751 & 23.49 & 186.80 & 1048 & \bf 20.02 & \bf 419.45 & 1091 & 21.77 & 359.76 \\
+        & & \texttt{counter}   & \bf 555 & 22.79 & 237.17 & 880 & \bf 22.41 & \bf 430.22 & 902 & 23.98 & 380.55 \\
+        & & \texttt{flowers}   & \bf 1547 & 26.28 & 100.84 & 2587 & \bf 24.43 & \bf 237.63 & 2679 & 26.27 & 196.76 \\
+        & & \texttt{garden}    & \bf 2674 & 38.90 & 58.64 & 3552 & \bf 29.36 & \bf 174.37 & 3767 & 33.70 & 141.57 \\
+        & & \texttt{kitchen}   & \bf 770 & 27.28 & 178.89 & 1148 & \bf 24.95 & \bf 354.03 & 1175 & 26.41 & 312.45 \\
+        & & \texttt{room}      & \bf 792 & 24.62 & 177.95 & 1286 & \bf 23.81 & \bf 351.34 & 1356 & 25.75 & 298.32 \\
+        & & \texttt{stump}     & \bf 644 & 21.29 & 212.22 & 3272 & \bf 27.56 & 199.15 & 3343 & 30.01 & 165.52 \\
+        & & \texttt{treehill}  & \bf 1481 & 26.62 & 104.35 & 3042 & \bf 24.22 & \bf 203.51 & 3209 & 27.64 & 167.23 \\
     \cmidrule{3-12}
         & & \texttt{avg}
           & \bf 1273
@@ -767,20 +774,20 @@ This section provides comprehensive per-scene breakdowns for all experiments. Ta
           & 2363
           & \bf 25.58
           & \bf 279.30
-          & 2557
-          & 28.98
-          & 230.86 \\
+          & 2463
+          & 28.21
+          & 237.82 \\
 \cmidrule{2-12}
 
   % ---------------- tandt_pbr ----------------
 & \multicolumn{1}{c|@{\hskip 2pt}}{\multirow{8}[4]{*}{\begin{sideways}6DGS PBR\end{sideways}}}
-    & \texttt{bunny\_cloud} & \bf 24 & 33.69 & \bf 718.47 & 63 & 42.62 & 689.88 & 65 & 48.66 & 613.22 \\
-    & & \texttt{cloud}     & \bf 17 & 32.61 & 597.10 & 62 & 39.08 & \bf 700.35 & 60 & 40.61 & 634.16 \\
-    & & \texttt{dragon}    & \bf 93 & 12.76 & \bf 855.89 & 118 & 12.87 & 787.64 & 145 & 13.62 & 703.61 \\
-    & & \texttt{explosion} & \bf 35 & 22.13 & \bf 875.48 & 72 & 29.54 & 813.28 & 73 & 30.20 & 732.86 \\
-    & & \texttt{rvr\_x}     & \bf 171 & 6.57 & 689.47 & 221 & \bf 6.44 & \bf 796.54 & 335 & 8.01 & 654.89 \\
-    & & \texttt{smoke}     & \bf 52 & 46.48 & \bf 608.02 & 72 & 55.67 & 568.30 & 73 & 58.50 & 540.75 \\
-    & & \texttt{suzanne}   & \bf 201 & 33.16 & 404.34 & 221 & \bf 28.80 & \bf 518.17 & 232 & 30.71 & 513.88 \\
+    & \texttt{bunny\_cloud} & \bf 24 & 33.69 & \bf 718.47 & 63 & 42.62 & 689.88 & 62 & 45.03 & 642.86 \\
+    & & \texttt{cloud}     & \bf 17 & 32.61 & 597.10 & 62 & 39.08 & \bf 700.35 & 60 & 41.31 & 654.93 \\
+    & & \texttt{dragon}    & \bf 93 & 12.76 & \bf 855.89 & 118 & 12.87 & 787.64 & 134 & 13.28 & 753.36 \\
+    & & \texttt{explosion} & \bf 35 & 22.13 & \bf 875.48 & 72 & 29.54 & 813.28 & 73 & 40.77 & 753.18 \\
+    & & \texttt{rvr\_x}     & \bf 171 & 6.57 & 689.47 & 221 & \bf 6.44 & \bf 796.54 & 299 & 7.45 & 695.69 \\
+    & & \texttt{smoke}     & \bf 52 & 46.48 & \bf 608.02 & 72 & 55.67 & 568.30 & 74 & 58.15 & 547.93 \\
+    & & \texttt{suzanne}   & \bf 201 & 33.16 & 404.34 & 221 & \bf 28.80 & \bf 518.17 & 233 & 30.58 & 526.10 \\
 \cmidrule{3-12}
     & & \texttt{avg}
       & \bf 85
@@ -789,9 +796,9 @@ This section provides comprehensive per-scene breakdowns for all experiments. Ta
       & 118
       & 30.72
       & \bf 696.31
-      & 140
-      & 32.90
-      & 627.62 \\
+      & 134
+      & 33.80
+      & 653.44 \\
 
     \midrule
     \midrule
@@ -799,12 +806,12 @@ This section provides comprehensive per-scene breakdowns for all experiments. Ta
 \multicolumn{1}{@{\hskip 2pt}c}{\multirow{16}[4]{*}{\begin{sideways}DYNAMIC SCENES\end{sideways}}}
 
 & \multirow{7}{*}{\begin{sideways}7DGS PBR\end{sideways}}
-    & \texttt{cloud}    & \bf 48 & 76.87 & 950.04 & 63 & \bf 75.47 & \bf 953.38 & 62 & 79.29 & 867.27 \\
-    & & \texttt{dust}     & \bf 16 & 13.11 & 1052.85 & 23 & \bf 12.06 & \bf 1165.85 & 23 & 14.58 & 1035.70 \\
-    & & \texttt{flame}    & \bf 22 & \bf 14.91 & \bf 1063.87 & 23 & 16.87 & 1015.92 & 24 & 16.93 & 910.27 \\
-    & & \texttt{heart1}   & \bf 140 & 30.75 & 593.96 & 182 & \bf 28.75 & \bf 697.33 & 191 & 31.77 & 626.65 \\
-    & & \texttt{heart2}   & \bf 181 & 22.75 & 432.58 & 237 & \bf 20.12 & \bf 729.08 & 256 & 23.00 & 647.81 \\
-    & & \texttt{suzanne}  & \bf 564 & 70.47 & 165.70 & 837 & \bf 54.23 & \bf 449.89 & 685 & 58.64 & 427.15 \\
+    & \texttt{cloud}    & \bf 48 & 76.87 & 950.04 & 63 & \bf 75.47 & \bf 953.38 & 70 & 76.11 & 892.36 \\
+    & & \texttt{dust}     & \bf 16 & 13.11 & 1052.85 & 23 & \bf 12.06 & \bf 1165.85 & 30 & 16.89 & 990.11 \\
+    & & \texttt{flame}    & \bf 22 & \bf 14.91 & \bf 1063.87 & 23 & 16.87 & 1015.92 & 40 & 19.30 & 926.17 \\
+    & & \texttt{heart1}   & \bf 140 & 30.75 & 593.96 & 182 & \bf 28.75 & \bf 697.33 & 188 & 30.08 & 639.83 \\
+    & & \texttt{heart2}   & \bf 181 & 22.75 & 432.58 & 237 & \bf 20.12 & \bf 729.08 & 261 & 22.60 & 662.23 \\
+    & & \texttt{suzanne}  & \bf 564 & 70.47 & 165.70 & 837 & \bf 54.23 & \bf 449.89 & 767 & 56.75 & 411.89 \\
     \cmidrule{3-12}
         & & \texttt{avg}
           & \bf 162
@@ -813,20 +820,20 @@ This section provides comprehensive per-scene breakdowns for all experiments. Ta
           & 227
           & \bf 34.58
           & \bf 835.24
-          & 207
-          & 37.37
-          & 752.48 \\
+          & 226
+          & 36.96
+          & 753.77 \\
     \cmidrule{2-12}
 
 & \multirow{9}{*}{\begin{sideways}D-NeRF\end{sideways}}
-        & \texttt{bouncingballs}  & 179 & 22.73 & 398.65 & \bf 103 & \bf 16.09 & \bf 770.99 & 134 & 17.59 & 640.82 \\
-        & & \texttt{hellwarrior}& \bf 13 & 8.25 & \bf 1151.03 & 17 & \bf 7.87 & 1141.34 & 16 & 10.11 & 1029.25 \\
-        & & \texttt{hook}     & \bf 37 & \bf 9.71 & \bf 1042.00 & 55 & 11.42 & 1027.26 & 83 & 15.32 & 822.92 \\
-        & & \texttt{jumpingjacks}  & \bf 25 & \bf 9.61 & 1069.25 & 31 & 10.67 & \bf 1101.29 & 77 & 14.93 & 853.54 \\
-        & & \texttt{lego}     & \bf 114 & 21.09 & 583.20 & 143 & \bf 17.93 & \bf 700.47 & 122 & 19.95 & 676.12 \\
-        & & \texttt{mutant}   & \bf 63 & 14.74 & 829.30 & 67 & \bf 13.27 & \bf 930.20 & 88 & 16.70 & 756.05 \\
-        & & \texttt{standup}  & \bf 21 & 9.71 & 1074.73 & 26 & \bf 9.28 & \bf 1140.56 & 58 & 15.48 & 867.40 \\
-        & & \texttt{trex}     & \bf 101 & \bf 16.77 & 667.96 & 118 & 19.09 & \bf 778.03 & 140 & 20.05 & 686.99 \\
+        & \texttt{bouncingballs}  & 179 & 22.73 & 398.65 & \bf 103 & \bf 16.09 & \bf 770.99 & 128 & 17.72 & 636.37 \\
+        & & \texttt{hellwarrior}& \bf 13 & 8.25 & \bf 1151.03 & 17 & \bf 7.87 & 1141.34 & 18 & 9.23 & 1068.65 \\
+        & & \texttt{hook}     & \bf 37 & \bf 9.71 & \bf 1042.00 & 55 & 11.42 & 1027.26 & 75 & 14.58 & 865.61 \\
+        & & \texttt{jumpingjacks}  & \bf 25 & \bf 9.61 & 1069.25 & 31 & 10.67 & \bf 1101.29 & 71 & 14.48 & 899.56 \\
+        & & \texttt{lego}     & \bf 114 & 21.09 & 583.20 & 143 & \bf 17.93 & \bf 700.47 & 125 & 19.28 & 685.07 \\
+        & & \texttt{mutant}   & \bf 63 & 14.74 & 829.30 & 67 & \bf 13.27 & \bf 930.20 & 79 & 15.47 & 810.36 \\
+        & & \texttt{standup}  & \bf 21 & 9.71 & 1074.73 & 26 & \bf 9.28 & \bf 1140.56 & 51 & 14.00 & 867.39 \\
+        & & \texttt{trex}     & \bf 101 & \bf 16.77 & 667.96 & 118 & 19.09 & \bf 778.03 & 134 & 19.69 & 714.27 \\
     \cmidrule{3-12}
         & & \texttt{avg}
           & \bf 69
@@ -835,9 +842,9 @@ This section provides comprehensive per-scene breakdowns for all experiments. Ta
           & 70
           & \bf 13.20
           & \bf 948.77
-          & 90
-          & 16.26
-          & 791.64 \\
+          & 85
+          & 15.56
+          & 818.41 \\
     \bottomrule
     \end{tabular}
     }

@@ -39,7 +39,8 @@ from utils.general_utils import strip_symmetric, build_scaling_rotation
 
 # Import CUDA-accelerated slice functions
 # from gsplat import slice_gaussian_full
-from gsplat import slice_gaussian_full, slice_gaussian_full_v2
+from gsplat import (_slice_gaussian_full as slice_gaussian_full,
+                     _slice_gaussian_full_v2 as slice_gaussian_full_v2)
 
 
 def quaternion_multiply(q1, q2):
@@ -182,7 +183,7 @@ class GaussianModel:
 
     def __init__(self, sh_degree: int, input_dim: int = 6, use_beta: bool = False,
                  use_view_dependent_pos: bool = True, use_opacity_pos_decouple: bool = False,
-                time_duration: list = [0.0, 1.0], l_22_inv_init_scale: float = 1.0):
+                time_duration: list = [0.0, 1.0], l_22_inv_init_scale: float = 1.0, lambda_init: float = -1.2):
         """
         Initialize Full DGS with view-dependent position, time-dependent rotation, and opacity.
 
@@ -196,6 +197,7 @@ class GaussianModel:
             l_22_inv_init_scale: Initialization scale for L_22_inv diagonal (default: 1.0).
                                Using 1.0 gives log(1.0)=0.0 (standard initialization).
                                Using 2.0 gives log(2.0)≈0.693 (wider Gaussian for PBR scenes).
+            lambda_init: Initial value for lambda_view and lambda_time parameters (default: -1.2).
         """
         self.active_sh_degree = 0
         self.max_sh_degree = sh_degree
@@ -205,6 +207,7 @@ class GaussianModel:
         self.use_opacity_pos_decouple = use_opacity_pos_decouple  # Decouple position and opacity
         self.time_duration = time_duration  # Time range for 7DGS
         self.l_22_inv_init_scale = l_22_inv_init_scale  # Initialization scale for L_22_inv diagonal
+        self.lambda_init = lambda_init  # Initial value for lambda parameters
         self.cond_dim = input_dim - 3  # C = 3 for view-only, 4 for view+time
 
         # Standard 3DGS parameters
@@ -392,13 +395,14 @@ class GaussianModel:
 
         # Apply normalization and max_pos_shift
         # v_12_activated = self.v_12_activaton(self._v_12_direction)  # [N, 3*C] remove activation for ablation
-        v_12_activated = F.normalize(self._v_12_direction, dim=1) * self.max_pos_shift
+        v_12_activated = F.normalize(self._v_12_direction, dim=1)
 
-        # Expand scale: [N, 3] -> [N, 3*C] by repeating each element C times
-        # E.g., [sx, sy, sz] -> [sx, sx, sx, sy, sy, sy, sz, sz, sz] for C=3
-        C = self.input_dim - 3  # number of conditional dimensions (3 for 6DGS, 4 for 7DGS)
-        spatial_scale = self.get_scaling.repeat_interleave(C, dim=1)  # [N, 3*C]
-
+        # # Expand scale: [N, 3] -> [N, 3*C] by repeating each element C times
+        # # E.g., [sx, sy, sz] -> [sx, sx, sx, sy, sy, sy, sz, sz, sz] for C=3
+        # C = self.input_dim - 3  # number of conditional dimensions (3 for 6DGS, 4 for 7DGS)
+        # spatial_scale = self.get_scaling.repeat_interleave(C, dim=1)  # [N, 3*C]
+        spatial_scale = self.get_scaling.mean(dim=1, keepdim=True)
+        
         v_12_scaled = v_12_activated * spatial_scale
 
         return v_12_scaled
@@ -548,7 +552,7 @@ class GaussianModel:
             lambda_view = torch.zeros(self._xyz.shape[0], device=self._xyz.device)
             lambda_time = None
 
-        is_v_12_v1 = False  # Use v_12_v2 (decoupled position shift)
+        is_v_12_v1 = True  # Use v_12_v2 (decoupled position shift)
         if is_v_12_v1:
             v_12 = self.get_v_12_v1  # [N, 3*C] with tanh activation
             x_cond, opacity_scale = slice_gaussian_full(
@@ -691,8 +695,8 @@ class GaussianModel:
         # - use_opacity_pos_decouple=True: 0.0 is exact value (no sigmoid) -> λ=0 (decoupled)
         # - use_opacity_pos_decouple=False: 0.0 is logit -> sigmoid(0)=0.5 (moderate coupling)
         if self.use_view_dependent_pos:
-            lambda_view = torch.full((num_gaussians, ), -1.0, device=device)
-            lambda_time = torch.full((num_gaussians, ), -1.0, device=device) if self.input_dim == 7 else torch.empty(0, device=device)
+            lambda_view = torch.full((num_gaussians, ), self.lambda_init, device=device)
+            lambda_time = torch.full((num_gaussians, ), self.lambda_init, device=device) if self.input_dim == 7 else torch.empty(0, device=device)
         else:
             lambda_view = torch.empty(0, device=device)
             lambda_time = torch.empty(0, device=device)

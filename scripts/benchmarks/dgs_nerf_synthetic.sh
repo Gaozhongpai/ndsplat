@@ -103,7 +103,7 @@ done
 echo "=============================================="
 echo "Running opacity_pos_update mode benchmarks"
 echo "=============================================="
-
+### materials lambda_init=-1.2
 for dir in "$base_dir"*/; do
     if [ -d "$dir" ]; then
         clean_dir="${dir%/}"
@@ -114,7 +114,7 @@ for dir in "$base_dir"*/; do
 
         output_dir="output/standard/opacity_pos_update/nerf_synthetic/${scene_name}"
         echo "Processing ${scene_name} with mode opacity_pos_update..."
-        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True"
+        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --lambda_init -2.5"
     fi
 done
 
