@@ -140,6 +140,27 @@ for dir in "$base_dir"*/; do
     fi
 done
 
+# # ============================================
+# # 2. opacity_pos_sh1 mode (opacity + position)
+# # ============================================
+# echo "=============================================="
+# echo "Running opacity_pos_sh1 mode benchmarks"
+# echo "=============================================="
+
+# for dir in "$base_dir"*/; do
+#     if [ -d "$dir" ]; then
+#         clean_dir="${dir%/}"
+#         scene_name=$(basename "$clean_dir")
+#         if [[ "$scene_name" == "README.txt" ]] || [[ "$scene_name" == *.zip ]]; then
+#             continue
+#         fi
+
+#         output_dir="output/standard/opacity_pos_sh1/medical_pbr/${scene_name}"
+#         echo "Processing ${scene_name} with mode opacity_pos_sh1..."
+#         run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos False --sh_degree 1"
+#     fi
+# done
+
 # ============================================
 # 3. opacity_pos_decouple mode (decoupled λ=0)
 # ============================================

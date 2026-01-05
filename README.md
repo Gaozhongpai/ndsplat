@@ -10,7 +10,7 @@ This repository implements **N-Dimensional Gaussian Splatting (N-DGS)**, extendi
 
 - **6D/7D Gaussian Representation**: Extends 3D Gaussians with view-direction (6D) or view-direction + time (7D)
 - **Conditional Slicing (NDGS)**: CUDA-accelerated conditional Gaussian slicing based on viewing direction
-- **Beta-Based Bandwidth Control (UBS)**: Uncertainty-aware rendering with per-dimension beta parameters
+- **Beta-Based Bandwidth Control (UBS)**: Universal beta-based rendering with per-dimension beta parameters
 - **Learnable Lambda Opacity (NDGS)**: Per-Gaussian learnable opacity scaling for fine-grained control
 - **Dual Parametrization**: Switch between NDGS-style and UBS-style covariance parametrization
 - **TCGS Rasterization**: High-performance rasterization with support for cutting planes
@@ -81,10 +81,13 @@ See [ORGANIZATION.md](ORGANIZATION.md) for complete documentation.
 ### Recent Major Updates
 
 **✨ Unified Model Architecture:**
-- Consolidated and cleaned codebase with two main N-DGS models:
+- Consolidated and cleaned codebase with multiple N-DGS models:
   - `gaussian_model_ndgs.py` - Single SH for standard rendering
   - `gaussian_model_ndgs_2sh.py` - Dual SH for multi-view consistency
-- Both models support 6DGS and 7DGS (with time dimension)
+  - `gaussian_model_dgs_full.py` - Full DGS with advanced view-dependent features
+  - `gaussian_model_ubs.py` - Universal Beta Splatting with beta parameters
+  - `gaussian_model_ubs_sh.py` - UBS with spherical harmonics support
+- All models support 6DGS and 7DGS (with time dimension)
 - Removed legacy experimental code (color_net, LSH culling, Taichi imports)
 
 **🎯 New Features:**
@@ -124,8 +127,20 @@ python train.py -s <path to dataset> --mode ndgs --use_rot_scale_l_triangle
 # Dual SH for multi-view consistency
 python train.py -s <path to dataset> --mode ndgs-2sh --input_dim 6
 
+# Full DGS with advanced view-dependent features
+python train.py -s <path to dataset> --mode dgs --input_dim 6
+
+# Full DGS with beta-based opacity (UBS-style)
+python train.py -s <path to dataset> --mode dgs --use_beta --input_dim 6
+
+# DGS-color mode (joint position+color with simplified parameterization)
+python train.py -s <path to dataset> --mode dgs-color --input_dim 6
+
 # UBS with beta-based bandwidth control
 python train.py -s <path to dataset> --mode ubs --input_dim 6
+
+# UBS with spherical harmonics (instead of direct RGB)
+python train.py -s <path to dataset> --mode ubs-sh --input_dim 6
 
 # UBS with MCMC densification strategy
 python train.py -s <path to dataset> --mode ubs --densification_strategy mcmc --mcmc_cap_max 300000
@@ -151,11 +166,17 @@ The training script will automatically launch a live viewer on port 8080 (unless
 - `--white_background` / `-w`: Use white background instead of black
 
 #### Model Parameters
-- `--mode`: Model architecture (`ndgs`, `ndgs-2sh`, `ddgs`, `3dgs`, `ubs`) - default: `ndgs`
+- `--mode`: Model architecture (`ndgs`, `ndgs-2sh`, `dgs`, `dgs-color`, `ddgs`, `3dgs`, `ubs`, `ubs-sh`) - default: `dgs`
 - `--input_dim`: Gaussian dimensionality (6 for 6DGS, 7 for 7DGS with time) - default: `6`
 - `--sh_degree`: Spherical harmonics degree (max 3) - default: `3`
-- `--learnable_lambda_opc`: Make lambda_opc learnable per Gaussian - default: `False`
-- `--use_rot_scale_l_triangle`: Use UBS-style parametrization instead of NDGS-style - default: `False`
+- `--learnable_lambda_opc`: Make lambda_opc learnable per Gaussian (NDGS modes) - default: `False`
+- `--use_rot_scale_l_triangle`: Use rotation-scale-l_triangle parameterization (UBS-style) - default: `False`
+- `--use_view_dependent_pos`: Enable view-dependent position shift (DGS mode) - default: `True`
+- `--use_opacity_pos_decouple`: Decouple position and opacity (DGS mode) - default: `False`
+- `--use_beta`: Enable beta-based opacity (DGS mode) - default: `False`
+- `--lambda_opc`: Default lambda_opc for opacity scaling (NDGS/DGS modes) - default: `0.35`
+- `--l_22_inv_init_scale`: Initialization scale for L_22_inv diagonal (DGS mode) - default: `1.0`
+- `--lambda_init`: Initial value for lambda_view/lambda_time parameters (DGS mode) - default: `-1.2`
 
 #### Training Parameters
 - `--iterations`: Total training iterations - default: `30000`
@@ -181,8 +202,6 @@ The training script will automatically launch a live viewer on port 8080 (unless
 - `--percent_dense`: Scene extent percentage for densification - default: `0.01`
 - `--mcmc_cap_max`: Maximum number of Gaussians (MCMC only) - default: `300000`
 - `--mcmc_refine_interval`: MCMC refinement frequency (MCMC only) - default: `100`
-- `--mcmc_add_rate`: Rate of adding new Gaussians (MCMC only, currently unused) - default: `0.25`
-- `--mcmc_remove_rate`: Rate of removing Gaussians (MCMC only, currently unused) - default: `0.1`
 - `--fastgs_loss_thresh`: Threshold for high-error pixel detection (FastGS only) - default: `0.3`
 - `--fastgs_grad_thresh`: Gradient threshold for densification candidates (FastGS only) - default: `0.0002`
 - `--fastgs_densify_score_thresh`: Minimum importance score for densification (FastGS only) - default: `5`
@@ -411,7 +430,7 @@ This codebase supports multiple Gaussian splatting variants:
 - **ndgs-2sh**: N-Dimensional GS with dual SH features for multi-view consistency
 - **ddgs**: Deformable DGS variant
 - **3dgs**: Standard 3D Gaussian Splatting
-- **ubs**: Uncertainty-Based Splatting with beta parameters
+- **ubs**: Universal Beta Splatting with beta parameters
 
 Select the mode with `--mode <mode_name>` during training.
 
@@ -425,7 +444,7 @@ Both NDGS and UBS extend 3DGS to N-dimensions (6D/7D) but use different approach
 | **View-Dependence** | Conditional Gaussian slicing | Beta-adjusted covariance |
 | **Opacity Control** | Lambda opacity (learnable/fixed) | Beta parameters per dimension |
 | **Parametrization** | Flexible (NDGS/UBS-style) | Fixed rot-scale-l_triangle |
-| **Best For** | General scenes, SH appearance | Uncertainty quantification, direct RGB |
+| **Best For** | General scenes, SH appearance | Universal beta control, direct RGB |
 | **Complexity** | More complex (SH evaluation) | Simpler (direct RGB) |
 | **Test Optimization** | Precomputed values supported | Full computation each frame |
 

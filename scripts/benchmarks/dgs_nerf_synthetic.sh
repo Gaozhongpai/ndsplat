@@ -97,6 +97,27 @@ for dir in "$base_dir"*/; do
 done
 
 
+# # ============================================
+# # 2. opacity_pos_lambda mode (opacity + position) ### ablation
+# # ============================================
+# echo "=============================================="
+# echo "Running opacity_pos_lambda mode benchmarks"
+# echo "=============================================="
+
+# for dir in "$base_dir"*/; do
+#     if [ -d "$dir" ]; then
+#         clean_dir="${dir%/}"
+#         scene_name=$(basename "$clean_dir")
+#         if [[ "$scene_name" == "README.txt" ]] || [[ "$scene_name" == *.zip ]]; then
+#             continue
+#         fi
+
+#         output_dir="output/standard/opacity_pos_lambda/nerf_synthetic/${scene_name}"
+#         echo "Processing ${scene_name} with mode opacity_pos_lambda..."
+#         run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True"
+#     fi
+# done
+
 # ============================================
 # 2. opacity_pos_update mode (opacity + position)
 # ============================================
@@ -120,7 +141,7 @@ done
 
 
 # # ============================================
-# # 2. opacity_pos mode (opacity + position)
+# # 2. opacity_pos_update_beta mode (opacity + position)
 # # ============================================
 # echo "=============================================="
 # echo "Running opacity_pos_update_beta mode benchmarks"

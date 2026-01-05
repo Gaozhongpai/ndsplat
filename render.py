@@ -169,12 +169,16 @@ def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_
         elif "ndgs" in mode:
             gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim,
                                         use_rot_scale_l_triangle=dataset.use_rot_scale_l_triangle,
+                                        learnable_lambda_opc=dataset.learnable_lambda_opc,
                                         lambda_opc=dataset.lambda_opc)
         elif mode == "dgs":
             # DGS mode: Full DGS with configurable view-dependent position
             gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim,
+                                      use_beta=dataset.use_beta,
                                       use_view_dependent_pos=dataset.use_view_dependent_pos,
-                                      use_opacity_pos_decouple=dataset.use_opacity_pos_decouple)
+                                      use_opacity_pos_decouple=dataset.use_opacity_pos_decouple,
+                                      l_22_inv_init_scale=dataset.l_22_inv_init_scale,
+                                      lambda_init=dataset.lambda_init)
         else:
             gaussians = GaussianModel(dataset.sh_degree)
 
@@ -210,6 +214,13 @@ if __name__ == "__main__":
     parser.add_argument("--skip_test", action="store_true", help="Skip rendering test views")
     parser.add_argument("--measure_fps", action="store_true", help="Measure FPS instead of saving images")
     parser.add_argument("--quiet", action="store_true", help="Suppress output")
+
+    # Training-only parameters (accepted but ignored for convenience in scripts)
+    parser.add_argument("--noise_lr", type=float, default=1.0, help="[Training only] Noise learning rate (ignored during rendering)")
+    parser.add_argument("--opacity_reg", type=float, default=0.01, help="[Training only] Opacity regularization (ignored during rendering)")
+    parser.add_argument("--scale_reg", type=float, default=0.01, help="[Training only] Scale regularization (ignored during rendering)")
+    parser.add_argument("--mcmc_cap_max", type=int, default=300000, help="[Training only] MCMC cap max (ignored during rendering)")
+
     args = get_combined_args(parser)
     print("Rendering " + args.model_path)
     args.eval = True

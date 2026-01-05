@@ -49,7 +49,6 @@ run_experiment() {
         --mode "$mode" \
         --densification_strategy mcmc \
         --mcmc_cap_max $MCMC_CAP_MAX \
-        --noise_lr $NOISE_LR \
         --opacity_reg $OPACITY_REG \
         --scale_reg $SCALE_REG \
         $extra_args \
@@ -153,6 +152,28 @@ for dir in "$base_dir"*/; do
     fi
 done
 
+
+# # ============================================
+# # 3. opacity_pos_beta mode with MCMC (opacity + position)
+# # ============================================
+# echo "=============================================="
+# echo "Running opacity_pos_beta mode benchmarks (MCMC)"
+# echo "=============================================="
+
+# for dir in "$base_dir"*/; do
+#     if [ -d "$dir" ]; then
+#         clean_dir="${dir%/}"
+#         scene_name=$(basename "$clean_dir")
+#         if [[ "$scene_name" == "README.txt" ]] || [[ "$scene_name" == *.zip ]]; then
+#             continue
+#         fi
+
+#         output_dir="output/mcmc/opacity_pos_beta/nerf_synthetic/${scene_name}"
+#         echo "Processing ${scene_name} with mode opacity_pos_beta (MCMC)..."
+#         run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --use_beta True --noise_lr 1000"
+#     fi
+# done
+
 # ============================================
 # 4. NDGS mode with MCMC (full Cholesky precision)
 # ============================================
@@ -173,5 +194,28 @@ for dir in "$base_dir"*/; do
         run_experiment "ndgs" "$output_dir" "$dir"
     fi
 done
+
+
+# # ============================================
+# # 4. UBS mode with MCMC (full Cholesky precision)
+# # ============================================
+# echo "=============================================="
+# echo "Running UBS mode benchmarks (MCMC)"
+# echo "=============================================="
+
+# for dir in "$base_dir"*/; do
+#     if [ -d "$dir" ]; then
+#         clean_dir="${dir%/}"
+#         scene_name=$(basename "$clean_dir")
+#         if [[ "$scene_name" == "README.txt" ]] || [[ "$scene_name" == *.zip ]]; then
+#             continue
+#         fi
+
+#         output_dir="output/mcmc/ubs/nerf_synthetic/${scene_name}"
+#         echo "Processing ${scene_name} with mode ubs (MCMC)..."
+#         run_experiment "ubs" "$output_dir" "$dir" "--noise_lr 1000"
+#     fi
+# done
+
 
 echo "MCMC Benchmark completed!"

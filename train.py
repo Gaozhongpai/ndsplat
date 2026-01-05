@@ -92,6 +92,7 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
     elif "ndgs" in mode:
         gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim,
                                     use_rot_scale_l_triangle=dataset.use_rot_scale_l_triangle,
+                                    learnable_lambda_opc=dataset.learnable_lambda_opc,
                                     lambda_opc=dataset.lambda_opc)
     elif mode == "dgs":
         # DGS mode: Full DGS with configurable view-dependent position

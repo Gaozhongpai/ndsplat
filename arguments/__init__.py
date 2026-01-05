@@ -122,9 +122,9 @@ class OptimizationParams(ParamGroup):
         self.rotation_lr = 0.001
 
         # UBS-specific learning rates
-        self.mean_lr = 0.0001
-        self.beta_lr = 0.0001
-        self.rgb_lr = 0.0025
+        self.mean_lr = 0.001
+        self.beta_lr = 0.001
+        self.rgb_lr = 0.001
         self.scale_lr = 0.005
         self.l_triangle_lr = 0.001
 
@@ -143,8 +143,6 @@ class OptimizationParams(ParamGroup):
         self.mcmc_cap_max = 300_000  # Maximum number of Gaussians
         self.mcmc_refine_interval = 100  # Interval for MCMC refinement
         self.mcmc_densify_until_iter = 25_000  # MCMC densifies longer than standard (25k vs 15k)
-        self.mcmc_add_rate = 0.25  # Rate of adding new Gaussians (fraction per refinement)
-        self.mcmc_remove_rate = 0.1  # Rate of removing Gaussians (fraction per refinement)
         self.noise_lr = 1.0  # Noise learning rate for MCMC spatial perturbation (matching UBS)
         self.opacity_reg = 0.01  # Opacity regularization weight for MCMC
         self.scale_reg = 0.01  # Scale regularization weight for MCMC

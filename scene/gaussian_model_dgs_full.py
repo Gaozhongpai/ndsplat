@@ -39,8 +39,11 @@ from utils.general_utils import strip_symmetric, build_scaling_rotation
 
 # Import CUDA-accelerated slice functions
 # from gsplat import slice_gaussian_full
-from gsplat import (_slice_gaussian_full as slice_gaussian_full,
-                     _slice_gaussian_full_v2 as slice_gaussian_full_v2)
+# from gsplat import (_slice_gaussian_full as slice_gaussian_full,
+#                      _slice_gaussian_full_v2 as slice_gaussian_full_v2)
+
+from gsplat import (slice_gaussian_full,
+                    slice_gaussian_full_v2)
 
 
 def quaternion_multiply(q1, q2):
@@ -756,18 +759,17 @@ class GaussianModel:
 
         # Add view-dependent position parameters
         if self.use_view_dependent_pos:
-            l.append({'params': [self._v_12_direction], 'lr': training_args.feature_lr, "name": "v_12_direction"})
-            l.append({'params': [self._v_12_scale], 'lr': training_args.feature_lr, "name": "v_12_scale"})
+            l.append({'params': [self._v_12_direction], 'lr': training_args.rotation_lr, "name": "v_12_direction"})
+            l.append({'params': [self._v_12_scale], 'lr': training_args.scaling_lr, "name": "v_12_scale"})
             # Lambda parameters (only when position conditioning is enabled AND not in decouple mode)
             if not self.use_opacity_pos_decouple:
-                l.append({'params': [self._lambda_view], 'lr': training_args.feature_lr, "name": "lambda_view"})
+                l.append({'params': [self._lambda_view], 'lr': training_args.beta_lr, "name": "lambda_view"})
                 if self.input_dim == 7:
-                    l.append({'params': [self._lambda_time], 'lr': training_args.feature_lr, "name": "lambda_time"})
+                    l.append({'params': [self._lambda_time], 'lr': training_args.beta_lr, "name": "lambda_time"})
 
         # Add beta if enabled
         if self.use_beta:
-            beta_lr = getattr(training_args, 'beta_lr', training_args.rotation_lr)
-            l.append({'params': [self._beta], 'lr': beta_lr, "name": "beta"})
+            l.append({'params': [self._beta], 'lr': training_args.beta_lr, "name": "beta"})
 
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
         self.xyz_scheduler_args = get_expon_lr_func(

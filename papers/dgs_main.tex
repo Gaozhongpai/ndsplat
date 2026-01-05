@@ -1,49 +1,55 @@
+%%%%%%%% ICML 2026 EXAMPLE LATEX SUBMISSION FILE %%%%%%%%%%%%%%%%%
+
 \documentclass{article}
 
+% Recommended, but optional, packages for figures and better typesetting:
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage{booktabs} % for professional tables
 
-% if you need to pass options to natbib, use, e.g.:
-\PassOptionsToPackage{numbers, compress}{natbib}
-% before loading neurips_2025
-
-
-% ready for submission
-% \usepackage{neurips_2025}
-
-
-% to compile a preprint version, e.g., for submission to arXiv, add add the
-% [preprint] option:
-\usepackage[preprint]{neurips_2025}
+% hyperref makes hyperlinks in the resulting PDF.
+% If your build breaks (sometimes temporarily if a hyperlink spans a page)
+% please comment out the following usepackage line and replace
+% \usepackage{icml2026} with \usepackage[nohyperref]{icml2026} above.
+\usepackage{hyperref}
 
 
-% to compile a camera-ready version, add the [final] option, e.g.:
-%\usepackage[final]{neurips_2025}
+% Attempt to make hyperref and algorithmic work together better:
+\newcommand{\theHalgorithm}{\arabic{algorithm}}
+
+% Use the following line for the initial blind version submitted for review:
+\usepackage{icml2026}
+
+% For preprint, use
+% \usepackage[preprint]{icml2026}
+
+% If accepted, instead use the following line for the camera-ready submission:
+% \usepackage[accepted]{icml2026}
 
 
-% to avoid loading the natbib package, add option nonatbib:
-%\usepackage[nonatbib]{neurips_2025}
-
-
-
+% Additional packages (avoiding duplicates with template packages above)
 \usepackage[utf8]{inputenc} % allow utf-8 input
 \usepackage[T1]{fontenc}% use 8-bit T1 fonts
-\usepackage{hyperref}% hyperlinks
 \usepackage{url}% simple URL typesetting
-\usepackage{booktabs}% professional-quality tables
 \usepackage{amsfonts}% blackboard math symbols
 \usepackage{nicefrac}% compact symbols for 1/2, etc.
-\usepackage{microtype}% microtypography
 \usepackage{xcolor}% colors
 
 \usepackage{multirow}
 \usepackage{rotating}
-\usepackage{graphicx}
 \usepackage{siunitx}
 \usepackage{makecell}
 \usepackage{bm}
 \usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{amsthm}
 \usepackage{gensymb}
-\usepackage{algorithm}
-\usepackage[noend]{algpseudocode}
+% \usepackage{algorithm}
+% \usepackage[noend]{algpseudocode}
+\newcommand{\return}{\textbf{return }}
+\newcommand{\Comment}[1]{\hfill $\triangleright$ #1}
 \usepackage{enumitem}
 
 % Add a period to the end of an abbreviation unless there's one
@@ -72,46 +78,93 @@
 % Custom commands
 \newcommand{\modelname}{\textit{d}GS}
 
-% Store title for supplementary material
-\let\titleold\title
-\renewcommand{\title}[1]{\titleold{#1}\newcommand{\thetitle}{#1}}
+% Note: \onedot, abbreviation commands (\eg, \ie, \etc, \etal, \wrt, \dof, \aka)
+% are already defined earlier in this file
+% Note: amsmath, amssymb, mathtools, amsthm already loaded above (lines 44-47)
 
-\title{\modelname: Direct Parameterization for Efficient \\ Conditional Gaussian Splatting}
+% if you use cleveref..
+\usepackage[capitalize,noabbrev]{cleveref}
 
-% The \author macro works with any number of authors. There are two commands
-% used to separate the names and addresses of multiple authors: \And and \AND.
-%
-% Using \And between authors leaves it to LaTeX to determine where to break the
-% lines. Using \AND forces a line break at that point. So, if LaTeX puts 3 of 4
-% authors names on the first line, and the last on the second line, try using
-% \AND instead of \And before the third author name.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% THEOREMS
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{assumption}[theorem]{Assumption}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
 
+% Todonotes is useful during development; simply uncomment the next line
+%    and comment out the line below the next line to turn off comments
+%\usepackage[disable,textsize=tiny]{todonotes}
+\usepackage[textsize=tiny]{todonotes}
 
-
-\author{
- Zhongpai Gao\\%\thanks{Corresponding author}
-% \qquad
-% Meng Zheng
-% \qquad
-% Benjamin Planche
-% \\
- % \textbf{Anwesa Choudhuri
-% \qquad
-% Terrence Chen
-% \qquad
-% Ziyan Wu}\\
-United Imaging Intelligence, Boston, MA
-\\
-\texttt{\{first.last\}@uii-ai.com}
-\\
-}
+% The \icmltitle you define below is probably too long as a header.
+% Therefore, a short form for the running title is supplied here:
+\icmltitlerunning{\modelname: Direct Parameterization for Efficient Conditional Gaussian Splatting}
 
 \begin{document}
 
-\maketitle
+\twocolumn[
+  \icmltitle{\modelname: Direct Parameterization for Efficient Conditional Gaussian Splatting}
+
+  % It is OKAY to include author information, even for blind submissions: the
+  % style file will automatically remove it for you unless you've provided
+  % the [accepted] option to the icml2026 package.
+
+  % List of affiliations: The first argument should be a (short) identifier you
+  % will use later to specify author affiliations Academic affiliations
+  % should list Department, University, City, Region, Country Industry
+  % affiliations should list Company, City, Region, Country
+
+  % You can specify symbols, otherwise they are numbered in order. Ideally, you
+  % should not use this facility. Affiliations will be numbered in order of
+  % appearance and this is the preferred way.
+  \icmlsetsymbol{equal}{*}
+
+  \begin{icmlauthorlist}
+    \icmlauthor{Zhongpai Gao}{uii}
+    % Additional co-authors can be added here if needed:
+    % \icmlauthor{Meng Zheng}{uii}
+    % \icmlauthor{Benjamin Planche}{uii}
+    % \icmlauthor{Anwesa Choudhuri}{uii}
+    % \icmlauthor{Terrence Chen}{uii}
+    % \icmlauthor{Ziyan Wu}{uii}
+  \end{icmlauthorlist}
+
+  \icmlaffiliation{uii}{United Imaging Intelligence, Boston, MA, USA}
+
+  \icmlcorrespondingauthor{Zhongpai Gao}{zhongpai.gao@uii-ai.com}
+
+  % You may provide any keywords that you find helpful for describing your
+  % paper; these are used to populate the "keywords" metadata in the PDF but
+  % will not be shown in the document
+  \icmlkeywords{Gaussian Splatting, Neural Rendering, Novel View Synthesis, 3D Reconstruction}
+
+  \vskip 0.3in
+]
+
+% this must go after the closing bracket ] following \twocolumn[ ...
+
+% This command actually creates the footnote in the first column listing the
+% affiliations and the copyright notice. The command takes one argument, which
+% is text to display at the start of the footnote. The \icmlEqualContribution
+% command is standard text for equal contribution. Remove it (just {}) if you
+% do not need this facility.
+
+% Use ONE of the following lines. DO NOT remove the command.
+% If you have no special notice, KEEP empty braces:
+\printAffiliationsAndNotice{}  % no special notice (required even if empty)
+% Or, if applicable, use the standard equal contribution text:
+% \printAffiliationsAndNotice{\icmlEqualContribution}
 
 \begin{abstract}
-High-dimensional Gaussian Splatting methods like 6DGS and 7DGS achieve impressive view-dependent and dynamic scene modeling through conditional N-dimensional Gaussians. However, their monolithic covariance design derives all conditioning effects from a shared joint covariance matrix, requiring expensive cubic-complexity matrix inversions in every forward pass. We introduce \modelname{}, a direct parameterization that explicitly represents each conditioning component with efficient, independent parameters. Instead of deriving parameters through covariance inversion, we directly parameterize opacity modulation via Cholesky precision factors and position shifts via displacement matrices, eliminating the need for matrix inversions while maintaining numerical stability. Our key contribution is learnable per-dimension coupling parameters that control how strongly position shifts respond to query deviations, enabling adaptive interpolation from no position conditioning to full N-DGS-style coupling. This direct parameterization achieves up to 17\% higher rendering throughput across diverse benchmarks while matching or exceeding N-DGS quality. Our approach offers a principled, efficient alternative to implicit covariance-based conditioning in high-dimensional Gaussian splatting.
+  High-dimensional Gaussian Splatting methods like 6DGS and 7DGS achieve impressive view-dependent and dynamic scene modeling through conditional N-dimensional Gaussians. However, their monolithic covariance design derives all conditioning effects from a shared joint covariance matrix, requiring expensive cubic-complexity matrix inversions in every forward pass. We introduce \modelname{}, a direct parameterization that explicitly represents each conditioning component with efficient, independent parameters. Instead of deriving parameters through covariance inversion, we directly parameterize opacity modulation via Cholesky precision factors and position shifts via displacement matrices, eliminating the need for matrix inversions while maintaining numerical stability. Our key contribution is learnable per-dimension coupling parameters that control how strongly position shifts respond to query deviations, enabling adaptive interpolation from no position conditioning to full N-DGS-style coupling. This direct parameterization achieves up to 17\% higher rendering throughput across diverse benchmarks while matching or exceeding N-DGS quality. Our approach offers a principled, efficient alternative to implicit covariance-based conditioning in high-dimensional Gaussian splatting.
 \end{abstract}
 
 \section{Introduction}
@@ -217,14 +270,15 @@ where $\mathbf{V}_{vv} \in \mathbb{R}^{3 \times 3}$ is the view precision and $v
 \centering
 \caption{Comparison between N-DGS (implicit derivation) and \modelname{} (direct parameterization). Our approach directly parameterizes opacity and position with dedicated parameters, eliminating matrix inversions. The coupling strength $\Lambda$ controls position response to queries.}
 \label{tab:comparison_overview}
-\resizebox{\columnwidth}{!}{%
+\setlength{\tabcolsep}{4pt}
+\resizebox{0.5\textwidth}{!}{%
 \begin{tabular}{@{}llll@{}}
 \toprule
 \textbf{Aspect} & \textbf{N-DGS (implicit)} & \textbf{\modelname{} (direct)} & \textbf{Benefit} \\
 \midrule
-Opacity & $\alpha \cdot \exp(-\lambda\boldsymbol{\delta}^\top\boldsymbol{\Sigma}_{qq}^{-1}\boldsymbol{\delta})$ & $\alpha \cdot \exp(-\|\mathbf{L}^\top\boldsymbol{\delta}\|^2)$ & No inversion, direct Cholesky $\mathbf{L}$ \\
-Position & $\boldsymbol{\mu}_p + \boldsymbol{\Sigma}_{pq}\boldsymbol{\Sigma}_{qq}^{-1}\boldsymbol{\delta}$ & $\boldsymbol{\mu}_p + \mathbf{V}_{pq}\text{diag}(\boldsymbol{\Lambda})\mathbf{V}_{qq}\boldsymbol{\delta}$ & Direct $\mathbf{V}_{pq}$, learnable $\boldsymbol{\Lambda}$ \\
-Covariance & $\boldsymbol{\Sigma}_{pp} - \boldsymbol{\Sigma}_{pq}\boldsymbol{\Sigma}_{qq}^{-1}\boldsymbol{\Sigma}_{pq}^\top$ & $\boldsymbol{\Sigma}_{pp}$ (direct) & No correction term needed \\
+Opacity & $\alpha \cdot \exp(-\lambda\boldsymbol{\delta}^\top\boldsymbol{\Sigma}_{qq}^{-1}\boldsymbol{\delta})$ & $\alpha \cdot \exp(-\|\mathbf{L}^\top\boldsymbol{\delta}\|^2)$ & No inversion \\
+Position & $\boldsymbol{\mu}_p + \boldsymbol{\Sigma}_{pq}\boldsymbol{\Sigma}_{qq}^{-1}\boldsymbol{\delta}$ & $\boldsymbol{\mu}_p + \mathbf{V}_{pq}\tilde{\mathbf{V}}_{qq}\boldsymbol{\delta}$ & Direct $\mathbf{V}_{pq}$ \\
+Covariance & $\boldsymbol{\Sigma}_{pp} - \boldsymbol{\Sigma}_{pq}\boldsymbol{\Sigma}_{qq}^{-1}\boldsymbol{\Sigma}_{pq}^\top$ & $\boldsymbol{\Sigma}_{pp}$ (direct) & No correction term \\
 \bottomrule
 \end{tabular}%
 }
@@ -273,19 +327,22 @@ Since the original N-DGS methods (6DGS and 7DGS) use PyTorch's autograd for cond
 \textbf{Modular Compatibility.} Our implementation provides compile-time options to enable different levels of conditioning: (1) standard 3DGS with no conditioning, (2) \textit{d}GS-O with opacity modulation only, and (3) full \textit{d}GS with both opacity and position modulation. This modularity maintains compatibility with existing 3DGS codebases while allowing practitioners to select the appropriate complexity-performance tradeoff for their application.
 
 
-\begin{algorithm}[h]
-\caption{Conditional Gaussian Slicing}
+\begin{algorithm}[tb]
+\caption{\textit{d}GS Conditional Gaussian Slicing}
 \label{alg:slice}
 \begin{algorithmic}[1]
-\Require Per-Gaussian parameters: $\mu_p$, $\mu_q$, $\alpha$, $\mathbf{S}$, $\boldsymbol{\Theta}_{pq}$, $\mathbf{L}$, $\Lambda$
-\Require Query point: $\text{query}$ (view direction for 6DGS, or view+time for 7DGS)
-\State $\boldsymbol{\delta} \gets \text{query} - \mu_q$ \Comment{Compute query deviation}
-\State $\alpha_{\text{cond}} \gets \alpha \cdot \exp(-\|\mathbf{L}^\top \boldsymbol{\delta}\|^2)$ \Comment{Conditional opacity}
-\State \Return $\alpha_{\text{cond}}, \mu_p$ \textbf{if} \textit{d}GS-O variant \Comment{Early exit for opacity-only: skip position conditioning}
-\State $\mathbf{V}_{pq} \gets \text{mean}(\text{diag}(\mathbf{S})) \cdot \boldsymbol{\Theta}_{pq}$ \Comment{Construct displacement matrix ($\boldsymbol{\Theta}_{pq}$ normalized)}
-\State $\tilde{\mathbf{V}}_{qq} \gets \text{diag}(\boldsymbol{\Lambda}) \mathbf{L}\mathbf{L}^\top$ \Comment{Scaled precision for per-dimension coupling}
-\State $\mu_{\text{cond}} \gets \mu_p + \mathbf{V}_{pq} \cdot \tilde{\mathbf{V}}_{qq} \cdot \boldsymbol{\delta}$ \Comment{Conditional position}
-\State \Return $\alpha_{\text{cond}}$, $\mu_{\text{cond}}$
+\REQUIRE Gaussian parameters: $\mu_p$, $\mu_q$, $\alpha$, $\mathbf{S}$, $\boldsymbol{\Theta}_{pq}$, $\mathbf{L}$, $\Lambda$
+\REQUIRE Query point: $q$ (view/time)
+\STATE $\boldsymbol{\delta} \gets q - \mu_q$ %\Comment{Compute query deviation}
+\STATE $\alpha_{\text{cond}} \gets \alpha \cdot \exp(-\|\mathbf{L}^\top \boldsymbol{\delta}\|^2)$ % \Comment{Conditional opacity}
+\IF{\textit{d}GS-O variant}
+    \STATE \return  $\alpha_{\text{cond}}, \mu_p$ \Comment{Early exit for opacity only}
+\ENDIF
+\STATE $\mathbf{V}_{pq} \gets \text{mean}(\text{diag}(\mathbf{S})) \cdot \boldsymbol{\Theta}_{pq}$ % \Comment{Construct displacement matrix}
+\STATE $\tilde{\mathbf{V}}_{qq} \gets \text{diag}(\boldsymbol{\Lambda}) \mathbf{L}\mathbf{L}^\top$ % \Comment{Scaled precision for coupling}
+\STATE $\mu_{\text{cond}} \gets \mu_p + \mathbf{V}_{pq} \cdot \tilde{\mathbf{V}}_{qq} \cdot \boldsymbol{\delta}$ % \Comment{Conditional position}
+\STATE \return $\alpha_{\text{cond}}$, $\mu_{\text{cond}}$ 
+
 \end{algorithmic}
 \end{algorithm}
 
@@ -307,43 +364,43 @@ We assess reconstruction quality using Peak Signal-to-Noise Ratio (PSNR), Struct
 \textbf{Implementation Details.}
 We compare three configurations: (1) \textbf{N-DGS}: full N-DGS formulation with joint position and opacity conditioning (entangled baseline), (2) \textbf{\textit{d}GS-O}: our disentangled approach with opacity conditioning only ($\mu_{\text{cond}} = \mu_p$, no position displacement), and (3) \textbf{\textit{d}GS}: our full disentangled approach with both opacity conditioning and learnable per-dimension position coupling via $\Lambda$. Training uses Adam optimizer for 30K iterations. Proper initialization is critical for stable training: we initialize the view mean $\mu_d$ as random unit vectors (with time in $[0, 1]$ for 7DGS), the displacement parameters $\boldsymbol{\Theta}_{pq}$ from $\mathcal{N}(0, 0.01^2)$ to start with small displacements, and the Cholesky factor $\mathbf{L}$ with diagonal elements $\log(2.0)$ and off-diagonal elements 0.
 
-\begin{table}[t]
+\begin{table*}[t]
 \centering
-\caption{Comparison of methods on Mip-NeRF 360, NeRF Synthetic, and 6DGS PBR datasets with MCMC densification. Mean values across all scenes are reported. Number of Gaussians (K) and train time (min). FPS$_{\text{PyTorch}}$ and FPS$_{\text{CUDA}}$ represent FPS where conditional Gaussian operations are implemented in PyTorch and CUDA, respectively. Note that, N-DGS, \textit{d}GS-O, and \textit{d}GS are integrated with TCGS to speed up rendering.}
+\caption{Comparison of methods on Mip-NeRF 360, NeRF Synthetic, and 6DGS PBR datasets with MCMC densification. Mean values across all scenes are reported. Number of Gaussians (K) and train time (min). FPS and FPS$_{\text{CUDA}}$ represent that conditional Gaussian operations are implemented in PyTorch and CUDA, respectively. Note that, N-DGS, \textit{d}GS-O, and \textit{d}GS are integrated with TCGS to speed up rendering.}
 \label{tab:mcmc_comparison}
-\resizebox{\textwidth}{!}{%
+\resizebox{0.85\textwidth}{!}{%
 \begin{tabular}{@{}cl|rrrr|ccc@{}}
 \toprule
-Dataset & Method & \#Gauss $\downarrow$ & Train $\downarrow$ & FPS$_{\text{PyTorch}}$ $\uparrow$& FPS$_{\text{CUDA}}$ $\uparrow$& PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ \\
+Dataset & Method & \#Gauss $\downarrow$ & Train $\downarrow$ & FPS $\uparrow$& FPS$_{\text{CUDA}}$ $\uparrow$& PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ \\
 \midrule
 \multirow{4}{*}{\makecell{\texttt{Mip-NeRF}\\\texttt{360}}}
-& 3DGS & 3,104 & \bf 40.16 & 47.62 & - & 27.06 & 0.788 & 0.237 \\
+& 3DGS & 3,104 & \bf 40.16 & 47.62 & --- & 27.06 & 0.788 & 0.237 \\
 & N-DGS & 2,852 & 51.23 & 33.79 & 75.31 & 26.88 & 0.775 & 0.263 \\
 & \textit{d}GS-O (\textbf{Ours}) & 2,852 & 48.11 & \bf 91.43 & 200.17 & 27.36 & 0.788 & 0.242 \\
 & \textit{d}GS (\textbf{Ours}) & 2,574 & 49.85 & 43.72 & \bf 200.56 & \bf 27.67 & \bf 0.794 & \bf 0.227 \\
 \midrule
 \multirow{4}{*}{\makecell{\texttt{NeRF}\\\texttt{Synthetic}}}
-& 3DGS & 300 & \bf 7.80 & 303.09 & - & 33.72 & 0.971 & 0.028 \\
+& 3DGS & 300 & \bf 7.80 & 303.09 & --- & 33.72 & 0.971 & 0.028 \\
 & N-DGS & 300 & 10.43 & 179.12 & 348.95 & 34.04 & \bf 0.973 & 0.027 \\
 & \textit{d}GS-O (\textbf{Ours}) & 300 & 9.71 & \bf 400.96 & 587.84 & 34.25 & \bf 0.973 & \bf 0.026 \\
 & \textit{d}GS (\textbf{Ours}) & 300 & 10.26 & 267.33 & \bf 593.94 & \bf 34.34 & \bf 0.973 & \bf 0.026 \\
 \midrule
 \multirow{4}{*}{\makecell{\texttt{6DGS}\\\texttt{PBR}}}
-& 3DGS & 163 & 53.28& 183.78 & - & 30.89 & 0.938 & 0.077 \\
+& 3DGS & 163 & 53.28& 183.78 & --- & 30.89 & 0.938 & 0.077 \\
 & N-DGS & 163 & 54.80 & 292.60 & 476.79 & 40.06 & \bf 0.976 & 0.039 \\
 & \textit{d}GS-O (\textbf{Ours}) & 163 & 48.72  & \bf 467.06 & \bf 588.23& 39.51 & 0.971 & 0.046 \\
 & \textit{d}GS (\textbf{Ours}) & 163 & \bf 47.54 & 364.74 & 551.02 & \bf 40.34 & \bf 0.976 & \bf 0.038 \\
 \bottomrule
 \end{tabular}}
-\end{table}
+\end{table*}
 
 
 % Merged Summary Results Table
-\begin{table}[h]
+\begin{table*}[h]
 \centering
 \caption{Mean results across all datasets: 3 static (NeRF Synthetic, Mip-NeRF 360, 6DGS PBR) and 2 dynamic (D-NeRF, 7DGS PBR). Top: quality metrics (PSNR, SSIM, LPIPS). Bottom: efficiency metrics (\#Gaussians in K, training time in mins, rendering FPS). See Appendix for per-scene details.}
 \label{tab:summary_results}
-\resizebox{\textwidth}{!}{%
+\resizebox{0.85\textwidth}{!}{%
 \begin{tabular}{l|rrr|rrr|rrr}
 \toprule
  & \multicolumn{3}{c|}{N-DGS} & \multicolumn{3}{c|}{\textit{d}GS-O (\textbf{Ours})} & \multicolumn{3}{c}{\textit{d}GS (\textbf{Ours})} \\
@@ -362,7 +419,7 @@ Dataset & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ & PSNR $\uparro
 \midrule
 \multicolumn{10}{c}{\textbf{Efficiency Metrics}} \\
 \midrule
-Dataset & \#Gauss $\downarrow$ & Time $\downarrow$ & FPS $\uparrow$ & \#Gauss $\downarrow$ & Time $\downarrow$ & FPS $\uparrow$ & \#Gauss $\downarrow$ & Time $\downarrow$ & FPS $\uparrow$ \\
+Dataset & \#Gauss $\downarrow$ & Time $\downarrow$ & FPS$_{\text{CUDA}}$ $\uparrow$ & \#Gauss $\downarrow$ & Time $\downarrow$ & FPS$_{\text{CUDA}}$ $\uparrow$ & \#Gauss $\downarrow$ & Time $\downarrow$ & FPS$_{\text{CUDA}}$ $\uparrow$ \\
 \midrule
 \texttt{NeRF Synthetic} & \textbf{171} & 6.35 & 615.57 & 201 & \textbf{5.83} & \textbf{754.98} & 201 & 6.84 & 704.84 \\
 \texttt{Mip-NeRF 360} & \textbf{1273} & 27.09 & 147.46 & 2363 & \textbf{25.58} & \textbf{279.30} & 2463 & 28.21 & 237.82 \\
@@ -373,7 +430,7 @@ Dataset & \#Gauss $\downarrow$ & Time $\downarrow$ & FPS $\uparrow$ & \#Gauss $\
 \bottomrule
 \end{tabular}%
 }
-\end{table}
+\end{table*}
 
 
 \subsection{Results and Analysis}
@@ -392,16 +449,18 @@ To understand the contribution of each component in our approach, we conduct an 
 \centering
 \caption{Ablation study on NeRF Synthetic and 6DGS PBR datasets. \textit{d}GS w/o $\bar{s}$ removes spatial scaling while \textit{d}GS uses spatial scaling.}
 \label{tab:ablation}
+\setlength{\tabcolsep}{4pt}
+\resizebox{0.5\textwidth}{!}{%
 \begin{tabular}{l|ccc|ccc}
 \toprule
- & \multicolumn{3}{c|}{NeRF Synthetic} & \multicolumn{3}{c}{6DGS PBR} \\
-Configuration & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ \\
+ & \multicolumn{3}{c|}{\texttt{NeRF Synthetic}} & \multicolumn{3}{c}{\texttt{6DGS PBR}} \\
+Config & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ \\
 \midrule
 \textit{d}GS-O & 33.84 & 0.971 & 0.030 & 36.54 & 0.965 & 0.059 \\
 \textit{d}GS w/o $\bar{s}$ & 31.26 & 0.957 & 0.046 & 34.78 & 0.951 & 0.075 \\
 \textit{d}GS (full) & \textbf{33.91} & \textbf{0.972} & \textbf{0.029} & \textbf{37.75} & \textbf{0.972} & \textbf{0.052} \\
 \bottomrule
-\end{tabular}%
+\end{tabular}}%
 \end{table}
 
 \section{Future Work}
@@ -413,27 +472,17 @@ The direct parameterization framework naturally extends to additional conditioni
 We presented \modelname{}, a direct parameterization for efficient N-dimensional Gaussian splatting. Our key insight is that conditional Gaussian formulas, while mathematically elegant, are computationally inefficient---each conditioning effect can be directly parameterized with dedicated parameters instead of being implicitly derived through matrix algebra. This direct approach delivers efficiency by eliminating cubic-complexity matrix inversions, stability through explicit Cholesky parameterization, and flexibility via learnable per-dimension coupling strengths that control how strongly each effect responds to queries. Experiments demonstrate up to 17\% higher rendering throughput while matching or exceeding N-DGS quality across diverse benchmarks. The direct parameterization framework naturally extends to additional conditioning effects like rotation, lighting, and materials, providing a principled foundation for future high-dimensional Gaussian representations.
 
 % References section
-\bibliographystyle{plainnat} % Using plainnat style for compatibility with numbers option if used
-\bibliography{references} % Assumes references are in references.bib
+\bibliographystyle{icml2026}
+\bibliography{references}
 
-\clearpage
-\def\maketitlesupplementary
-   {
-   \newpage
-       % \twocolumn[
-        {\centering
-        \Large
-        \textbf{\thetitle}\\\
-        \vspace{0.3em}Supplementary Material \\
-        \vspace{0.5em}
-       % ] %< twocolumn
-       }
-   }
-\maketitlesupplementary
-
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% APPENDIX
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newpage
 \appendix
-
-
+\onecolumn
 \section{Comparison to N-DGS Displacement Parameterization}
 \label{sec:spatial_scaling_proof}
 
@@ -540,7 +589,7 @@ This section provides comprehensive per-scene breakdowns for all experiments. Ta
 \begin{table*}[bp]
   \centering
   \caption{\small{Detailed quantitative comparison across all datasets at 30K iterations. N-DGS, dGS-O, and dGS are compared on static benchmarks (NeRF Synthetic, Mip-NeRF 360, 6DGS PBR) and dynamic benchmarks (7DGS PBR, D-NeRF).}} %Note, NeRF Synthetic and 7DGS PBR use decoupled opacity and position.
-  \resizebox{\linewidth}{!}{
+  \resizebox{0.90\linewidth}{!}{
         \begin{tabular}{@{\hskip 2pt}cc|@{\hskip 2pt}l@{\hskip 2pt}|@{\hskip 2pt}r@{\hskip 2pt}r@{\hskip 2pt}r|@{\hskip 2pt}r@{\hskip 2pt}r@{\hskip 2pt}r|@{\hskip 2pt}r@{\hskip 2pt}r@{\hskip 2pt}r@{\hskip 2pt}}
 
     \toprule
@@ -612,11 +661,11 @@ This section provides comprehensive per-scene breakdowns for all experiments. Ta
 
   % ---------------- tandt_pbr ----------------
 & \multicolumn{1}{c|@{\hskip 2pt}}{\multirow{8}[4]{*}{\begin{sideways}6DGS PBR\end{sideways}}}
-    & \texttt{bunny\_cloud} & 40.87 & 0.993 & 0.045 & 43.44 & 0.993 & 0.042 & \bf 44.14 & \bf 0.993 & \bf 0.040 \\
+    & \texttt{bunny} & 40.87 & 0.993 & 0.045 & 43.44 & 0.993 & 0.042 & \bf 44.14 & \bf 0.993 & \bf 0.040 \\
     & & \texttt{cloud}     & 41.93 & 0.991 & 0.052 & 43.47 & 0.992 & 0.048 & \bf 43.53 & \bf 0.992 & \bf 0.045 \\
     & & \texttt{dragon}    & \bf 35.69 & \bf 0.947 & \bf 0.039 & 34.42 & 0.914 & 0.051 &  36.68 &  0.947 & 0.039 \\
     & & \texttt{explosion} & \bf 40.97 & \bf 0.989 & \bf 0.037 & 37.81 & 0.983 & 0.041 & 38.95 & 0.985 & 0.039 \\
-    & & \texttt{rvr\_x}     & 33.48 & 0.964 & 0.057 & 31.81 & 0.956 & 0.067 & \bf 34.62 & \bf 0.970 & \bf 0.048 \\
+    & & \texttt{ct-scan}     & 33.48 & 0.964 & 0.057 & 31.81 & 0.956 & 0.067 & \bf 34.62 & \bf 0.970 & \bf 0.048 \\
     & & \texttt{smoke}     & \bf 40.02 & \bf 0.990 & \bf 0.041 & 38.20 & 0.989 & 0.049 & 39.28 & \bf 0.990 & 0.047 \\
     & & \texttt{suzanne}   & 26.81 & 0.929 & \bf 0.106 & 26.65 & 0.927 & 0.112 & \bf 27.03 & \bf 0.930 & 0.107 \\
 \cmidrule{3-12}
@@ -678,10 +727,10 @@ This section provides comprehensive per-scene breakdowns for all experiments. Ta
     \cmidrule{2-12}
 
 & \multirow{9}{*}{\begin{sideways}D-NeRF\end{sideways}}
-        & \texttt{bouncingballs}  & \bf 34.00 & \bf 0.981 & 0.025 & 32.52 & 0.978 & 0.028 &  33.59 & \bf 0.981 & \bf 0.023 \\
-        & & \texttt{hellwarrior}& 32.76 & 0.932 & 0.093 & 33.54 & 0.941 & 0.085 & \bf 34.64 & \bf 0.947 & \bf 0.073 \\
+        & \texttt{b.balls}  & \bf 34.00 & \bf 0.981 & 0.025 & 32.52 & 0.978 & 0.028 &  33.59 & \bf 0.981 & \bf 0.023 \\
+        & & \texttt{h.warrior}& 32.76 & 0.932 & 0.093 & 33.54 & 0.941 & 0.085 & \bf 34.64 & \bf 0.947 & \bf 0.073 \\
         & & \texttt{hook}     & 31.15 & 0.960 & 0.044 & 28.55 & 0.937 & 0.062 & \bf 32.94 & \bf 0.970 & \bf 0.030 \\
-        & & \texttt{jumpingjacks}  & \bf 31.22 & \bf 0.967 & 0.043 & 28.62 & 0.952 & 0.054 & 30.86 & 0.965 & \bf 0.039 \\
+        & & \texttt{j.jacks}  & \bf 31.22 & \bf 0.967 & 0.043 & 28.62 & 0.952 & 0.054 & 30.86 & 0.965 & \bf 0.039 \\
         & & \texttt{lego}     & \bf 28.33 & \bf 0.943 & 0.055 & 27.13 & 0.939 &  0.055 & 28.06 & 0.942 & \bf 0.054 \\
         & & \texttt{mutant}   & 39.38 & 0.993 & 0.007 & 34.55 & 0.981 & 0.019 & \bf 39.84 & \bf 0.993 & \bf 0.006 \\
         & & \texttt{standup}  & 38.50 & 0.988 & 0.013 & 33.02 & 0.972 & 0.029 & \bf 38.76 & \bf 0.990 & \bf 0.009 \\
@@ -709,7 +758,7 @@ This section provides comprehensive per-scene breakdowns for all experiments. Ta
 \begin{table*}[tbp]
   \centering
   \caption{\small{Detailed efficiency comparison across all datasets at 30K iterations. N-DGS, \textit{d}GS-O, and \textit{d}GS are compared showing number of Gaussians (K), training time (minutes), and rendering FPS on static benchmarks (NeRF Synthetic, Mip-NeRF 360, 6DGS PBR) and dynamic benchmarks (7DGS PBR, D-NeRF).}} %Note, NeRF Synthetic and 7DGS PBR use decoupled opacity and position.
-  \resizebox{\linewidth}{!}{
+  \resizebox{0.96\linewidth}{!}{
         \begin{tabular}{@{\hskip 2pt}cc|@{\hskip 2pt}l@{\hskip 2pt}|@{\hskip 2pt}r@{\hskip 2pt}r@{\hskip 2pt}r|@{\hskip 2pt}r@{\hskip 2pt}r@{\hskip 2pt}r|@{\hskip 2pt}r@{\hskip 2pt}r@{\hskip 2pt}r@{\hskip 2pt}}
 
     \toprule
@@ -721,13 +770,13 @@ This section provides comprehensive per-scene breakdowns for all experiments. Ta
 \cmidrule{4-12}
           &&       & \multicolumn{1}{@{\hskip 2pt}c@{\hskip 2pt}}{\#Gauss$\downarrow$}
                   & \multicolumn{1}{@{\hskip 2pt}c@{\hskip 2pt}}{Time$\downarrow$}
-                  & \multicolumn{1}{c|@{\hskip 2pt}}{FPS$\uparrow$}
+                  & \multicolumn{1}{c|@{\hskip 2pt}}{FPS$_{\text{CUDA}}$$\uparrow$}
                   & \multicolumn{1}{@{\hskip 2pt}c@{\hskip 2pt}}{\#Gauss$\downarrow$}
                   & \multicolumn{1}{@{\hskip 2pt}c@{\hskip 2pt}}{Time$\downarrow$}
-                  & \multicolumn{1}{c|@{\hskip 2pt}}{FPS$\uparrow$}
+                  & \multicolumn{1}{c|@{\hskip 2pt}}{FPS$_{\text{CUDA}}$$\uparrow$}
                   & \multicolumn{1}{@{\hskip 2pt}c@{\hskip 2pt}}{\#Gauss$\downarrow$}
                   & \multicolumn{1}{@{\hskip 2pt}c@{\hskip 2pt}}{Time$\downarrow$}
-                  & \multicolumn{1}{@{\hskip 2pt}c@{\hskip 2pt}}{FPS$\uparrow$} \\
+                  & \multicolumn{1}{@{\hskip 2pt}c@{\hskip 2pt}}{FPS$_{\text{CUDA}}$$\uparrow$} \\
     \midrule
 
 \multicolumn{1}{@{\hskip 2pt}c}{\multirow{30}[4]{*}{\begin{sideways}STATIC SCENES\end{sideways}}}
@@ -781,11 +830,11 @@ This section provides comprehensive per-scene breakdowns for all experiments. Ta
 
   % ---------------- tandt_pbr ----------------
 & \multicolumn{1}{c|@{\hskip 2pt}}{\multirow{8}[4]{*}{\begin{sideways}6DGS PBR\end{sideways}}}
-    & \texttt{bunny\_cloud} & \bf 24 & 33.69 & \bf 718.47 & 63 & 42.62 & 689.88 & 62 & 45.03 & 642.86 \\
+    & \texttt{bunny} & \bf 24 & 33.69 & \bf 718.47 & 63 & 42.62 & 689.88 & 62 & 45.03 & 642.86 \\
     & & \texttt{cloud}     & \bf 17 & 32.61 & 597.10 & 62 & 39.08 & \bf 700.35 & 60 & 41.31 & 654.93 \\
     & & \texttt{dragon}    & \bf 93 & 12.76 & \bf 855.89 & 118 & 12.87 & 787.64 & 134 & 13.28 & 753.36 \\
     & & \texttt{explosion} & \bf 35 & 22.13 & \bf 875.48 & 72 & 29.54 & 813.28 & 73 & 40.77 & 753.18 \\
-    & & \texttt{rvr\_x}     & \bf 171 & 6.57 & 689.47 & 221 & \bf 6.44 & \bf 796.54 & 299 & 7.45 & 695.69 \\
+    & & \texttt{ct-scan}     & \bf 171 & 6.57 & 689.47 & 221 & \bf 6.44 & \bf 796.54 & 299 & 7.45 & 695.69 \\
     & & \texttt{smoke}     & \bf 52 & 46.48 & \bf 608.02 & 72 & 55.67 & 568.30 & 74 & 58.15 & 547.93 \\
     & & \texttt{suzanne}   & \bf 201 & 33.16 & 404.34 & 221 & \bf 28.80 & \bf 518.17 & 233 & 30.58 & 526.10 \\
 \cmidrule{3-12}
@@ -826,10 +875,10 @@ This section provides comprehensive per-scene breakdowns for all experiments. Ta
     \cmidrule{2-12}
 
 & \multirow{9}{*}{\begin{sideways}D-NeRF\end{sideways}}
-        & \texttt{bouncingballs}  & 179 & 22.73 & 398.65 & \bf 103 & \bf 16.09 & \bf 770.99 & 128 & 17.72 & 636.37 \\
-        & & \texttt{hellwarrior}& \bf 13 & 8.25 & \bf 1151.03 & 17 & \bf 7.87 & 1141.34 & 18 & 9.23 & 1068.65 \\
+        & \texttt{b.balls}  & 179 & 22.73 & 398.65 & \bf 103 & \bf 16.09 & \bf 770.99 & 128 & 17.72 & 636.37 \\
+        & & \texttt{h.warrior}& \bf 13 & 8.25 & \bf 1151.03 & 17 & \bf 7.87 & 1141.34 & 18 & 9.23 & 1068.65 \\
         & & \texttt{hook}     & \bf 37 & \bf 9.71 & \bf 1042.00 & 55 & 11.42 & 1027.26 & 75 & 14.58 & 865.61 \\
-        & & \texttt{jumpingjacks}  & \bf 25 & \bf 9.61 & 1069.25 & 31 & 10.67 & \bf 1101.29 & 71 & 14.48 & 899.56 \\
+        & & \texttt{j.jacks}  & \bf 25 & \bf 9.61 & 1069.25 & 31 & 10.67 & \bf 1101.29 & 71 & 14.48 & 899.56 \\
         & & \texttt{lego}     & \bf 114 & 21.09 & 583.20 & 143 & \bf 17.93 & \bf 700.47 & 125 & 19.28 & 685.07 \\
         & & \texttt{mutant}   & \bf 63 & 14.74 & 829.30 & 67 & \bf 13.27 & \bf 930.20 & 79 & 15.47 & 810.36 \\
         & & \texttt{standup}  & \bf 21 & 9.71 & 1074.73 & 26 & \bf 9.28 & \bf 1140.56 & 51 & 14.00 & 867.39 \\
@@ -850,5 +899,6 @@ This section provides comprehensive per-scene breakdowns for all experiments. Ta
     }
   \label{tab:efficiency_combined}
 \end{table*}
+
 
 \end{document}
