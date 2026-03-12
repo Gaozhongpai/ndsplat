@@ -1682,7 +1682,7 @@ class GaussianModel:
         if num_valid == 0:
             bg_color = torch.tensor(render_tab_state.backgrounds, device="cuda") / 255.0
             render_colors = bg_color.view(3, 1, 1).expand(3, H, W)
-            return render_colors.cpu().numpy().transpose(1, 2, 0)
+            return render_colors.detach().cpu().numpy().transpose(1, 2, 0)
 
         self.background = (
             torch.tensor(render_tab_state.backgrounds, device="cuda") / 255.0
@@ -1764,4 +1764,4 @@ class GaussianModel:
         else:
             render_tab_state.fps = 0.0
 
-        return render_colors.cpu().numpy()
+        return render_colors.detach().cpu().numpy()

@@ -30,6 +30,16 @@ def viewing(model_params, viewer_params, ply_path, input_dim=6, auto_camera=True
     elif "ndgs" in model_params.mode:
         gaussian_model = GaussianModel(model_params.sh_degree, input_dim=input_dim,
                                        use_rot_scale_l_triangle=model_params.use_rot_scale_l_triangle)
+    elif "dgs" in model_params.mode:
+        gaussian_model = GaussianModel(
+            model_params.sh_degree,
+            input_dim=input_dim,
+            use_beta=model_params.use_beta,
+            use_view_dependent_pos=model_params.use_view_dependent_pos,
+            use_opacity_pos_decouple=model_params.use_opacity_pos_decouple,
+            l_22_inv_init_scale=model_params.l_22_inv_init_scale,
+            lambda_init=model_params.lambda_init
+        )
     else:
         gaussian_model = GaussianModel(model_params.sh_degree)
 
