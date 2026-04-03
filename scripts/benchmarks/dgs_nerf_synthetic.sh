@@ -8,6 +8,7 @@
 # | opacity_only         | output/standard/opacity_only/...           | Opacity conditioning only (no position)|
 # | opacity_pos          | output/standard/opacity_pos/...            | Opacity + Position conditioning        |
 # | opacity_pos_decouple | output/standard/opacity_pos_decouple/...   | Decoupled position + opacity (λ=0)     |
+# | opacity_pos_decouple_lambda1 | output/standard/opacity_pos_decouple_lambda1/... | Decoupled position + opacity (λ=1) |
 # | ndgs                 | output/standard/ndgs/...                   | N-DGS with full Cholesky precision     |
 # | ubs                  | output/standard/ubs/...                    | Unbounded Splatting baseline           |
 # | ndgs_v2_no_pos       | output/standard/ndgs_v2_no_pos/...         | N-DGS V2: v_11 only, no position shift |
@@ -180,6 +181,27 @@ for dir in "$base_dir"*/; do
         output_dir="output/standard/opacity_pos_decouple/nerf_synthetic/${scene_name}"
         echo "Processing ${scene_name} with mode opacity_pos_decouple..."
         run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --use_opacity_pos_decouple True"
+    fi
+done
+
+# ============================================
+# 3b. opacity_pos_decouple_lambda1 mode (decoupled λ=1)
+# ============================================
+echo "=============================================="
+echo "Running opacity_pos_decouple_lambda1 mode benchmarks"
+echo "=============================================="
+
+for dir in "$base_dir"*/; do
+    if [ -d "$dir" ]; then
+        clean_dir="${dir%/}"
+        scene_name=$(basename "$clean_dir")
+        if [[ "$scene_name" == "README.txt" ]] || [[ "$scene_name" == *.zip ]]; then
+            continue
+        fi
+
+        output_dir="output/standard/opacity_pos_decouple_lambda1/nerf_synthetic/${scene_name}"
+        echo "Processing ${scene_name} with mode opacity_pos_decouple_lambda1..."
+        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --use_opacity_pos_decouple True --lambda_init 1.0"
     fi
 done
 

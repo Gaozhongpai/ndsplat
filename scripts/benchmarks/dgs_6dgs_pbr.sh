@@ -8,6 +8,7 @@
 # | opacity_only         | output/standard/opacity_only/...           | Opacity conditioning only (no position)|
 # | opacity_pos          | output/standard/opacity_pos/...            | Opacity + Position conditioning        |
 # | opacity_pos_decouple | output/standard/opacity_pos_decouple/...   | Decoupled position + opacity (λ=0)     |
+# | opacity_pos_decouple_lambda1 | output/standard/opacity_pos_decouple_lambda1/... | Decoupled position + opacity (λ=1) |
 # | ndgs                 | output/standard/ndgs/...                   | N-DGS with full Cholesky precision     |
 # | ndgs_v2_no_pos       | output/standard/ndgs_v2_no_pos/...         | N-DGS V2: v_11 only, no position shift |
 # | ndgs_v2_with_pos     | output/standard/ndgs_v2_with_pos/...       | N-DGS V2: v_11 only, with position shift|
@@ -172,6 +173,26 @@ for dir in "$base_dir"*/; do
         output_dir="output/standard/opacity_pos_decouple/tandt_pbr/${scene_name}"
         echo "Processing ${scene_name} with mode opacity_pos_decouple..."
         run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --use_opacity_pos_decouple True --l_22_inv_init_scale 2.0"
+    fi
+done
+
+# ============================================
+# 3b. opacity_pos_decouple_lambda1 mode (decoupled λ=1)
+# ============================================
+echo "=============================================="
+echo "Running opacity_pos_decouple_lambda1 mode benchmarks"
+echo "=============================================="
+
+for dir in "$base_dir"*/; do
+    if [ -d "$dir" ]; then
+        scene_name=$(basename "${dir%/}")
+        if [[ "$scene_name" == *.zip ]]; then
+            continue
+        fi
+
+        output_dir="output/standard/opacity_pos_decouple_lambda1/tandt_pbr/${scene_name}"
+        echo "Processing ${scene_name} with mode opacity_pos_decouple_lambda1..."
+        run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --use_opacity_pos_decouple True --lambda_init 1.0 --l_22_inv_init_scale 2.0"
     fi
 done
 

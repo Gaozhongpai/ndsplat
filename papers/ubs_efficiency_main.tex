@@ -1,0 +1,40 @@
+\begin{table}[tbp]
+  \centering
+  \caption{Efficiency comparison on static and dynamic benchmarks (averaged across scenes). `\textit{Train}' indicates training time in minutes; `\textit{Mem}' indicates storage size in MB. Detailed per-scene results and per-primitive parameter comparisons are provided in Appendix~\ref{app:efficiency}.}
+  \label{tab:efficiency-main}
+  \resizebox{\linewidth}{!}{
+    \begin{tabular}{@{\hskip 4pt}l|@{\hskip 4pt}r@{\hskip 4pt}r@{\hskip 4pt}r@{\hskip 4pt}r|@{\hskip 4pt}r@{\hskip 4pt}r@{\hskip 4pt}r@{\hskip 4pt}r|@{\hskip 4pt}r@{\hskip 4pt}r@{\hskip 4pt}r@{\hskip 4pt}r@{\hskip 4pt}}
+
+    \toprule
+    \multirow{2}{*}{Dataset}
+        & \multicolumn{4}{c|@{\hskip 4pt}}{3DGS/4DGS}
+        & \multicolumn{4}{c|@{\hskip 4pt}}{6DGS/7DGS}
+        & \multicolumn{4}{@{\hskip 4pt}c}{UBS ({\bf Ours})} \\
+\cmidrule{2-13}
+          & FPS$\uparrow$ & Num$\downarrow$ & Mem$\downarrow$ & Train$\downarrow$
+                  & FPS$\uparrow$ & Num$\downarrow$ & Mem$\downarrow$ & Train$\downarrow$
+                  & FPS$\uparrow$ & Num$\downarrow$ & Mem$\downarrow$ & Train$\downarrow$  \\
+    \midrule
+
+% ---------------- nerf_synthetic ----------------
+NeRF Synthetic & 695.6 & 289.3K & 68.5 & 3.6  & 648.0 & 240.7K & 69.8 & 12.7 & 345.7 & 300.0K & 40.1 & 8.7 \\
+
+% ---------------- mipnerf360 ----------------
+Mip-NeRF 360 & 178.7 & 3.3M & 775.9 & 21.7 & 157.4 & 2.0M & 581.2 & 81.9 & 100.4 & 3.1M & 409.0 & 25.2 \\
+
+% ---------------- 6DGS-PBR ----------------
+6DGS-PBR & 305.9 & 147.7K & 34.9 & 16.8 & 339.8 & 84.3K & 24.4 & 22.2 & 290.2 & 300.0K & 40.1 & 27.7 \\
+
+\midrule
+
+% ---------------- 7DGS-PBR ----------------
+7DGS-PBR & 192.6 & 642.0K & 613.1  & 127.2 & 376.0 & 88.4K &  29.7 & 116.7 & 359.6 & 234.3K & 39.4 & 59.9 \\
+
+% ---------------- D-NeRF ----------------
+D-NeRF & 296.4 & 255.3K &  380.3 & 52.6 & 377.8 & 43.8K & 16.0 & 50.7 & 368.2 & 168.8K & 28.4 & 42.1 \\
+
+    \bottomrule
+
+    \end{tabular}
+    }
+\end{table}

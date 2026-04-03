@@ -1,0 +1,4 @@
+Acknowledgement: (c) Partially resolved or unresolved, but the remaining concerns are not easily addressed in a short rebuttal - Please select this option sparingly and only when you believe that your questions concern the core tenets of the work, and addressing them requires a significant update to the paper.
+
+Reasons:
+While I appreciate the authors’ effort to clarify the paper, but my main concerns is still not solved. The reported improvements +0.53 dB NeRF Synthetic, +0.97 dB Mip-NeRF 360, +0.46 dB D-NeRF, +0.09 dB NeRF-DS seem relatively modest, and such small gains are not sufficient to convince me without theoretical support to loose probabilistic consistency of conditional Gaussian slicing.
