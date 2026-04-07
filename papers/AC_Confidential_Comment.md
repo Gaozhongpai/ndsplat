@@ -4,7 +4,7 @@ We respectfully request a closer examination of the reviewer concerns, which we 
 
 ## The "marginal improvement" characterization is not supported by the evidence
 
-Three reviewers (kTKd, BMak, ZkXw) independently adopted the language of "marginal" or "negligible" improvements after the discussion phase. However, dGS improves over N-DGS on **every single dataset** evaluated, spanning 6 benchmarks and 38+ scenes with zero regressions:
+Three reviewers (kTKd, BMak, ZkXw) adopted the language of "marginal" or "negligible" improvements after the discussion phase. However, dGS improves over N-DGS on **every single dataset** evaluated, spanning 6 benchmarks and 38+ scenes with zero regressions:
 
 | Dataset | Scenes | PSNR gain | Setting |
 |---|---|---|---|
@@ -19,13 +19,23 @@ A +0.97 dB improvement on Mip-NeRF 360, the most widely used real-world benchmar
 
 ## The primary contribution is rendering efficiency, which reviewers underweighted
 
-The reviewers focused almost exclusively on PSNR improvements while underweighting the core contribution: rendering efficiency. Our controlled CUDA kernel benchmarks on A100 show:
+The reviewers focused almost exclusively on PSNR improvements while underweighting the core contribution: rendering efficiency. As shown in our revised Table 1, dGS eliminates 3 of 5 per-Gaussian operations required by N-DGS during conditional slicing:
+
+| Operation | N-DGS | dGS-O | dGS |
+|---|---|---|---|
+| Invert $\Sigma_{qq}$ | $\Sigma_{qq}^{-1}$ | — | — |
+| Regression matrix $K$ | $\Sigma_{pq}\Sigma_{qq}^{-1}$ | — | — |
+| Covariance correction | $K \Sigma_{pq}^\top$ | — | — |
+| Position shift | $K \delta$ | — | $V_{pq} \tilde{V}_{qq} \delta$ |
+| Opacity | $\delta^\top \Sigma_{qq}^{-1} \delta$ | $\|L^\top \delta\|^2$ | $\|L^\top \delta\|^2$ |
+
+No matrix inversion, no regression matrix, no covariance correction. This directly translates to measured speedups on A100:
 
 - Slicing kernel: **5-6x faster** (dGS), **8-11x faster** (dGS-O)
 - End-to-end rendering: up to **2.66x speedup** (279 vs 147 FPS on Mip-NeRF 360)
 - dGS (MCMC) achieves 27.67 dB at 201 FPS on Mip-NeRF 360, comparable to Scaffold-GS's 27.72 dB at 102 FPS (CVPR 2024), with ~2x faster rendering
 
-Even if dGS achieved identical quality to N-DGS, a 5-6x faster slicing kernel with up to 2.66x end-to-end speedup would constitute a significant contribution for real-time Gaussian Splatting applications. dGS achieves this speedup while *also* improving quality across all benchmarks.
+Even if dGS achieved identical quality to N-DGS, eliminating three of five per-Gaussian operations—yielding a 5-6x faster slicing kernel with up to 2.66x end-to-end speedup—would constitute a significant contribution for real-time Gaussian Splatting applications. dGS achieves this speedup while *also* improving quality across all benchmarks.
 
 ## Theoretical analysis exists but was overlooked
 
@@ -38,7 +48,7 @@ This proves dGS provides tighter theoretical bounds on displacement, not an arbi
 
 ## Summary of contributions
 
-1. **Rendering efficiency**: 5-6x faster slicing kernel (8-11x for dGS-O), up to 2.66x end-to-end speedup, critical for real-time deployment
+1. **Rendering efficiency**: Eliminates 3 of 5 per-Gaussian operations (inversion, regression matrix, covariance correction), yielding 5-6x faster slicing kernel (8-11x for dGS-O) and up to 2.66x end-to-end speedup, critical for real-time deployment
 2. **Consistent quality gains**: improvements on all 6 datasets (38+ scenes), zero regressions, up to +0.97 dB
 3. **Theoretically justified**: formal displacement bound analysis (Appendix A) proving tighter bounds than N-DGS
 4. **New ablations**: Lambda learned vs fixed, CUDA kernel benchmarks, MCMC equal-budget comparisons, NeRF-DS evaluation
