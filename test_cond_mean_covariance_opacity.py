@@ -1,5 +1,5 @@
 """
-Gradient verification test for cond_mean_covariance_opacity_cholesky CUDA kernel.
+Gradient verification test for cond_mean_convariance_opacity CUDA kernel.
 
 Compares CUDA kernel gradients against PyTorch autograd gradients for all parameters:
 - means [N, D]
@@ -13,8 +13,8 @@ Also verifies forward pass output match between CUDA and PyTorch implementations
 import torch
 import torch.nn.functional as F
 
-from gsplat import cond_mean_covariance_opacity_cholesky
-from gsplat.cuda._torch_impl import _cond_mean_covariance_opacity_cholesky
+from gsplat import cond_mean_convariance_opacity
+from gsplat.cuda._torch_impl import _cond_mean_convariance_opacity
 
 
 def make_spd_batch(N, C, device, scale=1.0):
@@ -53,12 +53,12 @@ def test_forward_output_match(N=500, D=6, seed=42):
     means, covars, opacities, betas, query = make_test_inputs(N, D, device, seed)
 
     # PyTorch forward
-    m_pt, v_pt, o_pt = _cond_mean_covariance_opacity_cholesky(
+    m_pt, v_pt, o_pt = _cond_mean_convariance_opacity(
         means, covars, opacities, betas, query
     )
 
     # CUDA forward
-    m_cuda, v_cuda, o_cuda = cond_mean_covariance_opacity_cholesky(
+    m_cuda, v_cuda, o_cuda = cond_mean_convariance_opacity(
         means, covars, opacities, betas, query
     )
 
@@ -127,7 +127,7 @@ def test_gradients(N=1000, D=6, seed=42):
     opacities_pt = opacities.detach().clone().requires_grad_(True)
     betas_pt = betas.detach().clone().requires_grad_(True)
 
-    m_pt, v_pt, o_pt = _cond_mean_covariance_opacity_cholesky(
+    m_pt, v_pt, o_pt = _cond_mean_convariance_opacity(
         means_pt, covars_pt, opacities_pt, betas_pt, query
     )
 
@@ -151,7 +151,7 @@ def test_gradients(N=1000, D=6, seed=42):
     opacities_cuda = opacities.detach().clone().requires_grad_(True)
     betas_cuda = betas.detach().clone().requires_grad_(True)
 
-    m_cuda, v_cuda, o_cuda = cond_mean_covariance_opacity_cholesky(
+    m_cuda, v_cuda, o_cuda = cond_mean_convariance_opacity(
         means_cuda, covars_cuda, opacities_cuda, betas_cuda, query
     )
 
@@ -246,7 +246,7 @@ def test_numerical_gradcheck(N=10, D=6, seed=42):
     print("  Running gradcheck on PyTorch implementation...")
     try:
         result = torch.autograd.gradcheck(
-            _cond_mean_covariance_opacity_cholesky,
+            _cond_mean_convariance_opacity,
             (means, covars, opacities, betas, query),
             eps=1e-6,
             atol=1e-4,
@@ -260,7 +260,7 @@ def test_numerical_gradcheck(N=10, D=6, seed=42):
     print("  Running gradcheck on CUDA implementation...")
     try:
         result = torch.autograd.gradcheck(
-            cond_mean_covariance_opacity_cholesky,
+            cond_mean_convariance_opacity,
             (means, covars, opacities, betas, query),
             eps=1e-6,
             atol=1e-4,
