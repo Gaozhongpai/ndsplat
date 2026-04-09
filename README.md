@@ -1,23 +1,53 @@
-# 6D Gaussian Splatting (6DGS)
+# NDSplat: N-Dimensional Splatting
 
-Implementation of N-Dimensional Gaussian Splatting for real-time novel view synthesis with view-dependent rendering.
+A unified framework for N-dimensional splatting, supporting multiple kernel types (Gaussian and Beta), conditioning parameterizations, rasterization backends, and dimensionalities (3D/6D/7D).
 
-## Overview
+## Key Features
 
-This repository implements **N-Dimensional Gaussian Splatting (N-DGS)**, extending traditional 3D Gaussian Splatting with conditional Gaussian slicing for view-dependent appearance modeling. The method represents scenes using N-dimensional Gaussians (6D or 7D) that are conditionally sliced based on viewing direction (and optionally time), enabling efficient capture of view-dependent effects.
+- **Multiple Kernels**: Gaussian kernel (exponential opacity) and Beta kernel (bandwidth-controlled opacity)
+- **Flexible Conditioning**: Full N-D covariance with matrix inversion (UBS/NDGS) or direct Cholesky precision parameterization (dGS/dBS) for faster slicing
+- **Multiple Rasterization Backends**: gsplat (CUDA-accelerated N-DGS operations), diff-gaussian-rasterization (original 3DGS backend), and TCGS (tile-based with cutting plane support)
+- **3D/6D/7D Support**: Standard 3DGS, 6D with view-dependent conditioning, and 7D with time dimension
 
-### Key Features
+## Model Variants
 
-- **6D/7D Gaussian Representation**: Extends 3D Gaussians with view-direction (6D) or view-direction + time (7D)
-- **Conditional Slicing (NDGS)**: CUDA-accelerated conditional Gaussian slicing based on viewing direction
-- **Beta-Based Bandwidth Control (UBS)**: Universal beta-based rendering with per-dimension beta parameters
-- **Learnable Lambda Opacity (NDGS)**: Per-Gaussian learnable opacity scaling for fine-grained control
-- **Dual Parametrization**: Switch between NDGS-style and UBS-style covariance parametrization
-- **TCGS Rasterization**: High-performance rasterization with support for cutting planes
-- **Live Training Viewer**: Real-time web-based viewer with time animation and dual SH blending
-- **Dual SH Support**: Multi-view color consistency with interpolatable SH features (ndgs-2sh model)
-- **Optimized Viewer**: Efficient tensor view masking for real-time filtering without copying
-- **Multiple Model Modes**: Configurable architecture supporting NDGS, NDGS-2SH, DDGS, 3DGS, and UBS modes
+| Mode | Kernel | Conditioning | Color | Description |
+|------|--------|-------------|-------|-------------|
+| `3dgs` | Gaussian | None (3D) | SH | Original 3D Gaussian Splatting |
+| `ndgs` | Gaussian | Full covariance | SH | N-DGS with conditional slicing |
+| `ubs` | Beta | Full covariance | SH | Uncertainty-Based Splatting |
+| `dgs` | Gaussian | Direct Cholesky | SH | Direct Gaussian Splatting with lambda params |
+| `dbs` | Beta | Direct Cholesky | SH | Direct Beta Splatting |
+
+### Kernel Types
+
+**Gaussian kernel** (`ndgs`, `dgs`, `3dgs`):
+- Standard exponential opacity: `alpha * exp(-0.5 * z^T z)`
+- Lambda parameters for per-dimension opacity scaling (dGS)
+
+**Beta kernel** (`ubs`, `dbs`):
+- Per-dimension bandwidth control: `alpha * prod((1 - tanh(z_i^2))^{beta_i})`
+- Beta parameters enable adaptive bandwidth per conditioning dimension
+
+### Conditioning Parameterizations
+
+**Full covariance** (`ubs`, `ndgs`):
+- Full N-D covariance matrix (6x6 or 7x7)
+- Conditional slicing via matrix inversion: `Sigma_cond = Sigma_pp - Sigma_pq @ Sigma_qq^{-1} @ Sigma_qp`
+- Richer representation, higher computational cost
+
+**Direct Cholesky precision** (`dgs`, `dbs`):
+- Direct `L_22_inv` (Cholesky of precision) and `v_12` (position displacement) parameters
+- No matrix inversion needed: `z = L^T @ delta` directly
+- 5-6x faster slicing than full covariance
+
+### Rasterization Backends
+
+- **gsplat**: Custom fork with CUDA kernels for conditional slicing, SH evaluation, and Beta kernel support
+- **TCGS**: Tile-based rasterizer with cutting plane support (`x_threshold`), tight snugbox culling
+- **diff-gaussian-rasterization**: Original 3DGS rasterizer for baseline comparison
+
+Select backend with `--use_gsplat` flag (gsplat vs TCGS for training).
 
 ## Installation
 
@@ -33,7 +63,7 @@ This repository implements **N-Dimensional Gaussian Splatting (N-DGS)**, extendi
 1. Clone the repository with submodules:
 ```shell
 git clone <repository-url> --recursive
-cd 6dgs-iclr
+cd ndsplat
 ```
 
 2. Create conda environment and install dependencies:
@@ -44,114 +74,51 @@ conda activate gaussian_splatting
 
 3. Install CUDA extensions:
 ```shell
-# Install gsplat for N-DGS operations
+# Install gsplat for N-DGS/UBS/dBS operations
 pip install submodules/gsplat
 
 # Install TCGS rasterizer
-pip install submodules/tcgs-speedy-rasterizer
+pip install submodules/tcgs_speedy_rasterizer
+
+# Install diff-gaussian-rasterization (for 3DGS baseline)
+pip install submodules/diff-gaussian-rasterization
 
 # Install other dependencies
 pip install submodules/simple-knn
+pip install submodules/fused-ssim
 ```
-
-## Project Organization
-
-The repository is organized into three main categories:
-
-- **Core Scripts** (root): `train.py`, `render.py`, `metrics.py`, `view.py` - Main pipeline
-- **tools/**: Data preprocessing and evaluation utilities
-  - `preprocessing/`: COLMAP conversion, cloud dataset generation
-  - `evaluation/`: Automated benchmarking tools
-- **scripts/**: Organized experiment runners
-  - `benchmarks/`: Standard evaluations (Mip-NeRF 360, NeRF Synthetic, etc.)
-  - `ablations/`: Ablation studies
-  - `tests/`: Development and debugging scripts
-
-**Run experiments with:**
-```shell
-./run.sh <category> <script>      # Master entry point
-./run.sh --help                    # See all options
-./run.sh list                      # List available scripts
-```
-
-See [ORGANIZATION.md](ORGANIZATION.md) for complete documentation.
-
-## What's New (v3.0)
-
-### Recent Major Updates
-
-**✨ Unified Model Architecture:**
-- Consolidated and cleaned codebase with multiple N-DGS models:
-  - `gaussian_model_ndgs.py` - Single SH for standard rendering
-  - `gaussian_model_ndgs_2sh.py` - Dual SH for multi-view consistency
-  - `gaussian_model_dgs_full.py` - Full DGS with advanced view-dependent features
-  - `gaussian_model_ubs.py` - Universal Beta Splatting with beta parameters
-  - `gaussian_model_ubs_sh.py` - UBS with spherical harmonics support
-- All models support 6DGS and 7DGS (with time dimension)
-- Removed legacy experimental code (color_net, LSH culling, Taichi imports)
-
-**🎯 New Features:**
-- **Learnable Lambda Opacity** (`--learnable_lambda_opc`): Per-Gaussian learnable opacity scaling parameter
-- **Dual Parametrization** (`--use_rot_scale_l_triangle`): Switch between NDGS-style and UBS-style covariance modes
-- **Full 7DGS Time Support** (`--input_dim 7`): Complete temporal dimension with viewer animation controls
-- **Dual SH Blending**: Real-time color interpolation in viewer for multi-view consistency
-- **Optimized Viewer**: Efficient pointer-swap masking instead of tensor copying (significant FPS improvement)
-
-**🚀 Performance Optimizations:**
-- Viewer masking now uses tensor views with pointer swaps (no memory allocation per frame)
-- Test mode precomputed values properly handled
-- Eliminated redundant save/restore operations
-
-**📖 Documentation:**
-- See [ORGANIZATION.md](ORGANIZATION.md) for project structure
 
 ## Usage
 
 ### Training
 
-Train an N-DGS model on your dataset:
-
 ```shell
-# Basic 6DGS training
-python train.py -s <path to COLMAP dataset> --mode ndgs --input_dim 6
+# 3D Gaussian Splatting (baseline)
+python train.py -s <dataset> --mode 3dgs
 
-# 7DGS with time dimension
-python train.py -s <path to dataset> --mode ndgs --input_dim 7
+# 6D N-DGS with conditional slicing
+python train.py -s <dataset> --mode ndgs --input_dim 6
 
-# With learnable lambda opacity
-python train.py -s <path to dataset> --mode ndgs --learnable_lambda_opc
+# 7D N-DGS with time dimension
+python train.py -s <dataset> --mode ndgs --input_dim 7
 
-# UBS-style parametrization
-python train.py -s <path to dataset> --mode ndgs --use_rot_scale_l_triangle
+# UBS with Beta kernel (full covariance)
+python train.py -s <dataset> --mode ubs --input_dim 6
 
-# Dual SH for multi-view consistency
-python train.py -s <path to dataset> --mode ndgs-2sh --input_dim 6
+# UBS with MCMC densification
+python train.py -s <dataset> --mode ubs --densification_strategy mcmc --mcmc_cap_max 300000
 
-# Full DGS with advanced view-dependent features
-python train.py -s <path to dataset> --mode dgs --input_dim 6
+# dGS with direct Cholesky (Gaussian kernel)
+python train.py -s <dataset> --mode dgs --input_dim 6
 
-# Full DGS with beta-based opacity (UBS-style)
-python train.py -s <path to dataset> --mode dgs --use_beta --input_dim 6
+# dBS with direct Cholesky (Beta kernel)
+python train.py -s <dataset> --mode dbs --input_dim 6
 
-# DGS-color mode (joint position+color with simplified parameterization)
-python train.py -s <path to dataset> --mode dgs-color --input_dim 6
-
-# UBS with beta-based bandwidth control
-python train.py -s <path to dataset> --mode ubs --input_dim 6
-
-# UBS with spherical harmonics (instead of direct RGB)
-python train.py -s <path to dataset> --mode ubs-sh --input_dim 6
-
-# UBS with MCMC densification strategy
-python train.py -s <path to dataset> --mode ubs --densification_strategy mcmc --mcmc_cap_max 300000
-
-# NDGS with FastGS multi-view consistent densification
-python train.py -s <path to dataset> --mode ndgs --densification_strategy fastgs
+# Use gsplat rasterizer instead of TCGS
+python train.py -s <dataset> --mode ubs --use_gsplat
 ```
 
-The training script will automatically launch a live viewer on port 8080 (unless disabled with `--disable_viewer`). Open your browser to `http://localhost:8080` to monitor training in real-time.
-
-**Note:** UBS and NDGS use different approaches for view-dependent rendering. See [Model Modes](#model-modes) section for comparison.
+The training script automatically launches a live viewer on port 8080 (disable with `--disable_viewer`).
 
 <details>
 <summary><span style="font-weight: bold;">Command Line Arguments for train.py</span></summary>
@@ -166,364 +133,130 @@ The training script will automatically launch a live viewer on port 8080 (unless
 - `--white_background` / `-w`: Use white background instead of black
 
 #### Model Parameters
-- `--mode`: Model architecture (`ndgs`, `ndgs-2sh`, `dgs`, `dgs-color`, `ddgs`, `3dgs`, `ubs`, `ubs-sh`) - default: `dgs`
-- `--input_dim`: Gaussian dimensionality (6 for 6DGS, 7 for 7DGS with time) - default: `6`
+- `--mode`: Model architecture (`3dgs`, `ndgs`, `dgs`, `dbs`, `ubs`) - default: `dgs`
+- `--input_dim`: Gaussian dimensionality (3, 6, or 7) - default: `6`
 - `--sh_degree`: Spherical harmonics degree (max 3) - default: `3`
-- `--learnable_lambda_opc`: Make lambda_opc learnable per Gaussian (NDGS modes) - default: `False`
-- `--use_rot_scale_l_triangle`: Use rotation-scale-l_triangle parameterization (UBS-style) - default: `False`
-- `--use_view_dependent_pos`: Enable view-dependent position shift (DGS mode) - default: `True`
-- `--use_opacity_pos_decouple`: Decouple position and opacity (DGS mode) - default: `False`
-- `--use_beta`: Enable beta-based opacity (DGS mode) - default: `False`
-- `--lambda_opc`: Default lambda_opc for opacity scaling (NDGS/DGS modes) - default: `0.35`
-- `--l_22_inv_init_scale`: Initialization scale for L_22_inv diagonal (DGS mode) - default: `1.0`
-- `--lambda_init`: Initial value for lambda_view/lambda_time parameters (DGS mode) - default: `-1.2`
+- `--use_gsplat`: Use gsplat rasterizer instead of TCGS
+- `--use_view_dependent_pos`: Enable view-dependent position shift (dGS) - default: `True`
+- `--learnable_lambda_opc`: Make lambda_opc learnable per Gaussian (NDGS)
+- `--use_rot_scale_l_triangle`: Use rotation-scale-l_triangle parameterization
 
 #### Training Parameters
 - `--iterations`: Total training iterations - default: `30000`
 - `--position_lr_init`: Initial position learning rate - default: `0.00016`
-- `--position_lr_final`: Final position learning rate - default: `0.0000016`
 - `--feature_lr`: Feature learning rate - default: `0.0025`
 - `--opacity_lr`: Opacity learning rate - default: `0.05`
-- `--scaling_lr`: Normal scaling learning rate - default: `0.005`
-- `--scale_lr`: Scale/diagonal parameters learning rate - default: `0.005` (replaces `--diags_lr`)
-- `--l_triangle_lr`: L-triangle parameters learning rate - default: `0.001` (replaces `--l_triangs_lr`)
-  - Note: Old names (`--diags_lr`, `--l_triangs_lr`) still work for backward compatibility
+- `--scale_lr`: Scale parameters learning rate - default: `0.005`
+- `--l_triangle_lr`: L-triangle parameters learning rate - default: `0.001`
 
 #### Densification Parameters
-- `--densification_strategy`: Strategy for Gaussian densification (`standard`, `mcmc`, or `fastgs`) - default: `standard`
-  - `standard`: Gradient-based clone, split, and prune (all models)
-  - `mcmc`: MCMC sampling-based refinement (UBS only)
-  - `fastgs`: Multi-view consistent densification adapted from FastGS (NDGS only)
-- `--densify_from_iter`: Start densification iteration - default: `500`
-- `--densify_until_iter`: Stop densification iteration - default: `15000`
-- `--densify_grad_threshold`: Gradient threshold for densification (standard only) - default: `0.0002`
-- `--densification_interval`: Densification frequency (standard only) - default: `100`
-- `--opacity_reset_interval`: Opacity reset frequency (standard only) - default: `3000`
-- `--percent_dense`: Scene extent percentage for densification - default: `0.01`
-- `--mcmc_cap_max`: Maximum number of Gaussians (MCMC only) - default: `300000`
-- `--mcmc_refine_interval`: MCMC refinement frequency (MCMC only) - default: `100`
-- `--fastgs_loss_thresh`: Threshold for high-error pixel detection (FastGS only) - default: `0.3`
-- `--fastgs_grad_thresh`: Gradient threshold for densification candidates (FastGS only) - default: `0.0002`
-- `--fastgs_densify_score_thresh`: Minimum importance score for densification (FastGS only) - default: `5`
-- `--fastgs_prune_budget_ratio`: Fraction of prunable Gaussians to prune (FastGS only) - default: `0.5`
-- `--fastgs_num_sample_cams`: Number of cameras for multi-view scoring (FastGS only) - default: `10`
+- `--densification_strategy`: `standard`, `mcmc`, or `fastgs` - default: `standard`
+- `--densify_grad_threshold`: Gradient threshold - default: `0.0002`
+- `--mcmc_cap_max`: Maximum Gaussians for MCMC - default: `300000`
 
 #### Viewer Parameters
 - `--port`: Viewer port - default: `8080`
 - `--disable_viewer`: Disable live viewer
 
-#### Checkpointing
-- `--test_iterations`: Iterations for evaluation - default: `7000 30000`
-- `--save_iterations`: Iterations to save model - default: `7000 30000 <iterations>`
-- `--checkpoint_iterations`: Iterations to save checkpoint
-- `--start_checkpoint`: Path to checkpoint to continue from
-
 </details>
 
 ### Rendering
-
-Render novel views from a trained model:
 
 ```shell
 python render.py -m <path to trained model> -s <path to dataset>
 ```
 
-<details>
-<summary><span style="font-weight: bold;">Command Line Arguments for render.py</span></summary>
+### Evaluation
 
-- `--model_path` / `-m`: Path to trained model
-- `--source_path` / `-s`: Path to source dataset (if not in model config)
-- `--skip_train`: Skip rendering training views
-- `--skip_test`: Skip rendering test views
-- `--mode`: Model architecture to use (overrides saved config)
-- `--quiet`: Suppress console output
-
-</details>
+```shell
+python train.py -s <dataset> --eval         # Train with test split
+python render.py -m <model_path>            # Render test views
+python metrics.py -m <model_path>           # Compute PSNR, SSIM, LPIPS
+```
 
 ### Live Viewing
 
-View a trained model interactively:
-
 ```shell
-# View trained model
 python view.py -m <model_path> --ply <ply_file> --mode ndgs
-
-# Custom port
-python view.py -m <model_path> --ply <ply_file> --mode ndgs --port 8080
 ```
 
-### Evaluation
+## Project Structure
 
-Compute metrics on rendered images:
-
-```shell
-python train.py -s <path to dataset> --eval  # Train with test split
-python render.py -m <path to trained model>   # Render test views
-python metrics.py -m <path to trained model>  # Compute metrics
 ```
-
-### Data Preprocessing
-
-Prepare datasets for training:
-
-```shell
-# Convert images to COLMAP format
-python tools/preprocessing/colmap_convert.py -s <images_directory>
-
-# Generate volumetric/cloud datasets
-python tools/preprocessing/cloud_dataset_preprocessing.py
-
-# Run full benchmark evaluation
-python tools/evaluation/full_eval.py -m360 <mipnerf360> -tat <tanks> -db <deepblending>
+ndsplat/
+├── train.py, render.py, metrics.py, view.py   # Main pipeline
+├── run.sh                                      # Master experiment runner
+├── scene/
+│   ├── gaussian_model.py                       # 3DGS baseline
+│   ├── gaussian_model_ndgs.py                  # N-DGS (full cov, Gaussian kernel, SH)
+│   ├── gaussian_model_ubs_sh.py                # UBS (full cov, Beta kernel, SH)
+│   ├── gaussian_model_dgs_full.py              # dGS (direct Cholesky, Gaussian kernel, SH)
+│   ├── gaussian_model_dbs_sh.py                # dBS (direct Cholesky, Beta kernel, SH)
+│   ├── gaussian_viewer.py                      # Viser-based live viewer
+│   ├── cameras.py                              # Camera classes
+│   └── dataset_readers.py                      # Dataset loading
+├── arguments/
+│   └── __init__.py                             # Command-line arguments
+├── utils/                                      # Helper functions
+├── submodules/
+│   ├── gsplat/                                 # N-DGS/UBS/dBS CUDA operations
+│   ├── tcgs_speedy_rasterizer/                 # TCGS rasterizer with cutting planes
+│   ├── diff-gaussian-rasterization/            # Original 3DGS rasterizer
+│   ├── simple-knn/                             # KNN utilities
+│   └── fused-ssim/                             # Fused SSIM computation
+├── scripts/                                    # Experiment runners
+│   ├── benchmarks/                             # Standard evaluations
+│   ├── ablations/                              # Ablation studies
+│   └── tests/                                  # Development scripts
+└── tools/                                      # Data preprocessing & evaluation
 ```
-
-See [tools/README.md](tools/README.md) for detailed documentation.
-
-## Live Viewer
-
-The training process includes a real-time web viewer powered by [Viser](https://github.com/nerfstudio-project/viser) that allows you to:
-
-- **Monitor Training**: Watch the scene reconstruction in real-time
-- **Interactive Camera Control**: Navigate the scene with mouse/keyboard
-- **Time Animation (7DGS)**: Auto-loop and manual time control for temporal models
-- **Dual SH Blending**: Smooth interpolation between two SH color representations (ndgs-2sh models)
-- **Gaussian Filtering**: Percentile-based or absolute opacity thresholding
-- **Cutting Plane**: Enable spatial filtering with x_threshold control
-- **Render Modes**: Switch between RGB, Alpha, Depth, Normal, and other visualization modes
-- **Performance Monitoring**: Real-time FPS display with smoothing
-- **Optimized Rendering**: Efficient masking without memory allocation overhead
-
-The viewer automatically starts when training begins. Access it at `http://localhost:8080` (or custom port specified with `--port`).
-
-### Viewer Controls
-
-**Time Animation (7DGS only):**
-- **Auto Loop**: Automatically cycle through time dimension
-- **Loop Duration**: Adjust animation speed (0.5 - 10.0 seconds)
-- **Time Slider**: Manual time control (0.0 - 1.0)
-
-**Color Interpolation (ndgs-2sh models only):**
-- **Color Blend**: Smooth interpolation between SH_0 and SH_1 (0.0 - 1.0)
-
-**Gaussian Filtering:**
-- **Use Opacity Percentile**: Toggle between percentile and absolute threshold modes
-- **Opacity Percentile**: Show top X% most opaque Gaussians (0 - 100)
-- **Opacity Threshold**: Absolute minimum opacity (0.0 - 1.0)
-
-**Cutting Plane:**
-- **Enable X Threshold**: Toggle cutting plane on/off
-- **X Threshold**: Set cutting plane position along X-axis
-
-**Render Settings:**
-- **Render Mode**: RGB, Alpha, Depth, Normal
-- **Tight Snugbox**: Enable/disable TCGS optimization
-- **Background Color**: RGB color picker
-- **FPS Display**: Real-time performance monitoring
 
 ## Dataset Format
 
-### COLMAP Dataset Structure
+### COLMAP Dataset
 
 ```
-<dataset>
+<dataset>/
 ├── images/
-│   ├── image_001.jpg
-│   ├── image_002.jpg
-│   └── ...
-└── sparse/
-    └── 0/
-        ├── cameras.bin
-        ├── images.bin
-        └── points3D.bin
+└── sparse/0/
+    ├── cameras.bin
+    ├── images.bin
+    └── points3D.bin
 ```
 
-### JSON Dataset with Cutting Plane
-
-For datasets with cutting plane support, use a `transforms.json` file:
+### NeRF Synthetic / JSON Format
 
 ```json
 {
   "camera_angle_x": 0.857,
   "frames": [
     {
-      "file_path": "./images/image_001.jpg",
+      "file_path": "./images/img_001.jpg",
       "transform_matrix": [...],
-      "x_threshold": 5.0,      // Optional: cutting plane position
-      "color_idx": 0,          // Optional: color index for dual SH
-      "timestamp": 0.5         // Optional: time value for 7DGS (0.0 - 1.0)
+      "x_threshold": 5.0,
+      "timestamp": 0.5,
+      "color_idx": 0
     }
   ]
 }
 ```
 
-## Technical Details
-
-### N-Dimensional Gaussian Representation
-
-Each Gaussian is represented with:
-- **6DGS**: `[x, y, z, nx, ny, nz]` - position and normal direction
-- **7DGS**: `[x, y, z, nx, ny, nz, t]` - position, normal, and time
-- **Covariance** (N×N): Parameterized by scale/diagonal and lower triangular elements
-- **Color**:
-  - NDGS: Spherical harmonics coefficients (single or dual)
-  - UBS: Direct RGB values
-- **Opacity**: Sigmoid-activated opacity value
-- **Lambda Opacity** (NDGS, optional): Learnable per-Gaussian opacity scaling
-- **Beta Parameters** (UBS): Per-dimension bandwidth control [N, input_dim-2]
-
-### Parametrizations
-
-**NDGS-style** (default, `use_rot_scale_l_triangle=False`):
-- `_scale`: Exponential activation for diagonal elements
-- `_l_triangle`: Sigmoid bounded [-1, 1] for off-diagonal elements
-- Direct lower-triangular covariance construction
-
-**UBS-style** (`use_rot_scale_l_triangle=True`):
-- `_scale`: Softplus activation for smooth positive scales
-- `_l_triangle`: First 3 elements encode 6D rotation matrix
-- Rotation-scale-l_triangle covariance construction with KNN initialization
-
-### Densification Strategies
-
-#### Standard (default)
-Gradient-based densification from original 3DGS:
-- Clone small Gaussians with high position gradients
-- Split large Gaussians with high position gradients
-- Prune low-opacity and oversized Gaussians
-
-#### MCMC (UBS only)
-MCMC sampling-based refinement:
-- Relocate dead (low-opacity) Gaussians to high-error regions
-- Add new Gaussians up to a maximum cap
-- Apply covariance-weighted noise for exploration
-
-#### FastGS (NDGS only)
-Multi-view consistent densification adapted from [FastGS](https://arxiv.org/abs/2511.04283):
-- **VCD (View-Consistent Densification)**: Only densify Gaussians that contribute to high-error pixels across multiple views
-- **VCP (View-Consistent Pruning)**: Prune based on multi-view consistency scores weighted by photometric loss
-- **Final Pruning Phase**: Aggressive pruning every 3k iterations after 15k to reduce Gaussian count
-
-The FastGS strategy uses CUDA-accelerated per-Gaussian metric counting during rasterization to identify which Gaussians contribute to reconstruction errors across sampled viewpoints.
-
-### Conditional Slicing
-
-The N-D Gaussians are conditionally sliced based on viewing direction:
-1. Compute view direction from camera to Gaussian center
-2. For 7DGS, append timestamp to query vector
-3. Perform conditional Gaussian slicing (see `slice_gaussian` in model files)
-4. Obtain 3D conditional mean and covariance
-5. Scale opacity based on viewing direction alignment
-
-### TCGS Rasterization
-
-The TCGS (Tile-based CUDA Gaussian Splatting) rasterizer provides:
-- Efficient tile-based rendering
-- Cutting plane support via `x_threshold`
-- Precomputed covariance support (for test mode)
-- Tight bounding box optimization
-
-## Model Modes
-
-This codebase supports multiple Gaussian splatting variants:
-
-- **ndgs** (default): N-Dimensional GS with conditional slicing (single SH)
-- **ndgs-2sh**: N-Dimensional GS with dual SH features for multi-view consistency
-- **ddgs**: Deformable DGS variant
-- **3dgs**: Standard 3D Gaussian Splatting
-- **ubs**: Universal Beta Splatting with beta parameters
-
-Select the mode with `--mode <mode_name>` during training.
-
-### NDGS vs UBS: Choosing the Right Model
-
-Both NDGS and UBS extend 3DGS to N-dimensions (6D/7D) but use different approaches for view-dependent rendering:
-
-| Feature | NDGS (`--mode ndgs`) | UBS (`--mode ubs`) |
-|---------|----------------------|---------------------|
-| **Color Model** | Spherical harmonics (DC + rest) | Direct RGB values |
-| **View-Dependence** | Conditional Gaussian slicing | Beta-adjusted covariance |
-| **Opacity Control** | Lambda opacity (learnable/fixed) | Beta parameters per dimension |
-| **Parametrization** | Flexible (NDGS/UBS-style) | Fixed rot-scale-l_triangle |
-| **Best For** | General scenes, SH appearance | Universal beta control, direct RGB |
-| **Complexity** | More complex (SH evaluation) | Simpler (direct RGB) |
-| **Test Optimization** | Precomputed values supported | Full computation each frame |
-
-**Usage Examples:**
+### Data Preprocessing
 
 ```shell
-# NDGS with default NDGS-style parametrization
-python train.py -s <dataset> --mode ndgs --input_dim 6
-
-# NDGS with UBS-style parametrization (hybrid approach)
-python train.py -s <dataset> --mode ndgs --use_rot_scale_l_triangle
-
-# NDGS with learnable lambda opacity
-python train.py -s <dataset> --mode ndgs --learnable_lambda_opc
-
-# UBS with beta-based bandwidth control
-python train.py -s <dataset> --mode ubs --input_dim 6
-
-# UBS with 7D (time dimension)
-python train.py -s <dataset> --mode ubs --input_dim 7
+python tools/preprocessing/colmap_convert.py -s <images_directory>
 ```
 
-**Key Differences:**
+## Live Viewer
 
-1. **Color Representation**: NDGS uses SH for rich view-dependent appearance, UBS uses direct RGB for simplicity
-2. **View-Dependence**: NDGS slices N-D Gaussians, UBS adjusts covariance bandwidth with beta parameters
-3. **Viewer Filtering**: NDGS filters by opacity (percentile/threshold), UBS filters by beta quantiles
-4. **Opacity Control**: NDGS uses lambda opacity scalar, UBS uses per-dimension beta vectors
+Real-time web viewer powered by [Viser](https://github.com/nerfstudio-project/viser):
 
-See [CLAUDE.md](CLAUDE.md) for detailed technical comparison and implementation details.
-
-## Code Structure
-
-```
-6dgs-iclr/
-├── scene/
-│   ├── gaussian_model_ndgs.py       # N-DGS single SH implementation
-│   ├── gaussian_model_ndgs_2sh.py   # N-DGS dual SH implementation
-│   ├── gaussian_model_ddgs.py       # DDGS model
-│   ├── gaussian_model.py            # 3DGS model
-│   ├── gaussian_model_ubs.py        # UBS model
-│   ├── gaussian_viewer.py           # Viser-based live viewer
-│   ├── cameras.py                   # Camera classes
-│   └── dataset_readers.py           # Dataset loading
-├── utils/
-│   ├── loss_utils.py                # Loss functions
-│   ├── camera_utils.py              # Camera utilities
-│   ├── ndgs_utils.py                # N-DGS specific utilities
-│   ├── fast_utils.py                # FastGS multi-view densification utilities
-│   └── ...
-├── arguments/
-│   └── __init__.py                  # Command-line arguments
-├── submodules/
-│   ├── gsplat/                      # N-DGS CUDA operations
-│   ├── tcgs-speedy-rasterizer/      # TCGS rasterizer
-│   └── simple-knn/                  # KNN utilities
-├── train.py                         # Training script
-├── render.py                        # Rendering script
-├── view.py                          # Interactive viewer script
-└── metrics.py                       # Evaluation metrics
-```
-
-## Key Implementation Files
-
-- [gaussian_model_ndgs.py](scene/gaussian_model_ndgs.py): Core N-DGS implementation with conditional slicing (single SH)
-- [gaussian_model_ndgs_2sh.py](scene/gaussian_model_ndgs_2sh.py): N-DGS with dual SH features
-- [gaussian_viewer.py](scene/gaussian_viewer.py): Interactive training viewer with optimized masking
-- [train.py](train.py): Main training loop with viewer integration
-- [render.py](render.py): Rendering script for evaluation
-- [view.py](view.py): Standalone interactive viewer
-
-## Performance Tips
-
-- Use `--data_device cpu` for large/high-resolution datasets to reduce VRAM usage
-- Adjust densification parameters (`--densify_grad_threshold`, `--densification_interval`) for memory-constrained setups
-- Set `--test_iterations -1` to skip testing during training and reduce memory spikes
-- For large scenes, reduce learning rates: `--position_lr_init 0.000016 --scale_lr 0.001`
-- Enable learnable lambda opacity for scenes with complex view-dependent effects: `--learnable_lambda_opc`
-- Use UBS-style parametrization for scenes with wide scale variation: `--use_rot_scale_l_triangle`
+- Interactive camera navigation
+- Time animation controls (7DGS)
+- Beta/opacity-based Gaussian filtering
+- Cutting plane support
+- Multiple render modes (RGB, Alpha, Depth, Normal)
+- Real-time FPS monitoring
 
 ## Acknowledgments
 
@@ -531,7 +264,6 @@ This implementation builds upon:
 - [3D Gaussian Splatting](https://github.com/graphdeco-inria/gaussian-splatting) by Kerbl et al.
 - [gsplat](https://github.com/nerfstudio-project/gsplat) for CUDA-accelerated operations
 - [Viser](https://github.com/nerfstudio-project/viser) for the interactive viewer
-- TCGS rasterizer for high-performance rendering
 
 ## License
 
@@ -539,17 +271,28 @@ This software is free for non-commercial, research and evaluation use under the 
 
 ## Citation
 
-If you use this code in your research, please cite the original 3D Gaussian Splatting paper:
-
 ```bibtex
-@Article{kerbl3Dgaussians,
-  author       = {Kerbl, Bernhard and Kopanas, Georgios and Leimk{\"u}hler, Thomas and Drettakis, George},
-  title        = {3D Gaussian Splatting for Real-Time Radiance Field Rendering},
-  journal      = {ACM Transactions on Graphics},
-  number       = {4},
-  volume       = {42},
-  month        = {July},
-  year         = {2023},
-  url          = {https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/}
+
+@article{gao20246dgs,
+  title={6dgs: Enhanced direction-aware gaussian splatting for volumetric rendering},
+  author={Gao, Zhongpai and Planche, Benjamin and Zheng, Meng and Choudhuri, Anwesa and Chen, Terrence and Wu, Ziyan},
+  journal={arXiv preprint arXiv:2410.04974},
+  year={2024}
 }
+
+@inproceedings{gao20257dgs,
+  title={7DGS: Unified spatial-temporal-angular Gaussian splatting},
+  author={Gao, Zhongpai and Planche, Benjamin and Zheng, Meng and Choudhuri, Anwesa and Chen, Terrence and Wu, Ziyan},
+  booktitle={Proceedings of the IEEE/CVF International Conference on Computer Vision},
+  pages={26316--26325},
+  year={2025}
+}
+
+@article{liu2025universal,
+  title={Universal Beta Splatting},
+  author={Liu, Rong and Gao, Zhongpai and Planche, Benjamin and Chen, Meida and Nguyen, Van Nguyen and Zheng, Meng and Choudhuri, Anwesa and Chen, Terrence and Wang, Yue and Feng, Andrew and others},
+  journal={arXiv preprint arXiv:2510.03312},
+  year={2025}
+}
+
 ```

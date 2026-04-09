@@ -26,7 +26,7 @@ def get_gaussian_model(mode: str):
     """Factory function to get the appropriate GaussianModel class based on mode.
 
     Args:
-        mode: One of "ndgs", "ddgs", "3dgs", "ubs", "ndgs-2sh", "ndgs-color", "dgs", "dgs-color"
+        mode: One of "ndgs", "ddgs", "3dgs", "ubs", "ndgs-2sh", "dgs", "dbs"
 
     Returns:
         GaussianModel class for the specified mode
@@ -44,9 +44,9 @@ def get_gaussian_model(mode: str):
     elif mode == "dgs":  ## Full DGS with view-dependent position, time-dependent rotation
         from scene.gaussian_model_dgs_full import GaussianModel
     elif mode == "dbs":  ## dBS: Direct Beta Splatting (dGS + UBS)
-        from scene.gaussian_model_dbs import DBSModel as GaussianModel
+        from scene.gaussian_model_dbs_sh import GaussianModel
     else:
-        raise ValueError(f"Unknown mode: {mode}. Must be one of: ndgs, ddgs, 3dgs, ubs, ndgs-2sh, dgs, dbs")
+        raise ValueError(f"Unknown mode: {mode}. Must be one of: ndgs, ddgs, 3dgs, ubs, ndgs-2sh, dgs, dbs.")
     return GaussianModel
 
 
@@ -144,21 +144,7 @@ class Scene:
 
             if "ddgs" in args.mode:
                 self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent, args.source_path)
-            elif args.mode == "dbs":
-                # dBS: simple create_from_pcd (MCMC handled in train loop)
-                self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent)
-            elif "ubs" in args.mode or "ndgs" in args.mode:
-                # UBS and N-DGS models support MCMC initialization sampling
-                self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent,
-                                                mcmc_cap_max=mcmc_cap_max,
-                                                densification_strategy=densification_strategy)
-            elif args.mode == "dgs" or args.mode == "dgs-color":
-                # DGS/DGS-color mode: supports MCMC initialization sampling
-                self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent,
-                                                mcmc_cap_max=mcmc_cap_max,
-                                                densification_strategy=densification_strategy)
             else:
-                # 3DGS mode: supports MCMC initialization sampling
                 self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent,
                                                 mcmc_cap_max=mcmc_cap_max,
                                                 densification_strategy=densification_strategy)

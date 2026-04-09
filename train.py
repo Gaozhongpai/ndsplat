@@ -61,11 +61,11 @@ def render_wrapper(viewpoint_cam, gaussians, pipe, bg, mode, scaling_modifier=1.
         gaussians: GaussianModel instance
         pipe: Pipeline parameters
         bg: Background color
-        mode: Rendering mode ("ddgs", "3dgs", "ubs", "ndgs", "dgs", "dgs-color")
+        mode: Rendering mode ("ddgs", "3dgs", "ubs", "ndgs", "dgs")
         scaling_modifier: Scaling modifier for rendering
         use_gsplat: If True, use gsplat rasterizer instead of TCGS for UBS/DGS modes
     """
-    if "ubs" in mode or "ndgs" in mode or mode == "dgs" or mode == "dgs-color" or mode == "dbs":
+    if "ubs" in mode or "ndgs" in mode or "dgs" in mode or "dbs" in mode:
         gaussians.background = bg
         if use_gsplat and hasattr(gaussians, 'render'):
             return gaussians.render(viewpoint_cam, render_mode="RGB")
@@ -88,23 +88,20 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
 
     # Initialize model based on mode
     # For NDGS mode, pass the use_rot_scale_l_triangle flag
-    if "ubs" in mode:
+    if "ubs" in mode or "dbs" in mode:
         gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim)
     elif "ndgs" in mode:
         gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim,
                                     use_rot_scale_l_triangle=dataset.use_rot_scale_l_triangle,
                                     learnable_lambda_opc=dataset.learnable_lambda_opc,
                                     lambda_opc=dataset.lambda_opc)
-    elif mode == "dgs":
+    elif "dgs" in mode:
         # DGS mode: Full DGS with configurable view-dependent position
         gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim,
                                   use_view_dependent_pos=dataset.use_view_dependent_pos,
                                   use_opacity_pos_decouple=dataset.use_opacity_pos_decouple,
                                   l_22_inv_init_scale=dataset.l_22_inv_init_scale,
                                   lambda_init=dataset.lambda_init)
-    elif mode == "dgs-color":
-        # DGS-color mode: Joint position+color with simplified v_12/L_22_inv parameterization
-        gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim)
     else:
         gaussians = GaussianModel(dataset.sh_degree)
 
