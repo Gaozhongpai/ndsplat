@@ -81,10 +81,8 @@ def run_benchmarks():
                         None,  # v_12 = None
                         L_22_inv,
                         0.35,  # lambda_opc
-                        False,  # use_beta
                         None,  # lambda_view
                         None,  # lambda_time
-                        None,  # spatial_beta
                     )
 
                 # dGS: call C++ forward directly (with position shift)
@@ -94,10 +92,8 @@ def run_benchmarks():
                         v_12,
                         L_22_inv,
                         0.35,  # lambda_opc
-                        False,  # use_beta
                         lambda_view,
                         lambda_time,
-                        None,  # spatial_beta
                     )
 
                 ms_ndgs = benchmark_fn(fn_ndgs)

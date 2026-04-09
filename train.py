@@ -100,7 +100,6 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
         gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim,
                                   use_view_dependent_pos=dataset.use_view_dependent_pos,
                                   use_opacity_pos_decouple=dataset.use_opacity_pos_decouple,
-                                  use_beta=dataset.use_beta,
                                   l_22_inv_init_scale=dataset.l_22_inv_init_scale,
                                   lambda_init=dataset.lambda_init)
     elif mode == "dgs-color":

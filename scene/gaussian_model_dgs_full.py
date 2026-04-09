@@ -43,7 +43,8 @@ from utils.general_utils import strip_symmetric, build_scaling_rotation
 #                      _slice_gaussian_full_v2 as slice_gaussian_full_v2)
 
 from gsplat import (slice_gaussian_full,
-                    slice_gaussian_full_v2)
+                    rasterization,
+                    quat_scale_to_covar_preci)
 
 
 def quaternion_multiply(q1, q2):
@@ -167,24 +168,15 @@ class GaussianModel:
 
         self.rotation_activation = torch.nn.functional.normalize
 
-        # Beta activation: same as UBS - 4.0 * exp(beta)
-        self.beta_activation = lambda x: 4.0 * torch.exp(x)
-
         # Lambda activation function (unified for view and time)
         # Standard mode: sigmoid -> [0, 1] for position scaling
-        # Beta mode: same as beta_activation -> 4.0 * exp(x) -> (0, ∞)
-        if hasattr(self, 'use_beta') and self.use_beta:
-            # Beta mode: use same activation as beta -> (0, ∞)
-            self.lambda_activation = self.beta_activation
-        else:
-            # Standard mode: sigmoid -> [0, 1]
-            self.lambda_activation = torch.sigmoid
+        self.lambda_activation = torch.sigmoid
 
         # Time activation: sigmoid maps internal parameter to [0, 1]
         self.time_act = lambda x: torch.sigmoid(x)
         self.time_act_inv = lambda x: inverse_sigmoid(torch.clip(x, min=1e-6, max=1.0 - 1e-6))
 
-    def __init__(self, sh_degree: int, input_dim: int = 6, use_beta: bool = False,
+    def __init__(self, sh_degree: int, input_dim: int = 6,
                  use_view_dependent_pos: bool = True, use_opacity_pos_decouple: bool = False,
                 time_duration: list = [0.0, 1.0], l_22_inv_init_scale: float = 1.0, lambda_init: float = -1.2):
         """
@@ -193,7 +185,6 @@ class GaussianModel:
         Args:
             sh_degree: Maximum SH degree for color
             input_dim: 6 for position+view, 7 for position+view+time
-            use_beta: Whether to use spatial beta parameter (default: False)
             use_view_dependent_pos: Enable view-dependent position shift (default: True)
             use_opacity_pos_decouple: Decouple position and opacity by setting lambda=0 (default: False)
             time_duration: [min, max] time range for 7DGS (default: [0.0, 1.0])
@@ -205,7 +196,6 @@ class GaussianModel:
         self.active_sh_degree = 0
         self.max_sh_degree = sh_degree
         self.input_dim = input_dim
-        self.use_beta = use_beta
         self.use_view_dependent_pos = use_view_dependent_pos
         self.use_opacity_pos_decouple = use_opacity_pos_decouple  # Decouple position and opacity
         self.time_duration = time_duration  # Time range for 7DGS
@@ -241,9 +231,6 @@ class GaussianModel:
         self._lambda_view = torch.empty(0)   # [N] - view conditioning strength (logit space)
         self._lambda_time = torch.empty(0)   # [N] - time conditioning strength (logit space, only for input_dim=7)
 
-        # Spatial beta: [N, 1] controls spatial uncertainty/bandwidth (optional)
-        self._beta = torch.empty(0)
-
         # Hyperparameter for maximum position shift
         self.max_pos_shift = 2.0
 
@@ -274,7 +261,6 @@ class GaussianModel:
             self._L_22_inv,
             self._lambda_view if self.use_view_dependent_pos else None,
             self._lambda_time if (self.use_view_dependent_pos and self.input_dim == 7) else None,
-            self._beta if self.use_beta else None,
             self._opacity,
             self.max_radii2D,
             self.xyz_gradient_accum,
@@ -297,7 +283,6 @@ class GaussianModel:
          self._L_22_inv,
          _lambda_view,
          _lambda_time,
-         _beta,
          self._opacity,
          self.max_radii2D,
          xyz_gradient_accum,
@@ -311,8 +296,6 @@ class GaussianModel:
                 self._lambda_view = _lambda_view
             if self.input_dim == 7 and _lambda_time is not None:
                 self._lambda_time = _lambda_time
-        if self.use_beta and _beta is not None:
-            self._beta = _beta
         self.training_setup(training_args)
         self.xyz_gradient_accum = xyz_gradient_accum
         self.denom = denom
@@ -357,13 +340,6 @@ class GaussianModel:
     @property
     def get_opacity(self):
         return self.opacity_activation(self._opacity)
-
-    @property
-    def get_beta(self):
-        """Get activated spatial beta."""
-        if not self.use_beta:
-            return None
-        return self.beta_activation(self._beta)
 
     @property
     def get_v_12(self):
@@ -507,7 +483,6 @@ class GaussianModel:
         # Only used when use_view_dependent_pos is True
         # Apply activation based on mode:
         # - use_opacity_pos_decouple=True: use lambda directly (already 0.0, no activation)
-        # - use_beta=True: apply beta_activation -> 4.0 * exp(x) -> (0, ∞)
         # - default: apply sigmoid activation -> [0, 1]
         if self.use_view_dependent_pos:
             if self.use_opacity_pos_decouple:
@@ -515,7 +490,7 @@ class GaussianModel:
                 lambda_view = self._lambda_view  # [N], exact value
                 lambda_time = self._lambda_time if self.input_dim == 7 else None  # [N] or None, exact value
             else:
-                # Apply activation function (sigmoid for standard, beta_activation for beta mode)
+                # Apply sigmoid activation
                 lambda_view = self.lambda_activation(self._lambda_view)  # [N]
                 lambda_time = self.lambda_activation(self._lambda_time) if self.input_dim == 7 else None  # [N] or None
         else:
@@ -533,7 +508,6 @@ class GaussianModel:
             lambda_opc=lambda_opc,
             lambda_view=lambda_view,         # [N] learnable conditioning strength for view (or zeros)
             lambda_time=lambda_time,         # [N] or None, learnable conditioning strength for time
-            use_beta=self.use_beta,          # Use beta-based opacity (UBS-style)
         )
 
         return x_cond, opacity_scale
@@ -653,12 +627,6 @@ class GaussianModel:
             lambda_view = torch.empty(0, device=device)
             lambda_time = torch.empty(0, device=device)
 
-        # Spatial beta (optional)
-        if self.use_beta:
-            betas = torch.zeros((num_gaussians, 1), dtype=torch.float, device=device)
-        else:
-            betas = torch.empty(0, device=device)
-
         opacities = inverse_sigmoid(0.1 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device=device))
 
         self._label = torch.zeros((fused_point_cloud.shape[0], 1), dtype=torch.int32).cuda()
@@ -679,9 +647,6 @@ class GaussianModel:
             self._lambda_view = nn.Parameter(lambda_view.requires_grad_(not self.use_opacity_pos_decouple))
             if self.input_dim == 7:
                 self._lambda_time = nn.Parameter(lambda_time.requires_grad_(not self.use_opacity_pos_decouple))
-
-        if self.use_beta:
-            self._beta = nn.Parameter(betas.requires_grad_(True))
 
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device=device)
 
@@ -713,10 +678,6 @@ class GaussianModel:
                 l.append({'params': [self._lambda_view], 'lr': training_args.beta_lr, "name": "lambda_view"})
                 if self.input_dim == 7:
                     l.append({'params': [self._lambda_time], 'lr': training_args.beta_lr, "name": "lambda_time"})
-
-        # Add beta if enabled
-        if self.use_beta:
-            l.append({'params': [self._beta], 'lr': training_args.beta_lr, "name": "beta"})
 
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
         self.xyz_scheduler_args = get_expon_lr_func(
@@ -758,9 +719,6 @@ class GaussianModel:
             l.append('lambda_view')
             if self.input_dim == 7:
                 l.append('lambda_time')
-        if self.use_beta:
-            for i in range(self._beta.shape[1]):
-                l.append('beta_{}'.format(i))
         return l
 
     def save_ply(self, path):
@@ -792,10 +750,6 @@ class GaussianModel:
             if self.input_dim == 7:
                 lambda_time = self._lambda_time.detach().cpu().numpy()[:, np.newaxis]  # [N, 1]
                 attrs_list.append(lambda_time)
-        if self.use_beta:
-            betas = self._beta.detach().cpu().numpy()
-            attrs_list.append(betas)
-
         attributes = np.concatenate(attrs_list, axis=1)
         elements[:] = list(map(tuple, attributes))
         el = PlyElement.describe(elements, 'vertex')
@@ -907,14 +861,6 @@ class GaussianModel:
             lambda_view = np.zeros(0, dtype=np.float32)
             lambda_time = np.zeros(0, dtype=np.float32)
 
-        # Load beta if enabled
-        if self.use_beta:
-            beta_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("beta_")]
-            beta_names = sorted(beta_names, key=lambda x: int(x.split('_')[-1]))
-            betas = np.zeros((xyz.shape[0], len(beta_names)))
-            for idx, attr_name in enumerate(beta_names):
-                betas[:, idx] = np.asarray(plydata.elements[0][attr_name])
-
         self._xyz = nn.Parameter(torch.tensor(xyz, dtype=torch.float, device="cuda").requires_grad_(True))
         self._features_dc = nn.Parameter(torch.tensor(features_dc, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
         self._features_rest = nn.Parameter(torch.tensor(features_extra, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
@@ -932,9 +878,6 @@ class GaussianModel:
             self._lambda_view = nn.Parameter(torch.tensor(lambda_view, dtype=torch.float, device="cuda").requires_grad_(not self.use_opacity_pos_decouple))
             if self.input_dim == 7:
                 self._lambda_time = nn.Parameter(torch.tensor(lambda_time, dtype=torch.float, device="cuda").requires_grad_(not self.use_opacity_pos_decouple))
-
-        if self.use_beta:
-            self._beta = nn.Parameter(torch.tensor(betas, dtype=torch.float, device="cuda").requires_grad_(True))
 
         self.active_sh_degree = self.max_sh_degree
 
@@ -1003,9 +946,6 @@ class GaussianModel:
             elif self.input_dim == 7:
                 # For 6DGS -> 7DGS conversion or decoupled mode, prune manually
                 self._lambda_time = self._lambda_time[valid_points_mask]
-        if self.use_beta:
-            self._beta = optimizable_tensors["beta"]
-
         self.xyz_gradient_accum = self.xyz_gradient_accum[valid_points_mask]
         self.denom = self.denom[valid_points_mask]
         self.max_radii2D = self.max_radii2D[valid_points_mask]
@@ -1034,7 +974,7 @@ class GaussianModel:
     def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities,
                               new_scaling, new_rotation, new_mean_view, new_mean_time,
                               new_L_22_inv, new_v_12_direction=None,
-                              new_lambda_view=None, new_lambda_time=None, new_beta=None):
+                              new_lambda_view=None, new_lambda_time=None):
         d = {
             "xyz": new_xyz,
             "f_dc": new_features_dc,
@@ -1052,9 +992,6 @@ class GaussianModel:
             d["lambda_view"] = new_lambda_view
             if self.input_dim == 7:
                 d["lambda_time"] = new_lambda_time
-        if self.use_beta:
-            d["beta"] = new_beta
-
         optimizable_tensors = self.cat_tensors_to_optimizer(d)
         self._xyz = optimizable_tensors["xyz"]
         self._features_dc = optimizable_tensors["f_dc"]
@@ -1084,9 +1021,6 @@ class GaussianModel:
             elif self.input_dim == 7:
                 # For 6DGS -> 7DGS conversion or decoupled mode, concatenate manually
                 self._lambda_time = torch.cat([self._lambda_time, new_lambda_time], dim=0)
-        if self.use_beta:
-            self._beta = optimizable_tensors["beta"]
-
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
@@ -1119,13 +1053,11 @@ class GaussianModel:
         # Lambda parameters (per-Gaussian scalar [N], only when view-dependent position is enabled)
         new_lambda_view = self._lambda_view[selected_pts_mask].repeat(N) if self.use_view_dependent_pos else None
         new_lambda_time = self._lambda_time[selected_pts_mask].repeat(N) if (self.use_view_dependent_pos and self.input_dim == 7) else None
-        new_beta = self._beta[selected_pts_mask].repeat(N, 1) if self.use_beta else None
-
         self.densification_postfix(
             new_xyz, new_features_dc, new_features_rest, new_opacity,
             new_scaling, new_rotation, new_mean_view, new_mean_time, new_L_22_inv,
             new_v_12_direction,
-            new_lambda_view, new_lambda_time, new_beta
+            new_lambda_view, new_lambda_time
         )
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
@@ -1154,13 +1086,11 @@ class GaussianModel:
         # Lambda parameters (only when view-dependent position is enabled)
         new_lambda_view = self._lambda_view[selected_pts_mask] if self.use_view_dependent_pos else None
         new_lambda_time = self._lambda_time[selected_pts_mask] if (self.use_view_dependent_pos and self.input_dim == 7) else None
-        new_beta = self._beta[selected_pts_mask] if self.use_beta else None
-
         self.densification_postfix(
             new_xyz, new_features_dc, new_features_rest, new_opacities,
             new_scaling, new_rotation, new_mean_view, new_mean_time, new_L_22_inv,
             new_v_12_direction,
-            new_lambda_view, new_lambda_time, new_beta
+            new_lambda_view, new_lambda_time
         )
 
     def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size, iteration):
@@ -1224,9 +1154,6 @@ class GaussianModel:
             result['lambda_view'] = self._lambda_view[idxs]
             if self.input_dim == 7:
                 result['lambda_time'] = self._lambda_time[idxs]
-
-        if self.use_beta:
-            result['beta'] = self._beta[idxs]
 
         return result
 
@@ -1295,9 +1222,6 @@ class GaussianModel:
             self._lambda_view.index_copy_(0, dead_indices, params['lambda_view'])
             if self.input_dim == 7:
                 self._lambda_time.index_copy_(0, dead_indices, params['lambda_time'])
-
-        if self.use_beta:
-            self._beta.index_copy_(0, dead_indices, params['beta'])
 
         # Update opacity at source indices
         self._opacity.index_copy_(0, reinit_idx, self._opacity.index_select(0, dead_indices))
@@ -1378,9 +1302,6 @@ class GaussianModel:
             tensors_dict["lambda_view"] = self._lambda_view
             if self.input_dim == 7:
                 tensors_dict["lambda_time"] = self._lambda_time
-        if self.use_beta:
-            tensors_dict["beta"] = self._beta
-
         optimizable_tensors = {}
         for group in self.optimizer.param_groups:
             if group["name"] not in tensors_dict:
@@ -1430,12 +1351,72 @@ class GaussianModel:
                 self._lambda_view = optimizable_tensors["lambda_view"]
             if "lambda_time" in optimizable_tensors:
                 self._lambda_time = optimizable_tensors["lambda_time"]
-        if self.use_beta:
-            self._beta = optimizable_tensors["beta"]
-
         torch.cuda.empty_cache()
 
         return optimizable_tensors
+
+    def render(self, viewpoint_camera, render_mode="RGB", mask=None):
+        """Render using gsplat rasterization."""
+        if mask is None:
+            mask = torch.ones(self._xyz.shape[0], dtype=torch.bool, device=self._xyz.device)
+
+        K = torch.zeros((3, 3), device=self._xyz.device)
+        fx = 0.5 * viewpoint_camera.image_width / math.tan(viewpoint_camera.FoVx / 2)
+        fy = 0.5 * viewpoint_camera.image_height / math.tan(viewpoint_camera.FoVy / 2)
+        K[0, 0] = fx
+        K[1, 1] = fy
+        K[0, 2] = viewpoint_camera.image_width / 2
+        K[1, 2] = viewpoint_camera.image_height / 2
+        K[2, 2] = 1.0
+
+        dir_pp = self.get_xyz - viewpoint_camera.camera_center.repeat(self._xyz.shape[0], 1)
+        mean_view = dir_pp / dir_pp.norm(dim=1, keepdim=True)
+        if self.input_dim == 7:
+            timestamp = torch.full(
+                (mean_view.shape[0], 1),
+                viewpoint_camera.timestamp if hasattr(viewpoint_camera, 'timestamp') else 0.0,
+                device=mean_view.device, dtype=mean_view.dtype,
+            )
+            cond_params = torch.cat([mean_view, timestamp], dim=-1)
+        else:
+            cond_params = mean_view
+
+        m_cond, opacity_scale = self.slice_gaussian_full_method(cond_params)
+        opacity = self.get_opacity * opacity_scale
+        shs = self.get_features[mask]
+
+        # Build 3x3 covariance from quaternion rotations and scales
+        covars, _ = quat_scale_to_covar_preci(
+            self.get_rotation, self.get_scaling,
+            compute_covar=True, compute_preci=False, triu=False,
+        )
+
+        betas = torch.ones(self._xyz.shape[0], device=self._xyz.device)
+
+        rgbs, alphas, meta = rasterization(
+            means=m_cond[mask],
+            l_triagnles=None,
+            scales=None,
+            opacities=opacity.squeeze()[mask],
+            betas=betas[mask],
+            shs=shs,
+            sh_degree=self.active_sh_degree,
+            viewmats=viewpoint_camera.world_view_transform.transpose(0, 1).unsqueeze(0),
+            Ks=K.unsqueeze(0),
+            width=viewpoint_camera.image_width,
+            height=viewpoint_camera.image_height,
+            backgrounds=self.background.unsqueeze(0),
+            render_mode=render_mode,
+            covars=covars[mask],
+        )
+
+        rgbs = rgbs.permute(0, 3, 1, 2).contiguous()[0]
+        return {
+            "render": rgbs,
+            "viewspace_points": meta["means2d"],
+            "visibility_filter": meta["radii"] > 0,
+            "radii": meta["radii"],
+        }
 
     def render_tcgs(self, viewpoint_camera, render_mode="RGB", scaling_modifier=1.0, use_tcgs=False, tight_snugbox=False, compact_box_mult=1.0):
         """
@@ -1519,7 +1500,7 @@ class GaussianModel:
             scales=self.get_scaling,    # Scale is NOT view-dependent
             rotations=self.get_rotation,    # Rotation is NOT view-dependent
             cov3D_precomp=None,
-            betas=self.get_beta,
+            betas=None,
         )
 
         return {
@@ -1626,8 +1607,6 @@ class GaussianModel:
         _L_22_inv_masked = self._L_22_inv[mask]
         if self.use_view_dependent_pos:
             _v_12_direction_masked = self._v_12_direction[mask]
-        if self.use_beta:
-            _beta_masked = self._beta[mask]
 
         # Temporarily swap in masked tensors
         orig_xyz, self._xyz = self._xyz, _xyz_masked
@@ -1641,8 +1620,6 @@ class GaussianModel:
         orig_L_22_inv, self._L_22_inv = self._L_22_inv, _L_22_inv_masked
         if self.use_view_dependent_pos:
             orig_v_12_direction, self._v_12_direction = self._v_12_direction, _v_12_direction_masked
-        if self.use_beta:
-            orig_beta, self._beta = self._beta, _beta_masked
 
         try:
             render_output = self.render_tcgs(
@@ -1676,8 +1653,6 @@ class GaussianModel:
             self._L_22_inv = orig_L_22_inv
             if self.use_view_dependent_pos:
                 self._v_12_direction = orig_v_12_direction
-            if self.use_beta:
-                self._beta = orig_beta
 
         render_colors = render_colors.permute(1, 2, 0)
 

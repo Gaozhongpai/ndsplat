@@ -26,7 +26,6 @@ from utils.ndgs_utils import strip_lower_diag
 
 # # Import gsplat functions for N-DGS operations
 # from gsplat import (
-#     slice_gaussian_ndgs_test,
 #     _slice_gaussian_ndgs as slice_gaussian_ndgs,
 #     _l_triangle_to_covar as l_triangle_to_covar,
 #     _l_triangle_to_rotmat as l_triangle_to_rotmat,
@@ -34,11 +33,11 @@ from utils.ndgs_utils import strip_lower_diag
 # )
 
 from gsplat import (
-    slice_gaussian_ndgs_test,
     slice_gaussian_ndgs,
     l_triangle_to_covar,
     l_triangle_to_rotmat,
-    rot_scale_l_triangle_to_covar
+    rot_scale_l_triangle_to_covar,
+    rasterization,
 )
 
 # Import TCGS rasterizer
@@ -132,41 +131,6 @@ class GaussianModel:
         )
 
         return m_cond, cov3D_precomp, scale
-
-    def slice_gaussian_test(self, q, lambda_opc=None, lambda_opc_time=None):
-        """
-        Optimized version of slice_gaussian for test/inference time.
-        Uses precomputed self.v_22_inv and self.v_regr to avoid redundant computation.
-        CUDA-accelerated for fast inference.
-
-        Args:
-            q: Query direction (view direction + time for 7DGS) [N, C]
-            lambda_opc: Opacity scaling factor for view direction. Tensor [N] or scalar.
-                       If None, uses self.get_lambda_opc (default behavior)
-            lambda_opc_time: Opacity scaling factor for time. Tensor [N], scalar, or None.
-                            If None, uses self.get_lambda_opc_time for 7DGS (default behavior)
-
-        Returns:
-            m_cond: Conditional mean (3D position) [N, 3]
-            scale: Opacity scaling factor based on direction influence [N, 1]
-        """
-        m_1 = self.get_xyz
-        m_2 = self.direction
-        v_22_inv = self.v_22_inv
-        v_regr = self.v_regr
-
-        # Use CUDA-accelerated inference
-        m_cond, scale = slice_gaussian_ndgs_test(
-            m_1=m_1,
-            m_2=m_2,
-            v_22_inv=v_22_inv,
-            v_regr=v_regr,
-            query=q,
-            lambda_opc=lambda_opc,
-            lambda_opc_time=lambda_opc_time
-        )
-        return m_cond, scale
-
 
     def __init__(self, sh_degree : int, input_dim: int = 6, use_rot_scale_l_triangle: bool = False,
                  learnable_lambda_opc: bool = True, time_duration: list = [0.0, 1.0], lambda_opc: float = 0.35):
@@ -1703,6 +1667,80 @@ class GaussianModel:
 
         return optimizable_tensors
 
+    def render(self, viewpoint_camera, render_mode="RGB", mask=None):
+        """Render using gsplat rasterization."""
+        if mask is None:
+            mask = torch.ones(self._xyz.shape[0], dtype=torch.bool, device=self._xyz.device)
+
+        K = torch.zeros((3, 3), device=self._xyz.device)
+        fx = 0.5 * viewpoint_camera.image_width / math.tan(viewpoint_camera.FoVx / 2)
+        fy = 0.5 * viewpoint_camera.image_height / math.tan(viewpoint_camera.FoVy / 2)
+        K[0, 0] = fx
+        K[1, 1] = fy
+        K[0, 2] = viewpoint_camera.image_width / 2
+        K[1, 2] = viewpoint_camera.image_height / 2
+        K[2, 2] = 1.0
+
+        dir_pp = self.get_xyz - viewpoint_camera.camera_center.repeat(self._mean_view.shape[0], 1)
+        view_dir = dir_pp / dir_pp.norm(dim=1, keepdim=True)
+        if self.input_dim == 7:
+            timestamp = torch.full(
+                (view_dir.shape[0], 1),
+                viewpoint_camera.timestamp if hasattr(viewpoint_camera, 'timestamp') else 0.0,
+                device=view_dir.device, dtype=view_dir.dtype,
+            )
+            cond_params = torch.cat([view_dir, timestamp], dim=-1)
+        else:
+            cond_params = view_dir
+
+        lambda_opc = self.get_lambda_opc.squeeze(-1)
+        lambda_opc_time = self.get_lambda_opc_time.squeeze(-1) if self.input_dim == 7 else None
+
+        shs = self.get_features
+        m_cond, cov3D_precomp, pdf_cond = self.slice_gaussian(cond_params, c_dim=3, lambda_opc=lambda_opc, lambda_opc_time=lambda_opc_time)
+        opacity = self.get_opacity * pdf_cond
+
+        # Convert upper-tri 6D covariance [N, 6] to 3x3 symmetric matrix [N, 3, 3]
+        # Upper-tri order: [0,0], [0,1], [0,2], [1,1], [1,2], [2,2]
+        covars = torch.zeros(m_cond.shape[0], 3, 3, device=m_cond.device, dtype=m_cond.dtype)
+        covars[:, 0, 0] = cov3D_precomp[:, 0]
+        covars[:, 0, 1] = cov3D_precomp[:, 1]
+        covars[:, 0, 2] = cov3D_precomp[:, 2]
+        covars[:, 1, 0] = cov3D_precomp[:, 1]
+        covars[:, 1, 1] = cov3D_precomp[:, 3]
+        covars[:, 1, 2] = cov3D_precomp[:, 4]
+        covars[:, 2, 0] = cov3D_precomp[:, 2]
+        covars[:, 2, 1] = cov3D_precomp[:, 4]
+        covars[:, 2, 2] = cov3D_precomp[:, 5]
+
+        # NDGS has no beta parameter, pass ones
+        betas = torch.ones(m_cond.shape[0], device=m_cond.device)
+
+        rgbs, alphas, meta = rasterization(
+            means=m_cond[mask],
+            l_triagnles=None,
+            scales=None,
+            opacities=opacity.squeeze()[mask],
+            betas=betas[mask],
+            shs=shs[mask],
+            sh_degree=self.active_sh_degree,
+            viewmats=viewpoint_camera.world_view_transform.transpose(0, 1).unsqueeze(0),
+            Ks=K.unsqueeze(0),
+            width=viewpoint_camera.image_width,
+            height=viewpoint_camera.image_height,
+            backgrounds=self.background.unsqueeze(0),
+            render_mode=render_mode,
+            covars=covars[mask],
+        )
+
+        rgbs = rgbs.permute(0, 3, 1, 2).contiguous()[0]
+        return {
+            "render": rgbs,
+            "viewspace_points": meta["means2d"],
+            "visibility_filter": meta["radii"] > 0,
+            "radii": meta["radii"],
+        }
+
     def render_tcgs(self, viewpoint_camera, render_mode="RGB", scaling_modifier=1.0, use_tcgs=False, tight_snugbox=False, compact_box_mult=1.0):
         """
         Render using NDGS conditional slicing with diff-gaussian-rasterization.
@@ -1746,18 +1784,11 @@ class GaussianModel:
         lambda_opc = self.get_lambda_opc.squeeze(-1)  # [N]
         lambda_opc_time = self.get_lambda_opc_time.squeeze(-1) if self.input_dim == 7 else None  # [N] or None
 
-        is_test = False  # This is because masking precompute takes longer
-        if is_test:
-            # Test mode: use precomputed values
-            m_cond, pdf_cond = self.slice_gaussian_test(cond_params, lambda_opc=lambda_opc, lambda_opc_time=lambda_opc_time)
-            shs = self.shs
-            cov3D_precomp = self.cov3D_precomp
-        else:
-            # Training mode: compute conditional slicing
-            shs = self.get_features
-            # slice_gaussian returns upper-triangular format [0,0], [0,1], [0,2], [1,1], [1,2], [2,2]
-            # which is directly compatible with diff_gaussian_rasterization
-            m_cond, cov3D_precomp, pdf_cond = self.slice_gaussian(cond_params, c_dim=3, lambda_opc=lambda_opc, lambda_opc_time=lambda_opc_time)
+        # Training mode: compute conditional slicing
+        shs = self.get_features
+        # slice_gaussian returns upper-triangular format [0,0], [0,1], [0,2], [1,1], [1,2], [2,2]
+        # which is directly compatible with diff_gaussian_rasterization
+        m_cond, cov3D_precomp, pdf_cond = self.slice_gaussian(cond_params, c_dim=3, lambda_opc=lambda_opc, lambda_opc_time=lambda_opc_time)
 
         # Compute opacity with conditional probability
         opacity = self.get_opacity * pdf_cond
