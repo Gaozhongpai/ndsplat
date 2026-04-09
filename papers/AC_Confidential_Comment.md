@@ -29,13 +29,9 @@ The reviewers focused almost exclusively on PSNR improvements while underweighti
 | Position shift | $K \delta$ | — | $V_{pq} \tilde{V}_{qq} \delta$ |
 | Opacity | $\delta^\top \Sigma_{qq}^{-1} \delta$ | $\|L^\top \delta\|^2$ | $\|L^\top \delta\|^2$ |
 
-No matrix inversion, no regression matrix, no covariance correction. This directly translates to measured speedups on A100:
+No matrix inversion, no regression matrix, no covariance correction. Measured on A100: slicing kernel **5-6x faster** (dGS), **8-11x faster** (dGS-O); end-to-end up to **2.66x speedup** (279 vs 147 FPS on Mip-NeRF 360). dGS (MCMC) achieves 27.67 dB at 201 FPS on Mip-NeRF 360, comparable to Scaffold-GS's 27.72 dB at 102 FPS (CVPR 2024), with ~2x faster rendering.
 
-- Slicing kernel: **5-6x faster** (dGS), **8-11x faster** (dGS-O)
-- End-to-end rendering: up to **2.66x speedup** (279 vs 147 FPS on Mip-NeRF 360)
-- dGS (MCMC) achieves 27.67 dB at 201 FPS on Mip-NeRF 360, comparable to Scaffold-GS's 27.72 dB at 102 FPS (CVPR 2024), with ~2x faster rendering
-
-Even if dGS achieved identical quality to N-DGS, eliminating three of five per-Gaussian operations—yielding a 5-6x faster slicing kernel with up to 2.66x end-to-end speedup—would constitute a significant contribution for real-time Gaussian Splatting applications. dGS achieves this speedup while *also* improving quality across all benchmarks.
+Even if dGS achieved identical quality to N-DGS, eliminating three of five per-Gaussian operations, yielding a 5-6x faster slicing kernel with up to 2.66x end-to-end speedup, would constitute a significant contribution for real-time Gaussian Splatting applications. dGS achieves this speedup while *also* improving quality across all benchmarks.
 
 ## Theoretical analysis exists but was overlooked
 
@@ -48,10 +44,25 @@ This proves dGS provides tighter theoretical bounds on displacement, not an arbi
 
 ## Summary of contributions
 
-1. **Rendering efficiency**: Eliminates 3 of 5 per-Gaussian operations (inversion, regression matrix, covariance correction), yielding 5-6x faster slicing kernel (8-11x for dGS-O) and up to 2.66x end-to-end speedup, critical for real-time deployment
+1. **Rendering efficiency**: 5-6x faster slicing kernel (8-11x for dGS-O), up to 2.66x end-to-end speedup, critical for real-time deployment
 2. **Consistent quality gains**: improvements on all 6 datasets (38+ scenes), zero regressions, up to +0.97 dB
 3. **Theoretically justified**: formal displacement bound analysis (Appendix A) proving tighter bounds than N-DGS
 4. **New ablations**: Lambda learned vs fixed, CUDA kernel benchmarks, MCMC equal-budget comparisons, NeRF-DS evaluation
-5. **Future direction**: concrete dBS formulation combining dGS efficiency with UBS Beta kernels (developed during reviewer discussion with hVDr)
+5. **dBS (dGS + UBS)**: new SOTA on NeRF Synthetic and Mip-NeRF 360 (see below)
 
-We believe a method that is both faster and better, with theoretical justification and comprehensive evaluation, constitutes a clear contribution to the community. We respectfully ask the AC to weigh the full scope of evidence presented above.
+---
+## New SOTA: dBS (dGS + UBS)
+
+We applied dGS to UBS (MCMC), yielding dBS. NeRF Synthetic (8 scenes, 30K iters, 300K cap):
+
+| Dataset | Method | PSNR | SSIM | LPIPS | FPS | Train (min) |
+|:--------|:-------|-----:|-----:|------:|----:|------------:|
+| NeRF Synthetic | **dBS (Ours)** | **34.96** | **0.975** | **0.026** | **423.82** | **8.4** |
+| | UBS | 34.85 | 0.974 | 0.026 | 315.47 | 9.1 |
+| Mip-NeRF 360 | **dBS (Ours)** | **28.74** | **0.842** | **0.184** | **158.84** | **24.4** |
+| | UBS | 28.63 | 0.842 | 0.184 | 76.94 | 28.6 |
+
+dBS outperforms UBS on both benchmarks (+0.11 dB on NeRF Synthetic, +0.11 dB on Mip-NeRF 360), with 1.3-2.1x faster rendering and 8-15% shorter training. This confirms that the dGS direct parameterization is not limited to the Gaussian kernel; it generalizes to the Beta kernel as well, improving both quality and speed.
+
+We respectfully ask the AC to weigh the full scope of evidence and to remind the reviewers to check these new results, which were not available during the rebuttal period.
+

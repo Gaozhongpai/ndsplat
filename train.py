@@ -50,7 +50,7 @@ def create_radial_weight_mask(height, width, center_weight=0.8, edge_weight=5):
     weight_mask = center_weight + (edge_weight - center_weight) * normalized_distance
     return weight_mask
 
-def render_wrapper(viewpoint_cam, gaussians, pipe, bg, mode, scaling_modifier=1.0):
+def render_wrapper(viewpoint_cam, gaussians, pipe, bg, mode, scaling_modifier=1.0, use_gsplat=False):
     """Wrapper function that handles model-specific rendering.
 
     All models now have render_tcgs as a class method, so we dispatch to the
@@ -63,13 +63,14 @@ def render_wrapper(viewpoint_cam, gaussians, pipe, bg, mode, scaling_modifier=1.
         bg: Background color
         mode: Rendering mode ("ddgs", "3dgs", "ubs", "ndgs", "dgs", "dgs-color")
         scaling_modifier: Scaling modifier for rendering
+        use_gsplat: If True, use gsplat rasterizer instead of TCGS for UBS/DGS modes
     """
-    if "ubs" in mode or "ndgs" in mode or mode == "dgs" or mode == "dgs-color":
-        # UBS/N-DGS/DGS/DGS-color mode: use render_tcgs with CUDA-accelerated conditional slicing
+    if "ubs" in mode or "ndgs" in mode or mode == "dgs" or mode == "dgs-color" or mode == "dbs":
         gaussians.background = bg
+        if use_gsplat and hasattr(gaussians, 'render'):
+            return gaussians.render(viewpoint_cam, render_mode="RGB")
         return gaussians.render_tcgs(viewpoint_cam, render_mode="RGB", use_tcgs=False, scaling_modifier=scaling_modifier)
     elif "ddgs" in mode or "3dgs" in mode:
-        # DDGS/3DGS mode: use model's render_tcgs method
         return gaussians.render_tcgs(viewpoint_cam, pipe, bg, scaling_modifier)
     else:
         raise ValueError(f"Unknown mode: {mode}. All modes should have render_tcgs method.")
@@ -239,7 +240,7 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
             bg = torch.rand((3), device="cuda") if opt.random_background else background
 
             # Use unified render wrapper (handles all model modes)
-            render_pkg = render_wrapper(viewpoint_cam, gaussians, pipe, bg, mode)
+            render_pkg = render_wrapper(viewpoint_cam, gaussians, pipe, bg, mode, use_gsplat=dataset.use_gsplat)
             image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
             # Loss
             gt_image = viewpoint_cam.original_image  # Already on CUDA, no need for .cuda()
@@ -299,7 +300,7 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
                 progress_bar.close()
 
             # Log and save
-            n_patient_change = training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render_wrapper, (pipe, background, mode), log_file, best_psnr_info)
+            n_patient_change = training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render_wrapper, (pipe, background, mode, 1.0, dataset.use_gsplat), log_file, best_psnr_info)
 
             # Patient-based lambda_opc training (NDGS mode with learnable_lambda_opc)
             # Now works for both 6D and 7D (removed input_dim==7 restriction)

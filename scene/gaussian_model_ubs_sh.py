@@ -31,7 +31,6 @@ from gsplat import (
     l_triangle_to_rotmat,
     rot_scale_l_triangle_to_covar,
     cond_mean_convariance_opacity,
-    cond_mean_covariance_opacity_cholesky,
 )
 
 # Import compression utilities
@@ -193,14 +192,6 @@ class GaussianModel:
         o = self.get_opacity
         b = self.get_beta[:, 1:]
         return cond_mean_convariance_opacity(m, v, o, b, q)
-
-    def get_cond_mean_covariance_opacity_cholesky(self, q):
-        """Cholesky-based conditional mean/covariance/opacity with positive per-dim distances."""
-        v = self.get_covariance
-        m = self.get_mean
-        o = self.get_opacity
-        b = self.get_beta[:, 1:]
-        return cond_mean_covariance_opacity_cholesky(m, v, o, b, q)
 
     @property
     def get_xyz(self):
@@ -1098,7 +1089,7 @@ class GaussianModel:
                 query = torch.cat([view_dir, timestamp], dim=-1)
             else:
                 raise NotImplementedError("Only implemented for 6D or 7D query")
-            means, convs, opacities = self.get_cond_mean_covariance_opacity_cholesky(query)
+            means, convs, opacities = self.get_cond_mean_convariance_opacity(query)
         else:
             means = self.get_mean
             convs = self.get_covariance
@@ -1170,7 +1161,7 @@ class GaussianModel:
                 query = torch.cat([view_dir, timestamp], dim=-1)
             else:
                 raise NotImplementedError("Only implemented for 6D or 7D query")
-            means, convs, opacities = self.get_cond_mean_covariance_opacity_cholesky(query)
+            means, convs, opacities = self.get_cond_mean_convariance_opacity(query)
         else:
             means = self.get_mean
             convs = self.get_covariance
@@ -1334,7 +1325,7 @@ class GaussianModel:
                 query = torch.cat([view_dir, timestamp], dim=-1)
             else:
                 raise NotImplementedError("Only implemented for 6D or 7D query")
-            means, convs, opacities = self.get_cond_mean_covariance_opacity_cholesky(query)
+            means, convs, opacities = self.get_cond_mean_convariance_opacity(query)
         else:
             means = self.get_mean
             convs = self.get_covariance

@@ -77,7 +77,7 @@ class ModelParams(ParamGroup):
         self._white_background = False
         self.data_device = "cuda"
         self.eval = False
-        self.mode = "dgs"  # Options: "ddgs", "3dgs", "ubs", "ndgs", "ndgs-2sh", "dgs"
+        self.mode = "dgs"  # Options: "ddgs", "3dgs", "ubs", "ndgs", "ndgs-2sh", "dgs", "dbs"
         self.input_dim = 6  # Gaussian dimension: 6 for 6DGS/UBS, 7 for 7DGS (with time)
         self.use_rot_scale_l_triangle = False  # If True: use rotation-scale-l_triangle (UBS-style), If False: use diagonal-l_triangle (NDGS-style)
         self.learnable_lambda_opc = False  # If True: make lambda_opc a learnable parameter per Gaussian
@@ -89,6 +89,7 @@ class ModelParams(ParamGroup):
         self.l_22_inv_init_scale = 1.0  # Initialization scale for L_22_inv diagonal (1.0 for standard, 2.0 for PBR scenes)
         self.lambda_init = -1.2  # Initial value for lambda_view and lambda_time parameters
         self.lambda_opc = 0.35  # Default lambda_opc for opacity scaling (0.35 standard, 0.01 for dnerf, 0.2 for PBR)
+        self.use_gsplat = False  # If True: use gsplat rasterizer instead of TCGS for UBS/DGS modes
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):

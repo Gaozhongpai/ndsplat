@@ -57,8 +57,6 @@ Key differences:
 - Interpretable decomposition: spatial shape via $b_x$, conditioning via $\beta_q$
 - No conditional covariance correction (further simplification over UBS)
 
-We will include this formulation in the supplementary and view implementation and evaluation of dBS as a concrete next step.
-
 ---
 
 ## Q3 & Q4: Including discussions in the paper
@@ -66,3 +64,18 @@ We will include this formulation in the supplementary and view implementation an
 > *"The discussions should also be included in the paper somewhere if possible."*
 
 We agree. We will include the dGS-O vs dGS usage guidance (Q2), the analysis of why dGS achieves better quality via learnable Lambda (Q3), and the Gaussian count discussion with MCMC equal-budget evidence (Q4) in the revised paper, specifically in an expanded Discussion/Analysis section and the Limitations section.
+
+---
+
+## New SOTA: dBS (dGS + UBS)
+
+We have now implemented and evaluated dBS. Results on the full NeRF Synthetic benchmark (8 scenes, 30K iterations, MCMC, 300K cap):
+
+| Dataset | Method | PSNR | SSIM | LPIPS | FPS | Train (min) |
+|:--------|:-------|-----:|-----:|------:|----:|------------:|
+| NeRF Synthetic | **dBS (Ours)** | **34.96** | **0.975** | **0.026** | **423.82** | **8.4** |
+| | UBS | 34.85 | 0.974 | 0.026 | 315.47 | 9.1 |
+| Mip-NeRF 360 | **dBS (Ours)** | **28.74** | **0.842** | **0.184** | **158.84** | **24.4** |
+| | UBS | 28.63 | 0.842 | 0.184 | 76.94 | 28.6 |
+
+dBS outperforms UBS on both benchmarks (+0.11 dB on NeRF Synthetic, +0.11 dB on Mip-NeRF 360), with 1.3-2.1x faster rendering and 8-15% shorter training. This validates the dBS formulation proposed during our discussion and confirms that the dGS direct parameterization is not limited to the Gaussian kernel; it generalizes to the Beta kernel as well.

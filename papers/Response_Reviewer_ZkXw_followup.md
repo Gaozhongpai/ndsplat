@@ -39,3 +39,18 @@ This is not an arbitrary relaxation of probabilistic consistency. dGS replaces i
 **4. Quality improvements and efficiency gains are complementary.**
 
 We believe the reviewer's original concerns (W1: speedup source, W2: comparison scope, W3: primitive count) were addressed in our rebuttal with controlled CUDA benchmarks, Scaffold-GS comparison, and MCMC equal-budget evidence. The quality gains, while secondary to the efficiency contribution, are consistently positive and complement the core speedup. A method that is both faster and better should not be penalized for not being *sufficiently* better.
+
+---
+
+## New SOTA: dBS (dGS + UBS)
+
+Since the rebuttal, we have applied dGS to UBS (MCMC), yielding dBS (dGS + UBS):
+
+| Dataset | Method | PSNR | SSIM | LPIPS | FPS | Train (min) |
+|:--------|:-------|-----:|-----:|------:|----:|------------:|
+| NeRF Synthetic | **dBS (Ours)** | **34.96** | **0.975** | **0.026** | **423.82** | **8.4** |
+| | UBS | 34.85 | 0.974 | 0.026 | 315.47 | 9.1 |
+| Mip-NeRF 360 | **dBS (Ours)** | **28.74** | **0.842** | **0.184** | **158.84** | **24.4** |
+| | UBS | 28.63 | 0.842 | 0.184 | 76.94 | 28.6 |
+
+dBS outperforms UBS on both benchmarks (+0.11 dB on NeRF Synthetic, +0.11 dB on Mip-NeRF 360), with 1.3-2.1x faster rendering and 8-15% shorter training. This demonstrates that the dGS direct parameterization is not limited to the Gaussian kernel; it generalizes to the Beta kernel as well, improving both quality and speed.

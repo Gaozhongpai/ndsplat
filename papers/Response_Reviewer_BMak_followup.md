@@ -36,3 +36,18 @@ Even if dGS achieved identical quality to N-DGS, the rendering speedup alone wou
 Our supplementary (Appendix A, "Comparison to N-DGS Displacement Parameterization") provides formal analysis showing that dGS offers tighter displacement bounds than N-DGS. Specifically, N-DGS's implicit Cholesky coupling has bound $\sqrt{C}(i-1 + s_i)$ with cross-term offset and dimension-ordering asymmetry, while dGS provides a tight bound of $\bar{s}$ (mean spatial scale) with uniform treatment across all dimensions. The ablation confirms this is essential: removing spatial scaling degrades PSNR by **-2.59 dB** on NeRF Synthetic (Table 5).
 
 We believe the combination of consistent quality improvements (6 datasets, zero regressions), substantial rendering speedup (5-6x kernel, 2.66x end-to-end), and theoretical justification (Appendix A) constitutes a meaningful contribution. We hope the reviewer will reconsider the score given these clarifications.
+
+---
+
+## New SOTA: dBS (dGS + UBS)
+
+Since the rebuttal, we have applied dGS to UBS (MCMC), yielding dBS (dGS + UBS):
+
+| Dataset | Method | PSNR | SSIM | LPIPS | FPS | Train (min) |
+|:--------|:-------|-----:|-----:|------:|----:|------------:|
+| NeRF Synthetic | **dBS (Ours)** | **34.96** | **0.975** | **0.026** | **423.82** | **8.4** |
+| | UBS | 34.85 | 0.974 | 0.026 | 315.47 | 9.1 |
+| Mip-NeRF 360 | **dBS (Ours)** | **28.74** | **0.842** | **0.184** | **158.84** | **24.4** |
+| | UBS | 28.63 | 0.842 | 0.184 | 76.94 | 28.6 |
+
+dBS outperforms UBS on both benchmarks (+0.11 dB on NeRF Synthetic, +0.11 dB on Mip-NeRF 360), with 1.3-2.1x faster rendering and 8-15% shorter training. This confirms that the dGS direct parameterization is not limited to the Gaussian kernel; it generalizes to the Beta kernel as well, improving both quality and speed.
