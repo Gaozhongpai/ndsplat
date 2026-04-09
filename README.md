@@ -1,4 +1,4 @@
-# NDSplat: N-Dimensional Splatting
+# SplatND: Splat in N Dimensions
 
 A unified framework for N-dimensional splatting, supporting multiple kernel types (Gaussian and Beta), conditioning parameterizations, rasterization backends, and dimensionalities (3D/6D/7D).
 
@@ -63,7 +63,7 @@ Select backend with `--use_gsplat` flag (gsplat vs TCGS for training).
 1. Clone the repository with submodules:
 ```shell
 git clone <repository-url> --recursive
-cd ndsplat
+cd splatnd
 ```
 
 2. Create conda environment and install dependencies:
@@ -183,7 +183,7 @@ python view.py -m <model_path> --ply <ply_file> --mode ndgs
 ## Project Structure
 
 ```
-ndsplat/
+splatnd/
 ├── train.py, render.py, metrics.py, view.py   # Main pipeline
 ├── run.sh                                      # Master experiment runner
 ├── scene/

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**NDSplat** is a unified framework for N-dimensional splatting, supporting multiple kernel types, conditioning parameterizations, rasterization backends, and dimensionalities (3D/6D/7D).
+**SplatND** is a unified framework for N-dimensional splatting, supporting multiple kernel types, conditioning parameterizations, rasterization backends, and dimensionalities (3D/6D/7D).
 
 ### Model Variants
 
@@ -139,7 +139,7 @@ python view.py -m <model_path> --ply <ply_file> --mode ndgs
 ## Project Structure
 
 ```
-ndsplat/
+splatnd/
 ├── train.py, render.py, metrics.py, view.py   # Main pipeline
 ├── run.sh                                      # Master experiment runner
 ├── scene/
