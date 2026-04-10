@@ -33,7 +33,7 @@ def render_wrapper(view, gaussians, pipeline, background, mode, is_test=False, t
         gaussians: GaussianModel instance
         pipeline: Pipeline parameters
         background: Background color
-        mode: Rendering mode ("ndgs", "ddgs", "3dgs", "ubs", "dgs")
+        mode: Rendering mode ("3dgs", "ndgs", "ubs", "dgs", "dbs")
         is_test: Whether in test mode
         tight_snugbox: Whether to use tight snugbox for faster rendering (FPS measurement)
 
@@ -44,11 +44,10 @@ def render_wrapper(view, gaussians, pipeline, background, mode, is_test=False, t
         # UBS/N-DGS/dGS/dBS mode: use render_tcgs with CUDA-accelerated conditional slicing
         gaussians.background = background
         return gaussians.render_tcgs(view, render_mode="RGB", use_tcgs=is_test, tight_snugbox=tight_snugbox)
-    elif "ddgs" in mode or "3dgs" in mode:
-        # DDGS/3DGS mode: use model's render_tcgs method (no tight_snugbox support)
+    elif "3dgs" in mode:
         return gaussians.render_tcgs(view, pipeline, background, is_test=is_test)
     else:
-        raise ValueError(f"Unknown mode: {mode}. All modes should have render_tcgs method.")
+        raise ValueError(f"Unknown mode: {mode}.")
 
 
 def measure_fps(views, gaussians, pipeline, background, mode, num_frames=500, num_views=20, is_cuda=True):

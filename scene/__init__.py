@@ -26,7 +26,7 @@ def get_gaussian_model(mode: str):
     """Factory function to get the appropriate GaussianModel class based on mode.
 
     Args:
-        mode: One of "ndgs", "ddgs", "3dgs", "ubs", "ndgs-2sh", "dgs", "dbs"
+        mode: One of "ndgs","3dgs", "ubs", "dgs", "dbs"
 
     Returns:
         GaussianModel class for the specified mode
@@ -42,7 +42,7 @@ def get_gaussian_model(mode: str):
     elif mode == "dbs":  ## dBS: Direct Beta Splatting (dGS + UBS)
         from scene.gaussian_model_dbs_sh import GaussianModel
     else:
-        raise ValueError(f"Unknown mode: {mode}. Must be one of: ndgs, ddgs, 3dgs, ubs, ndgs-2sh, dgs, dbs.")
+        raise ValueError(f"Unknown mode: {mode}. Must be one of: 3dgs, ndgs, ubs, dgs, dbs.")
     return GaussianModel
 
 
@@ -138,12 +138,9 @@ class Scene:
                 mcmc_cap_max = getattr(self.opt_params, 'mcmc_cap_max', None)
                 densification_strategy = getattr(self.opt_params, 'densification_strategy', "standard")
 
-            if "ddgs" in args.mode:
-                self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent, args.source_path)
-            else:
-                self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent,
-                                                mcmc_cap_max=mcmc_cap_max,
-                                                densification_strategy=densification_strategy)
+            self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent,
+                                            mcmc_cap_max=mcmc_cap_max,
+                                            densification_strategy=densification_strategy)
 
     def save(self, iteration, is_best=False):
         if is_best:

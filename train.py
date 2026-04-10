@@ -58,7 +58,7 @@ def render_wrapper(viewpoint_cam, gaussians, pipe, bg, mode, scaling_modifier=1.
         gaussians: GaussianModel instance
         pipe: Pipeline parameters
         bg: Background color
-        mode: Rendering mode ("ddgs", "3dgs", "ubs", "ndgs", "dgs")
+        mode: Rendering mode ("3dgs", "ndgs", "ubs", "dgs", "dbs")
         scaling_modifier: Scaling modifier for rendering
         use_gsplat: If True, use gsplat rasterizer instead of TCGS for UBS/DGS modes
     """
@@ -67,10 +67,10 @@ def render_wrapper(viewpoint_cam, gaussians, pipe, bg, mode, scaling_modifier=1.
         if use_gsplat and hasattr(gaussians, 'render'):
             return gaussians.render(viewpoint_cam, render_mode="RGB")
         return gaussians.render_tcgs(viewpoint_cam, render_mode="RGB", use_tcgs=False, scaling_modifier=scaling_modifier)
-    elif "ddgs" in mode or "3dgs" in mode:
+    elif "3dgs" in mode:
         return gaussians.render_tcgs(viewpoint_cam, pipe, bg, scaling_modifier)
     else:
-        raise ValueError(f"Unknown mode: {mode}. All modes should have render_tcgs method.")
+        raise ValueError(f"Unknown mode: {mode}.")
 
 def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
     first_iter = 0
@@ -350,9 +350,6 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 print("\nNumber Gaussian: {}".format(gaussians.get_xyz.shape[0]))
-                if "ddgs" in mode:
-                    print("\nNumber Principle: {}".format(gaussians._is_principle.sum()))
-                    print("\nNumber Non-Principle: {}".format((~gaussians._is_principle).sum()))
                 scene.save(iteration)
 
             # Densification

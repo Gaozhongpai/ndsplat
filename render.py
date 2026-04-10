@@ -36,7 +36,7 @@ def render_wrapper(view, gaussians, pipeline, background, mode, is_test=False, t
         gaussians: GaussianModel instance
         pipeline: Pipeline parameters
         background: Background color
-        mode: Rendering mode ("ndgs", "ddgs", "3dgs", "ubs", "dgs")
+        mode: Rendering mode ("3dgs", "ndgs", "ubs", "dgs", "dbs")
         is_test: Whether in test mode
         tight_snugbox: Whether to use tight snugbox for faster rendering (FPS measurement)
 
@@ -47,11 +47,10 @@ def render_wrapper(view, gaussians, pipeline, background, mode, is_test=False, t
         # UBS/N-DGS/dGS/dBS mode: use render_tcgs with CUDA-accelerated conditional slicing
         gaussians.background = background
         return gaussians.render_tcgs(view, render_mode="RGB", use_tcgs=is_test, tight_snugbox=tight_snugbox)
-    elif "ddgs" in mode or "3dgs" in mode:
-        # DDGS/3DGS mode: use model's render_tcgs method (no tight_snugbox support)
+    elif "3dgs" in mode:
         return gaussians.render_tcgs(view, pipeline, background, is_test=is_test)
     else:
-        raise ValueError(f"Unknown mode: {mode}. All modes should have render_tcgs method.")
+        raise ValueError(f"Unknown mode: {mode}.")
 
 
 def render_set(model_path, name, iteration, views, gaussians, pipeline, background, mode, measure_fps=False):
@@ -73,11 +72,6 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
 
     makedirs(render_path, exist_ok=True)
     makedirs(gts_path, exist_ok=True)
-
-    # Create principle/non-principle directories only for DDGS mode
-    if "ddgs" in mode.lower():
-        makedirs(render_path.replace("renders", "renders_principle"), exist_ok=True)
-        makedirs(render_path.replace("renders", "renders_non_principle"), exist_ok=True)
 
     # FPS measurement at iteration 30000 (final) or best
     if iteration == 30000 or iteration == "best":
@@ -131,20 +125,6 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
 
         # Save principle/non-principle splits (DDGS mode only)
-        if "ddgs" in mode.lower():
-            rendering_principle = renderings.get("render_principle")
-            rendering_non_principle = renderings.get("render_non_principle")
-
-            if rendering_principle is not None:
-                torchvision.utils.save_image(
-                    rendering_principle,
-                    os.path.join(render_path.replace("renders", "renders_principle"), '{0:05d}'.format(idx) + ".png")
-                )
-            if rendering_non_principle is not None:
-                torchvision.utils.save_image(
-                    rendering_non_principle,
-                    os.path.join(render_path.replace("renders", "renders_non_principle"), '{0:05d}'.format(idx) + ".png")
-                )
 
         torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
 
