@@ -135,28 +135,16 @@ class OptimizationParams(ParamGroup):
         self.densify_grad_threshold = 0.0002
         self.opacity_reset_interval = 3000
 
-        # Densification strategy: "standard", "mcmc", or "fastgs"
-        self.densification_strategy = "standard"  # Options: "standard" (gradient-based), "mcmc" (MCMC sampling), "fastgs" (multi-view consistent)
+        # Densification strategy: "standard" or "mcmc"
+        self.densification_strategy = "standard"
 
         # MCMC-specific parameters (only used when densification_strategy="mcmc")
         self.mcmc_cap_max = 300_000  # Maximum number of Gaussians
         self.mcmc_refine_interval = 100  # Interval for MCMC refinement
         self.mcmc_densify_until_iter = 25_000  # MCMC densifies longer than standard (25k vs 15k)
-        self.noise_lr = 1.0  # Noise learning rate for MCMC spatial perturbation (matching UBS)
+        self.noise_lr = 1.0  # Noise learning rate for MCMC spatial perturbation
         self.opacity_reg = 0.01  # Opacity regularization weight for MCMC
         self.scale_reg = 0.01  # Scale regularization weight for MCMC
-
-        # FastGS-specific parameters (only used when densification_strategy="fastgs")
-        # Adapted from FastGS (arXiv:2511.04283) for multi-view consistent densification
-        self.fastgs_loss_thresh = 0.3  # Threshold for high-error pixel detection
-        self.fastgs_grad_thresh = 0.0002  # Gradient threshold for cloning (XY screen-space gradients)
-        self.fastgs_grad_abs_thresh = 0.0004  # Gradient threshold for splitting (Z depth gradients) - FastGS big default
-        self.fastgs_densify_score_thresh = 2  # Minimum importance score for densification
-        self.fastgs_prune_budget_ratio = 0.2  # Fraction of prunable Gaussians to actually prune
-        self.fastgs_final_prune_interval = 3000  # Interval for final pruning after 15k iterations
-        self.fastgs_final_prune_start = 15_000  # Start iteration for final pruning
-        self.fastgs_final_prune_end = 30_000  # End iteration for final pruning
-        self.fastgs_num_sample_cams = 10  # Number of cameras to sample for multi-view scoring
 
         # Loss parameters
         self.lambda_dssim = 0.2

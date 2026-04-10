@@ -38,9 +38,6 @@ except ImportError:
     VISER_FOUND = False
     print("Viser not found. Live viewer will be disabled.")
 
-# FastGS multi-view consistent densification utilities
-from utils.fast_utils import compute_gaussian_score_fastgs, sampling_cameras
-    
 def create_radial_weight_mask(height, width, center_weight=0.8, edge_weight=5):
     y, x = torch.meshgrid(torch.arange(height), torch.arange(width))
     center_y, center_x = height // 2, width // 2
@@ -107,6 +104,17 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
 
     scene = Scene(dataset, gaussians, opt_params=opt)
     gaussians.training_setup(opt)
+
+    # Replace optimizer with SelectiveAdam (CUDA-fused, visibility-aware)
+    # Works with both gsplat and tcgs_speedy_rasterizer backends
+    use_selective_adam = True
+    try:
+        from gsplat import SelectiveAdam
+        gaussians.optimizer.__class__ = SelectiveAdam
+        print("Using SelectiveAdam optimizer (CUDA-fused, visibility-aware)")
+    except ImportError:
+        use_selective_adam = False
+
     if checkpoint:
         if checkpoint.endswith('.ply'):
             # Load from PLY file - starts from iteration 0 with fresh optimizer
@@ -116,7 +124,6 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
             # Reinitialize tracking arrays to match the loaded model size
             num_points = gaussians.get_xyz.shape[0]
             gaussians.xyz_gradient_accum = torch.zeros((num_points, 1), device="cuda")
-            gaussians.xyz_gradient_accum_abs = torch.zeros((num_points, 1), device="cuda")  # FastGS: Z gradients
             gaussians.denom = torch.zeros((num_points, 1), device="cuda")
             gaussians.max_radii2D = torch.zeros((num_points,), device="cuda")
             print(f"Note: Loading from PLY resets optimizer state and starts from iteration 0")
@@ -264,19 +271,15 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
         iter_end.record()
 
         with torch.no_grad():
-            # Use the last view's data as baseline
-            viewspace_point_tensor = batch_viewspace_tensors[-1]
-            visibility_filter = batch_visibility_filters[-1]
-            radii = batch_radii[-1]
-
-            # Multi-view: aggregate and apply visibility-weighted averaging
+            # Aggregate visibility across all views in the batch
+            # A Gaussian is "visible" if it appeared in any view
             if pipe.mv > 1:
-                # Aggregate visibility and radii
                 visibility_count = torch.stack(batch_visibility_filters, dim=1).sum(dim=1)
                 visibility_filter = visibility_count > 0
                 radii = torch.stack(batch_radii, dim=1).max(dim=1)[0]
 
                 # Aggregate viewspace gradient norms from all views
+                viewspace_point_tensor = batch_viewspace_tensors[-1]
                 batch_point_grad_norms = []
                 for vs_tensor in batch_viewspace_tensors:
                     if vs_tensor.grad is not None:
@@ -286,6 +289,10 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
                 aggregated_grad_norms = torch.stack(batch_point_grad_norms, dim=1).sum(dim=1)
                 aggregated_grad_norms[visibility_filter] *= pipe.mv / visibility_count[visibility_filter]
                 viewspace_point_tensor.grad[:, :2] = aggregated_grad_norms.unsqueeze(-1)
+            else:
+                viewspace_point_tensor = batch_viewspace_tensors[0]
+                visibility_filter = batch_visibility_filters[0]
+                radii = batch_radii[0]
 
             # Progress bar
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
@@ -369,7 +376,6 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
 
                 elif opt.densification_strategy == "mcmc":
                     # MCMC-based densification (relocate dead Gaussians, add new ones)
-                    # Only apply MCMC strategy if model supports it (NDGS/UBS have relocate_gs and add_new_gs methods)
                     if hasattr(gaussians, 'relocate_gs') and hasattr(gaussians, 'add_new_gs'):
                         if iteration % opt.mcmc_refine_interval == 0:
                             # Relocate dead Gaussians based on opacity (matching UBS: <= 0.005)
@@ -382,127 +388,28 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
                                 print(f"\n[ITER {iteration}] MCMC: Added {num_added} Gaussians, Total: {gaussians.get_xyz.shape[0]}")
 
                             # Add covariance-weighted noise to Gaussian positions (UBS-style MCMC enhancement)
-                            # This helps break symmetry and encourages exploration after MCMC operations
                             if hasattr(gaussians, 'get_xyz_covariance'):
                                 xyz_covariance = gaussians.get_xyz_covariance  # [N, 3, 3] spatial covariance
-
-                                # Generate random noise weighted by opacity
-                                # High opacity (visible) → near 0 noise, Low opacity (invisible) → more noise
                                 noise = (
-                                    torch.randn_like(gaussians._xyz)  # [N, 3] random Gaussian noise
-                                    * torch.pow(1 - gaussians.get_opacity, 100)  # Weight by (1-opacity)^100
-                                    * opt.noise_lr  # Scale by noise_lr hyperparameter
-                                    * xyz_lr  # Scale by current xyz learning rate (cached from update_learning_rate)
+                                    torch.randn_like(gaussians._xyz)
+                                    * torch.pow(1 - gaussians.get_opacity, 100)
+                                    * opt.noise_lr
+                                    * xyz_lr
                                 )
-
-                                # Transform noise by spatial covariance to align with Gaussian shape
                                 noise = torch.bmm(xyz_covariance, noise.unsqueeze(-1)).squeeze(-1)
-
-                                # Add noise to positions
                                 gaussians._xyz.data.add_(noise)
                     else:
-                        print(f"\nWarning: MCMC densification requested but model {mode} does not support it. Falling back to standard densification.")
-                        # Fallback to standard densification
-                        gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
-                        gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
-
-                        if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
-                            size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                            min_opacity = 0.01 if "ndgs" in mode else 0.005
-                            gaussians.densify_and_prune(opt.densify_grad_threshold, min_opacity, scene.cameras_extent, size_threshold, iteration)
-
-                        if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
-                            gaussians.reset_opacity()
-
-                elif opt.densification_strategy == "fastgs":
-                    # FastGS multi-view consistent densification
-                    # Adapted from FastGS (arXiv:2511.04283)
-                    if hasattr(gaussians, 'densify_and_prune_fastgs') and hasattr(gaussians, 'render_tcgs_with_metric'):
-                        # Track gradients for densification (same as standard)
-                        gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
-                        gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
-
-                        if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
-                            # Sample cameras for multi-view scoring
-                            my_viewpoint_stack = scene.getTrainCameras().copy()
-                            camlist = sampling_cameras(my_viewpoint_stack, num_cams=opt.fastgs_num_sample_cams)
-
-                            # Compute multi-view consistent importance and pruning scores
-                            importance_score, pruning_score = compute_gaussian_score_fastgs(
-                                camlist, gaussians, background,
-                                loss_thresh=opt.fastgs_loss_thresh,
-                                DENSIFY=True
-                            )
-
-                            # Apply FastGS densification and pruning
-                            size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                            gaussians.densify_and_prune_fastgs(
-                                max_screen_size=size_threshold,
-                                min_opacity=0.005,
-                                extent=scene.cameras_extent,
-                                radii=radii,
-                                grad_thresh=opt.fastgs_grad_thresh,
-                                grad_abs_thresh=opt.fastgs_grad_abs_thresh,
-                                percent_dense=opt.percent_dense,
-                                importance_score=importance_score,
-                                pruning_score=pruning_score,
-                                densify_score_thresh=opt.fastgs_densify_score_thresh,
-                                prune_budget_ratio=opt.fastgs_prune_budget_ratio,
-                            )
-
-                            # Clear CUDA cache after densification
-                            torch.cuda.empty_cache()
-
-                        if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
-                            gaussians.reset_opacity()
-                    else:
-                        print(f"\nWarning: FastGS densification requested but model {mode} does not support it. Falling back to standard densification.")
-                        # Fallback to standard densification
-                        gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
-                        gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
-
-                        if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
-                            size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                            min_opacity = 0.005 if "ndgs" in mode else 0.005
-                            gaussians.densify_and_prune(opt.densify_grad_threshold, min_opacity, scene.cameras_extent, size_threshold, iteration)
-
-                        if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
-                            gaussians.reset_opacity()
+                        raise ValueError(f"MCMC densification requested but model {mode} does not support it (needs relocate_gs and add_new_gs methods).")
 
                 else:
-                    raise ValueError(f"Unknown densification_strategy: {opt.densification_strategy}. Choose 'standard', 'mcmc', or 'fastgs'.")
-
-            # FastGS final pruning phase (after densification ends)
-            # This is the multi-view consistent pruning that happens every 3k iterations after 15k
-            if (opt.densification_strategy == "fastgs" and
-                iteration % opt.fastgs_final_prune_interval == 0 and
-                iteration >= opt.fastgs_final_prune_start and
-                iteration < opt.fastgs_final_prune_end):
-                if hasattr(gaussians, 'final_prune_fastgs') and hasattr(gaussians, 'render_tcgs_with_metric'):
-                    # Sample cameras for multi-view scoring
-                    my_viewpoint_stack = scene.getTrainCameras().copy()
-                    camlist = sampling_cameras(my_viewpoint_stack, num_cams=opt.fastgs_num_sample_cams)
-
-                    # Compute pruning scores (no DENSIFY since we're only pruning)
-                    _, pruning_score = compute_gaussian_score_fastgs(
-                        camlist, gaussians, background,
-                        loss_thresh=opt.fastgs_loss_thresh,
-                        DENSIFY=False
-                    )
-
-                    # Apply aggressive final pruning
-                    gaussians.final_prune_fastgs(
-                        min_opacity=0.1,
-                        pruning_score=pruning_score,
-                        prune_score_thresh=0.9,
-                    )
-
-                    print(f"\n[ITER {iteration}] FastGS final prune: {gaussians.get_xyz.shape[0]} Gaussians remaining")
-                    torch.cuda.empty_cache()
+                    raise ValueError(f"Unknown densification_strategy: {opt.densification_strategy}. Choose 'standard' or 'mcmc'.")
 
             # Optimizer step
             if iteration < opt.iterations:
-                gaussians.optimizer.step()
+                if use_selective_adam:
+                    gaussians.optimizer.step(visibility=visibility_filter)
+                else:
+                    gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none = True)
 
             # Update viewer
