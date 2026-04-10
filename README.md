@@ -170,9 +170,11 @@ python render.py -m <path to trained model> -s <path to dataset>
 
 ```shell
 python train.py -s <dataset> --eval         # Train with test split
-python render.py -m <model_path>            # Render test views
-python metrics.py -m <model_path>           # Compute PSNR, SSIM, LPIPS
+python render.py -m <model_path>            # Render test views + inline metrics
+python metrics.py -m <model_path>           # Compute PSNR, SSIM, LPIPS from saved PNGs
 ```
+
+> **Note on PSNR reporting:** `render.py` and `metrics.py` compute PSNR using `[1, 3, H, W]` tensor format (joint PSNR over all channels), which is the standard method used in papers (e.g., NHT, Mip-NeRF 360). The training log in `train.py` uses `[3, H, W]` format (per-channel PSNR averaged), which produces slightly higher values (~0.1-0.2 dB). When comparing results, always use `render.py`'s `metrics.json` or `metrics.py`'s `results.json` for consistent, paper-comparable numbers.
 
 ### Live Viewing
 

@@ -864,7 +864,7 @@ class GaussianModel:
         self.xyz_gradient_accum[update_filter] += torch.norm(grad[update_filter, :2], dim=-1, keepdim=True)
         self.denom[update_filter] += 1
 
-    def render(self, viewpoint_camera, render_mode="RGB", mask=None):
+    def render(self, viewpoint_camera, render_mode="RGB", mask=None, use_tcgs=False):
         if mask is None:
             mask = torch.ones_like(self.get_opacity.squeeze()).bool()
 
@@ -920,6 +920,7 @@ class GaussianModel:
             backgrounds=self.background.unsqueeze(0),
             render_mode=render_mode,
             covars=convs[mask],
+            use_tcgs=use_tcgs,
         )
 
         rgbs = rgbs.permute(0, 3, 1, 2).contiguous()[0]

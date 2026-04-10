@@ -28,11 +28,8 @@ from utils.loss_utils import ssim
 from lpipsPyTorch import lpips, LPIPS
 
 
-def render_wrapper(view, gaussians, pipeline, background, mode, is_test=False, tight_snugbox=False):
+def render_wrapper(view, gaussians, pipeline, background, mode, is_test=False, tight_snugbox=False, use_gsplat=False):
     """Wrapper function that handles model-specific rendering.
-
-    All models now have render_tcgs as a class method, so we dispatch to the
-    appropriate signature based on mode.
 
     Args:
         view: Camera viewpoint
@@ -42,13 +39,15 @@ def render_wrapper(view, gaussians, pipeline, background, mode, is_test=False, t
         mode: Rendering mode ("3dgs", "ndgs", "ubs", "dgs", "dbs")
         is_test: Whether in test mode
         tight_snugbox: Whether to use tight snugbox for faster rendering (FPS measurement)
+        use_gsplat: If True, use gsplat rasterizer instead of TCGS
 
     Returns:
         Dictionary containing render outputs
     """
     if "ubs" in mode or "ndgs" in mode or "dgs" in mode or "dbs" in mode:
-        # UBS/N-DGS/dGS/dBS mode: use render_tcgs with CUDA-accelerated conditional slicing
         gaussians.background = background
+        if use_gsplat and hasattr(gaussians, 'render'):
+            return gaussians.render(view, render_mode="RGB", use_tcgs=is_test)
         return gaussians.render_tcgs(view, render_mode="RGB", use_tcgs=is_test, tight_snugbox=tight_snugbox)
     elif "3dgs" in mode:
         return gaussians.render_tcgs(view, pipeline, background, is_test=is_test)
@@ -56,7 +55,7 @@ def render_wrapper(view, gaussians, pipeline, background, mode, is_test=False, t
         raise ValueError(f"Unknown mode: {mode}.")
 
 
-def render_set(model_path, name, iteration, views, gaussians, pipeline, background, mode, measure_fps=False, lpips_criterion=None):
+def render_set(model_path, name, iteration, views, gaussians, pipeline, background, mode, measure_fps=False, lpips_criterion=None, use_gsplat=False):
     """Render a set of views and save results.
 
     Args:
@@ -90,14 +89,13 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         fps_measure_count = min(20, len(views))
 
         print("Measuring FPS for first 20 frames (tight_snugbox=True)...")
-        for idx in range(fps_measure_count):
-            view = views[idx]
+        for idx, view in enumerate(views[:fps_measure_count]):
             num_frames = 500
 
             # Measure rendering time with tight_snugbox=True
             start_time = time.time()
             for _ in range(num_frames):
-                rendering = render_wrapper(view, gaussians, pipeline, background, mode, is_test=True, tight_snugbox=True)["render"]
+                rendering = render_wrapper(view, gaussians, pipeline, background, mode, is_test=True, tight_snugbox=True, use_gsplat=use_gsplat)["render"]
             end_time = time.time()
 
             # Calculate FPS
@@ -123,11 +121,12 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
     lpipss = []
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
         # Render with use_tcgs=False for quality-matched evaluation (same as training)
-        renderings = render_wrapper(view, gaussians, pipeline, background, mode, is_test=False, tight_snugbox=False)
+        renderings = render_wrapper(view, gaussians, pipeline, background, mode, is_test=False, tight_snugbox=False, use_gsplat=use_gsplat)
         rendering = renderings["render"]
         gt = view.original_image[0:3, :, :]
 
         # Compute metrics on GPU tensors (before PNG save)
+        # Use [1, 3, H, W] format matching metrics.py (standard PSNR reporting)
         rendering_clamped = torch.clamp(rendering, 0.0, 1.0).unsqueeze(0)
         gt_clamped = torch.clamp(gt, 0.0, 1.0).unsqueeze(0)
         psnrs.append(psnr(rendering_clamped, gt_clamped).item())
@@ -203,15 +202,17 @@ def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_
         # Initialize LPIPS criterion once for both splits
         lpips_criterion = LPIPS('vgg', '0.1').to("cuda")
 
+        use_gsplat = dataset.use_gsplat
+
         if not skip_train:
             render_set(dataset.model_path, "train", scene.loaded_iter,
                       scene.getTrainCameras(), gaussians, pipeline, background, mode, measure_fps,
-                      lpips_criterion=lpips_criterion)
+                      lpips_criterion=lpips_criterion, use_gsplat=use_gsplat)
 
         if not skip_test:
             render_set(dataset.model_path, "test", scene.loaded_iter,
                       scene.getTestCameras(), gaussians, pipeline, background, mode, measure_fps,
-                      lpips_criterion=lpips_criterion)
+                      lpips_criterion=lpips_criterion, use_gsplat=use_gsplat)
 
 
 if __name__ == "__main__":
