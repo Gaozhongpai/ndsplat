@@ -31,18 +31,14 @@ def get_gaussian_model(mode: str):
     Returns:
         GaussianModel class for the specified mode
     """
-    if mode == "ddgs":  ## Neurips 2024
-        from scene.gaussian_model_ddgs import GaussianModel
-    elif mode == "3dgs":  ## original 3DGS
+    if mode == "3dgs":  ## original 3DGS
         from scene.gaussian_model import GaussianModel
     elif mode == "ubs":  ## UBS (ICLR 2026)
         from scene.gaussian_model_ubs_sh import GaussianModel
     elif mode == "ndgs":  ## N-DGS (supports both 6DGS and 7DGS with time, with merged parametrization)
         from scene.gaussian_model_ndgs import GaussianModel
-    elif mode == "ndgs-2sh":  ## N-DGS with 2 SH bands
-        from scene.gaussian_model_ndgs_2sh import GaussianModel
     elif mode == "dgs":  ## Full DGS with view-dependent position, time-dependent rotation
-        from scene.gaussian_model_dgs_full import GaussianModel
+        from ndsplat.scene.gaussian_model_dgs import GaussianModel
     elif mode == "dbs":  ## dBS: Direct Beta Splatting (dGS + UBS)
         from scene.gaussian_model_dbs_sh import GaussianModel
     else:

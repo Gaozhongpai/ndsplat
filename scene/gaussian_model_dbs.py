@@ -109,6 +109,9 @@ class GaussianModel:
         self.background = torch.empty(0)
         self.optimizer = None
         self.spatial_lr_scale = 0
+        self.max_radii2D = torch.empty(0)
+        self.xyz_gradient_accum = torch.empty(0)
+        self.denom = torch.empty(0)
         self.setup_functions()
 
         # Indices for spatial covariance construction (3x3 only)
@@ -301,6 +304,11 @@ class GaussianModel:
             {"params": [self._L_22_inv], "lr": training_args.l_triangle_lr, "name": "L_22_inv"},
             {"params": [self._v_12], "lr": training_args.mean_lr, "name": "v_12"},
         ]
+
+        self.percent_dense = 0.01
+        self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+        self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
         self.xyz_scheduler_args = get_expon_lr_func(
@@ -518,6 +526,10 @@ class GaussianModel:
         self._L_22_inv = optimizable_tensors["L_22_inv"]
         self._v_12 = optimizable_tensors["v_12"]
 
+        self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+        self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
+
     def replace_tensors_to_optimizer(self, inds=None):
         tensors_dict = {
             "xyz": self._xyz,
@@ -568,6 +580,128 @@ class GaussianModel:
         torch.cuda.empty_cache()
 
         return optimizable_tensors
+
+    def prune_points(self, mask):
+        """Prune Gaussians based on mask (True = remove, False = keep)."""
+        valid_points_mask = ~mask
+        optimizable_tensors = self._prune_optimizer(valid_points_mask)
+
+        self._xyz = optimizable_tensors["xyz"]
+        self._mean = optimizable_tensors["mean"]
+        self._rgb = optimizable_tensors["rgb"]
+        self._opacity = optimizable_tensors["opacity"]
+        self._beta = optimizable_tensors["beta"]
+        self._scale = optimizable_tensors["scale"]
+        self._l_triangle = optimizable_tensors["l_triangle"]
+        self._L_22_inv = optimizable_tensors["L_22_inv"]
+        self._v_12 = optimizable_tensors["v_12"]
+
+        self.xyz_gradient_accum = self.xyz_gradient_accum[valid_points_mask]
+        self.denom = self.denom[valid_points_mask]
+        self.max_radii2D = self.max_radii2D[valid_points_mask]
+
+    @property
+    def get_scaling(self):
+        """Get 3D spatial scales for densification compatibility."""
+        return self.get_scale[:, :3]
+
+    def reset_opacity(self):
+        """Reset opacity for all Gaussians (called during training)."""
+        opacities_new = inverse_sigmoid(torch.min(self.get_opacity, torch.ones_like(self.get_opacity) * 0.01))
+        optimizable_tensors = self.replace_tensor_to_optimizer(opacities_new, "opacity")
+        self._opacity = optimizable_tensors["opacity"]
+
+    def densify_and_clone(self, grads, grad_threshold, scene_extent):
+        """Clone Gaussians with high gradients and small scales."""
+        selected_pts_mask = torch.where(torch.norm(grads, dim=-1) >= grad_threshold, True, False)
+
+        scale = self.get_scaling
+        selected_pts_mask = torch.logical_and(
+            selected_pts_mask,
+            torch.max(scale[:, :3], dim=1).values <= self.percent_dense * scene_extent
+        )
+
+        new_xyz = self._xyz[selected_pts_mask]
+        new_mean = self._mean[selected_pts_mask]
+        new_rgb = self._rgb[selected_pts_mask]
+        new_opacity = self._opacity[selected_pts_mask]
+        new_beta = self._beta[selected_pts_mask]
+        new_scale = self._scale[selected_pts_mask]
+        new_l_triangle = self._l_triangle[selected_pts_mask]
+        new_L_22_inv = self._L_22_inv[selected_pts_mask]
+        new_v_12 = self._v_12[selected_pts_mask]
+
+        self.densification_postfix(
+            new_xyz, new_mean, new_rgb,
+            new_opacity, new_beta, new_scale, new_l_triangle,
+            new_L_22_inv, new_v_12,
+        )
+
+    def densify_and_split(self, grads, grad_threshold, scene_extent, N=2):
+        """Split large Gaussians with high gradients."""
+        n_original_points = grads.shape[0]
+        n_current_points = self.get_xyz.shape[0]
+
+        grads_squeezed = grads.squeeze()
+
+        selected_pts_mask = torch.zeros((n_current_points), device="cuda", dtype=bool)
+        selected_pts_mask[:n_original_points] = grads_squeezed >= grad_threshold
+
+        scale = self.get_scaling
+        selected_pts_mask = torch.logical_and(
+            selected_pts_mask,
+            torch.max(scale[:, :3], dim=1).values > self.percent_dense * scene_extent
+        )
+
+        stds_spatial = scale[selected_pts_mask][:, :3].repeat(N, 1)
+        spatial_samples = torch.normal(mean=0, std=stds_spatial)
+        rots = self.get_rotation[selected_pts_mask].repeat(N, 1, 1)
+        new_xyz = torch.bmm(rots, spatial_samples.unsqueeze(-1)).squeeze(-1) + self._xyz[selected_pts_mask].repeat(N, 1)
+
+        new_mean = self._mean[selected_pts_mask].repeat(N, 1)
+        new_rgb = self._rgb[selected_pts_mask].repeat(N, 1)
+        new_opacity = self._opacity[selected_pts_mask].repeat(N, 1)
+        new_beta = self._beta[selected_pts_mask].repeat(N, 1)
+        new_scale = self._scale[selected_pts_mask]
+        new_scale = self.scale_inverse_activation(self.scale_activation(new_scale) * 0.8).repeat(N, 1)
+        new_l_triangle = self._l_triangle[selected_pts_mask].repeat(N, 1)
+        new_L_22_inv = self._L_22_inv[selected_pts_mask].repeat(N, 1)
+        new_v_12 = self._v_12[selected_pts_mask].repeat(N, 1)
+
+        self.densification_postfix(
+            new_xyz, new_mean, new_rgb,
+            new_opacity, new_beta, new_scale, new_l_triangle,
+            new_L_22_inv, new_v_12,
+        )
+
+        prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
+        self.prune_points(prune_filter)
+
+    def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size, iteration):
+        """Main densification and pruning routine."""
+        grads = self.xyz_gradient_accum / self.denom
+        grads[grads.isnan()] = 0.0
+
+        self.densify_and_clone(grads, max_grad, extent)
+        self.densify_and_split(grads, max_grad, extent)
+
+        prune_mask = (self.get_opacity < min_opacity).squeeze()
+
+        if max_screen_size:
+            big_points_vs = self.max_radii2D > max_screen_size
+            big_points_ws = self.get_scaling[:, :3].max(dim=1).values > 0.1 * extent
+            prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
+        self.prune_points(prune_mask)
+
+        torch.cuda.empty_cache()
+
+    def add_densification_stats(self, viewspace_point_tensor, update_filter):
+        """Accumulate gradients for densification."""
+        grad = viewspace_point_tensor.grad
+        if grad is None:
+            return
+        self.xyz_gradient_accum[update_filter] += torch.norm(grad[update_filter, :2], dim=-1, keepdim=True)
+        self.denom[update_filter] += 1
 
     def _update_params(self, idxs, ratio):
         new_opacity = 1.0 - torch.pow(
@@ -740,12 +874,25 @@ class GaussianModel:
 
         rgbs = rgbs.permute(0, 3, 1, 2).contiguous()[0]
 
+        # gsplat radii/means2d are [C, N, ...], squeeze to [N, ...] for single-camera training
+        radii = meta["radii"].squeeze(0)
+        means2d = meta["means2d"]  # [1, N, 2]
+        N = means2d.shape[1]
+        W = viewpoint_camera.image_width
+        H = viewpoint_camera.image_height
+        viewspace_points = torch.zeros((N, 2), device=means2d.device, requires_grad=True)
+        if means2d.requires_grad:
+            def _hook(grad, vp=viewspace_points, w=W, h=H):
+                g = grad.squeeze(0)
+                g = g * torch.tensor([w * 0.5, h * 0.5], device=g.device, dtype=g.dtype)
+                vp.grad = g
+            means2d.register_hook(_hook)
         return {
             "render": rgbs,
-            "viewspace_points": meta["means2d"],
-            "visibility_filter": meta["radii"] > 0,
-            "radii": meta["radii"],
-            "is_used": meta["radii"] > 0,
+            "viewspace_points": viewspace_points,
+            "visibility_filter": radii > 0,
+            "radii": radii,
+            "is_used": radii > 0,
         }
 
     def render_tcgs(self, viewpoint_camera, render_mode="RGB", mask=None, use_tcgs=True, scaling_modifier=1.0, **kwargs):

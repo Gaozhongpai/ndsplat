@@ -858,7 +858,10 @@ class GaussianModel:
 
     def add_densification_stats(self, viewspace_point_tensor, update_filter):
         """Accumulate gradients for densification."""
-        self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor.grad[update_filter, :2], dim=-1, keepdim=True)
+        grad = viewspace_point_tensor.grad
+        if grad is None:
+            return
+        self.xyz_gradient_accum[update_filter] += torch.norm(grad[update_filter, :2], dim=-1, keepdim=True)
         self.denom[update_filter] += 1
 
     def render(self, viewpoint_camera, render_mode="RGB", mask=None):
@@ -921,12 +924,31 @@ class GaussianModel:
 
         rgbs = rgbs.permute(0, 3, 1, 2).contiguous()[0]
 
+        # gsplat radii/means2d are [C, N, ...], squeeze to [N, ...] for single-camera training
+        radii = meta["radii"].squeeze(0)
+        # Create a viewspace_points tensor compatible with add_densification_stats.
+        # gsplat's means2d is non-leaf; use a backward hook to capture its gradient.
+        # gsplat means2d gradients are in normalized coordinates; scale to pixel space
+        # to match the gradient magnitude expected by standard densification thresholds.
+        means2d = meta["means2d"]  # [1, N, 2]
+        N = means2d.shape[1]
+        W = viewpoint_camera.image_width
+        H = viewpoint_camera.image_height
+        viewspace_points = torch.zeros((N, 2), device=means2d.device, requires_grad=True)
+        if means2d.requires_grad:
+            def _hook(grad, vp=viewspace_points, w=W, h=H):
+                # gsplat means2d grads are small due to mean-reduced loss;
+                # scale by half-image-size to match 3DGS ndc2Pix gradient magnitude
+                g = grad.squeeze(0)
+                g = g * torch.tensor([w * 0.5, h * 0.5], device=g.device, dtype=g.dtype)
+                vp.grad = g
+            means2d.register_hook(_hook)
         return {
             "render": rgbs,
-            "viewspace_points": meta["means2d"],
-            "visibility_filter": meta["radii"] > 0,
-            "radii": meta["radii"],
-            "is_used": meta["radii"] > 0,
+            "viewspace_points": viewspace_points,
+            "visibility_filter": radii > 0,
+            "radii": radii,
+            "is_used": radii > 0,
         }
 
     def render_tcgs(self, viewpoint_camera, render_mode="RGB", mask=None, use_tcgs=True, scaling_modifier=1.0, **kwargs):

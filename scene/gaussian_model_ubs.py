@@ -1023,7 +1023,10 @@ class GaussianModel:
 
     def add_densification_stats(self, viewspace_point_tensor, update_filter):
         """Accumulate gradients for densification."""
-        self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True)
+        grad = viewspace_point_tensor.grad
+        if grad is None:
+            return
+        self.xyz_gradient_accum[update_filter] += torch.norm(grad[update_filter,:2], dim=-1, keepdim=True)
         self.denom[update_filter] += 1
 
     def render(self, viewpoint_camera, render_mode="RGB", mask=None):
@@ -1082,12 +1085,25 @@ class GaussianModel:
         # # Convert from N,H,W,C to N,C,H,W format
         rgbs = rgbs.permute(0, 3, 1, 2).contiguous()[0]
 
+        # gsplat radii/means2d are [C, N, ...], squeeze to [N, ...] for single-camera training
+        radii = meta["radii"].squeeze(0)
+        means2d = meta["means2d"]  # [1, N, 2]
+        N = means2d.shape[1]
+        W = viewpoint_camera.image_width
+        H = viewpoint_camera.image_height
+        viewspace_points = torch.zeros((N, 2), device=means2d.device, requires_grad=True)
+        if means2d.requires_grad:
+            def _hook(grad, vp=viewspace_points, w=W, h=H):
+                g = grad.squeeze(0)
+                g = g * torch.tensor([w * 0.5, h * 0.5], device=g.device, dtype=g.dtype)
+                vp.grad = g
+            means2d.register_hook(_hook)
         return {
             "render": rgbs,
-            "viewspace_points": meta["means2d"],
-            "visibility_filter": meta["radii"] > 0,
-            "radii": meta["radii"],
-            "is_used": meta["radii"] > 0,
+            "viewspace_points": viewspace_points,
+            "visibility_filter": radii > 0,
+            "radii": radii,
+            "is_used": radii > 0,
         }
 
     def render_tcgs(

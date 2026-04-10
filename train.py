@@ -286,9 +286,11 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
                         batch_point_grad_norms.append(torch.norm(vs_tensor.grad[:, :2], dim=-1))
 
                 # Sum norms and apply visibility weighting
-                aggregated_grad_norms = torch.stack(batch_point_grad_norms, dim=1).sum(dim=1)
-                aggregated_grad_norms[visibility_filter] *= pipe.mv / visibility_count[visibility_filter]
-                viewspace_point_tensor.grad[:, :2] = aggregated_grad_norms.unsqueeze(-1)
+                if batch_point_grad_norms:
+                    aggregated_grad_norms = torch.stack(batch_point_grad_norms, dim=1).sum(dim=1)
+                    aggregated_grad_norms[visibility_filter] *= pipe.mv / visibility_count[visibility_filter]
+                    if viewspace_point_tensor.grad is not None:
+                        viewspace_point_tensor.grad[:, :2] = aggregated_grad_norms.unsqueeze(-1)
             else:
                 viewspace_point_tensor = batch_viewspace_tensors[0]
                 visibility_filter = batch_visibility_filters[0]
@@ -366,7 +368,7 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
 
                     if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                         size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                        min_opacity = 0.005 if "3dgs" in mode or "ubs" in mode else 0.01 ## RSNA 0.005, paper 0.01
+                        min_opacity = 0.005 if "3dgs" in mode else 0.01 ## RSNA 0.005, paper 0.01
                         gaussians.densify_and_prune(opt.densify_grad_threshold, min_opacity, scene.cameras_extent, size_threshold, iteration)
                         # Clear CUDA cache after densification to free memory from pruned Gaussians
                         torch.cuda.empty_cache()
