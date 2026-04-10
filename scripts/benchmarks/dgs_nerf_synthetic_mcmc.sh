@@ -196,26 +196,47 @@ for dir in "$base_dir"*/; do
 done
 
 
-# # ============================================
-# # 4. UBS mode with MCMC (full Cholesky precision)
-# # ============================================
-# echo "=============================================="
-# echo "Running UBS mode benchmarks (MCMC)"
-# echo "=============================================="
+# ============================================
+# 4. UBS mode with MCMC (full Cholesky precision)
+# ============================================
+echo "=============================================="
+echo "Running UBS mode benchmarks (MCMC)"
+echo "=============================================="
 
-# for dir in "$base_dir"*/; do
-#     if [ -d "$dir" ]; then
-#         clean_dir="${dir%/}"
-#         scene_name=$(basename "$clean_dir")
-#         if [[ "$scene_name" == "README.txt" ]] || [[ "$scene_name" == *.zip ]]; then
-#             continue
-#         fi
+for dir in "$base_dir"*/; do
+    if [ -d "$dir" ]; then
+        clean_dir="${dir%/}"
+        scene_name=$(basename "$clean_dir")
+        if [[ "$scene_name" == "README.txt" ]] || [[ "$scene_name" == *.zip ]]; then
+            continue
+        fi
 
-#         output_dir="output/mcmc/ubs/nerf_synthetic/${scene_name}"
-#         echo "Processing ${scene_name} with mode ubs (MCMC)..."
-#         run_experiment "ubs" "$output_dir" "$dir" "--noise_lr 1000"
-#     fi
-# done
+        output_dir="output/mcmc/ubs/nerf_synthetic/${scene_name}"
+        echo "Processing ${scene_name} with mode ubs (MCMC)..."
+        run_experiment "ubs" "$output_dir" "$dir" "--use_gsplat --noise_lr 1000000"
+    fi
+done
 
+
+# ============================================
+# 5. dBS mode with MCMC (gsplat rasterizer)
+# ============================================
+echo "=============================================="
+echo "Running dBS mode benchmarks (MCMC, gsplat)"
+echo "=============================================="
+
+for dir in "$base_dir"*/; do
+    if [ -d "$dir" ]; then
+        clean_dir="${dir%/}"
+        scene_name=$(basename "$clean_dir")
+        if [[ "$scene_name" == "README.txt" ]] || [[ "$scene_name" == *.zip ]]; then
+            continue
+        fi
+
+        output_dir="output/mcmc/dbs/nerf_synthetic/${scene_name}"
+        echo "Processing ${scene_name} with mode dbs (MCMC, gsplat)..."
+        run_experiment "dbs" "$output_dir" "$dir" "--use_gsplat --noise_lr 1000000"
+    fi
+done
 
 echo "MCMC Benchmark completed!"
