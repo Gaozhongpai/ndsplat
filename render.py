@@ -23,12 +23,9 @@ from tqdm import tqdm
 from arguments import ModelParams, PipelineParams, get_combined_args
 from scene import Scene, get_gaussian_model
 from utils.general_utils import safe_state
-from utils.image_utils import psnr
-from utils.loss_utils import ssim
-from lpipsPyTorch import lpips, LPIPS
 
 
-def render_wrapper(view, gaussians, pipeline, background, mode, is_test=False, tight_snugbox=False, use_gsplat=False):
+def render_wrapper(view, gaussians, pipeline, background, mode, is_test=False, tight_snugbox=False, use_gsplat=False, accutile=True):
     """Wrapper function that handles model-specific rendering.
 
     Args:
@@ -47,7 +44,7 @@ def render_wrapper(view, gaussians, pipeline, background, mode, is_test=False, t
     if "ubs" in mode or "ndgs" in mode or "dgs" in mode or "dbs" in mode:
         gaussians.background = background
         if use_gsplat and hasattr(gaussians, 'render'):
-            return gaussians.render(view, render_mode="RGB", use_tcgs=is_test)
+            return gaussians.render(view, render_mode="RGB", use_tcgs=is_test, accutile=accutile)
         return gaussians.render_tcgs(view, render_mode="RGB", use_tcgs=is_test, tight_snugbox=tight_snugbox)
     elif "3dgs" in mode:
         return gaussians.render_tcgs(view, pipeline, background, is_test=is_test)
@@ -55,7 +52,7 @@ def render_wrapper(view, gaussians, pipeline, background, mode, is_test=False, t
         raise ValueError(f"Unknown mode: {mode}.")
 
 
-def render_set(model_path, name, iteration, views, gaussians, pipeline, background, mode, measure_fps=False, lpips_criterion=None, use_gsplat=False):
+def render_set(model_path, name, iteration, views, gaussians, pipeline, background, mode, measure_fps=False, use_gsplat=False):
     """Render a set of views and save results.
 
     Args:
@@ -88,14 +85,15 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         fpslist = []
         fps_measure_count = min(20, len(views))
 
-        print("Measuring FPS for first 20 frames (tight_snugbox=True)...")
+        print("Measuring FPS for first 20 frames (TCGS, tight_snugbox=True)...")
+        gaussians.background = background
         for idx, view in enumerate(views[:fps_measure_count]):
             num_frames = 500
 
-            # Measure rendering time with tight_snugbox=True
+            # Measure rendering time with TCGS tensor core kernel
             start_time = time.time()
             for _ in range(num_frames):
-                rendering = render_wrapper(view, gaussians, pipeline, background, mode, is_test=True, tight_snugbox=True, use_gsplat=use_gsplat)["render"]
+                rendering = gaussians.render_tcgs(view, render_mode="RGB", use_tcgs=True, tight_snugbox=True)["render"]
             end_time = time.time()
 
             # Calculate FPS
@@ -116,42 +114,15 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
                 f.write(f"{avg_fps:.2f}")
 
     print("Rendering all frames for saving (use_tcgs=False for quality)...")
-    psnrs = []
-    ssims = []
-    lpipss = []
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
         # Render with use_tcgs=False for quality-matched evaluation (same as training)
         renderings = render_wrapper(view, gaussians, pipeline, background, mode, is_test=False, tight_snugbox=False, use_gsplat=use_gsplat)
         rendering = renderings["render"]
         gt = view.original_image[0:3, :, :]
 
-        # Compute metrics on GPU tensors (before PNG save)
-        # Use [1, 3, H, W] format matching metrics.py (standard PSNR reporting)
-        rendering_clamped = torch.clamp(rendering, 0.0, 1.0).unsqueeze(0)
-        gt_clamped = torch.clamp(gt, 0.0, 1.0).unsqueeze(0)
-        psnrs.append(psnr(rendering_clamped, gt_clamped).item())
-        ssims.append(ssim(rendering_clamped, gt_clamped).item())
-        if lpips_criterion is not None:
-            lpipss.append(lpips(rendering_clamped, gt_clamped, lpips_criterion).item())
-
         # Save images
         torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
         torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
-
-    # Save inline metrics (computed on GPU tensors, no PNG round-trip)
-    if psnrs:
-        metrics = {
-            "PSNR": float(np.mean(psnrs)),
-            "SSIM": float(np.mean(ssims)),
-            "num_views": len(psnrs),
-        }
-        if lpipss:
-            metrics["LPIPS"] = float(np.mean(lpipss))
-        print(f"  {name} PSNR: {metrics['PSNR']:.4f}  SSIM: {metrics['SSIM']:.6f}" +
-              (f"  LPIPS: {metrics['LPIPS']:.6f}" if lpipss else ""))
-        metrics_path = os.path.join(model_path, name, "ours_{}".format(iteration), "metrics.json")
-        with open(metrics_path, 'w') as f:
-            json.dump(metrics, f, indent=2)
 
 
 def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_train: bool, skip_test: bool, measure_fps: bool = False):
@@ -199,20 +170,17 @@ def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_
         bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
-        # Initialize LPIPS criterion once for both splits
-        lpips_criterion = LPIPS('vgg', '0.1').to("cuda")
-
         use_gsplat = dataset.use_gsplat
 
         if not skip_train:
             render_set(dataset.model_path, "train", scene.loaded_iter,
                       scene.getTrainCameras(), gaussians, pipeline, background, mode, measure_fps,
-                      lpips_criterion=lpips_criterion, use_gsplat=use_gsplat)
+                      use_gsplat=use_gsplat)
 
         if not skip_test:
             render_set(dataset.model_path, "test", scene.loaded_iter,
                       scene.getTestCameras(), gaussians, pipeline, background, mode, measure_fps,
-                      lpips_criterion=lpips_criterion, use_gsplat=use_gsplat)
+                      use_gsplat=use_gsplat)
 
 
 if __name__ == "__main__":

@@ -12,8 +12,8 @@
 import os
 import torch
 import numpy as np
-from random import randint
-from utils.loss_utils import l1_loss, ssim
+from utils.loss_utils import l1_loss
+from fused_ssim import fused_ssim
 import sys
 from scene import Scene, get_gaussian_model
 from utils.general_utils import safe_state
@@ -22,6 +22,8 @@ from tqdm import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams, ViewerParams
+from torch.utils.data import DataLoader
+from utils.data_utils import CameraDataset, InfiniteSampler
 import time
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -47,7 +49,7 @@ def create_radial_weight_mask(height, width, center_weight=0.8, edge_weight=5):
     weight_mask = center_weight + (edge_weight - center_weight) * normalized_distance
     return weight_mask
 
-def render_wrapper(viewpoint_cam, gaussians, pipe, bg, mode, scaling_modifier=1.0, use_gsplat=False):
+def render_wrapper(viewpoint_cam, gaussians, pipe, bg, mode, scaling_modifier=1.0, use_gsplat=False, accutile=True):
     """Wrapper function that handles model-specific rendering.
 
     All models now have render_tcgs as a class method, so we dispatch to the
@@ -65,7 +67,7 @@ def render_wrapper(viewpoint_cam, gaussians, pipe, bg, mode, scaling_modifier=1.
     if "ubs" in mode or "ndgs" in mode or "dgs" in mode or "dbs" in mode:
         gaussians.background = bg
         if use_gsplat and hasattr(gaussians, 'render'):
-            return gaussians.render(viewpoint_cam, render_mode="RGB")
+            return gaussians.render(viewpoint_cam, render_mode="RGB", accutile=accutile)
         return gaussians.render_tcgs(viewpoint_cam, render_mode="RGB", use_tcgs=False, scaling_modifier=scaling_modifier)
     elif "3dgs" in mode:
         return gaussians.render_tcgs(viewpoint_cam, pipe, bg, scaling_modifier)
@@ -204,7 +206,18 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
     n_patient = 0
     is_set_patient = False
 
-    viewpoint_stack = None
+    # Set up training dataloader with InfiniteSampler for uniform epoch-based sampling
+    training_dataset = CameraDataset(scene.getTrainCameras().copy())
+    sampler = InfiniteSampler(len(training_dataset), shuffle=True)
+    training_dataloader = DataLoader(
+        training_dataset,
+        batch_size=1,
+        sampler=sampler,
+        num_workers=0,
+        collate_fn=lambda batch: batch,
+    )
+    data_iter = iter(training_dataloader)
+
     ema_loss_for_log = 0.0
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
@@ -231,10 +244,8 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
         batch_viewspace_tensors = []  # Store viewspace tensors from each view
 
         for _ in range(pipe.mv):
-            # Pick a random Camera
-            if not viewpoint_stack:
-                viewpoint_stack = scene.getTrainCameras().copy()
-            viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
+            # Get next camera from dataloader (uniform epoch-based sampling)
+            viewpoint_cam = next(data_iter)[0]
 
             # Render
             if (iteration - 1) == debug_from:
@@ -248,7 +259,7 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
             # Loss
             gt_image = viewpoint_cam.original_image  # Already on CUDA, no need for .cuda()
             Ll1 = l1_loss(image, gt_image)
-            loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
+            loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - fused_ssim(image.unsqueeze(0), gt_image.unsqueeze(0)))
 
             # MCMC regularization: add opacity and scale regularization during densification phase
             # This matches UBS behavior and helps prevent degenerate solutions

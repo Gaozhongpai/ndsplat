@@ -1061,7 +1061,7 @@ class GaussianModel:
         self.xyz_gradient_accum[update_filter] += torch.norm(grad[update_filter,:2], dim=-1, keepdim=True)
         self.denom[update_filter] += 1
 
-    def render(self, viewpoint_camera, render_mode="RGB", mask=None, use_tcgs=False):
+    def render(self, viewpoint_camera, render_mode="RGB", mask=None, use_tcgs=False, accutile=True):
         if mask == None:
             mask = torch.ones_like(self.get_opacity.squeeze()).bool()
 
@@ -1117,6 +1117,7 @@ class GaussianModel:
             render_mode=render_mode,
             covars=convs[mask],
             use_tcgs=use_tcgs,
+            accutile=accutile,
         )
 
         # # Convert from N,H,W,C to N,C,H,W format
@@ -1232,7 +1233,7 @@ class GaussianModel:
             scale_modifier=scaling_modifier,
             viewmatrix=viewmatrix,
             projmatrix=projmatrix,
-            sh_degree=0,
+            sh_degree=self.active_sh_degree,
             campos=campos,
             prefiltered=False,
             x_threshold=viewpoint_camera.x_threshold if viewpoint_camera.x_threshold is not None else float('inf'),

@@ -22,7 +22,7 @@ from PIL import Image
 from tqdm import tqdm
 
 from utils.image_utils import psnr
-from utils.loss_utils import ssim
+from fused_ssim import fused_ssim
 
 
 def readImages(renders_dir, gt_dir):
@@ -120,21 +120,27 @@ def evaluate(model_paths):
 
                 # Compute metrics
                 ssims = []
-                psnrs = []
+                psnrs = []  # [1,3,H,W] joint (paper standard)
+                psnrs_train = []  # [3,H,W] per-channel (matches training log)
                 lpipss = []
 
                 for idx in tqdm(range(len(renders)), desc="Computing metrics"):
-                    ssims.append(ssim(renders[idx], gts[idx]))
+                    ssims.append(fused_ssim(renders[idx], gts[idx]))
+                    # [1,3,H,W] joint PSNR (paper standard)
                     psnrs.append(psnr(renders[idx], gts[idx]))
+                    # [3,H,W] per-channel PSNR (matches training log)
+                    psnrs_train.append(psnr(renders[idx].squeeze(0), gts[idx].squeeze(0)).mean())
                     lpipss.append(lpips(renders[idx], gts[idx], criterion))
 
                 # Compute averages
                 ssim_mean = torch.tensor(ssims).mean().item()
                 psnr_mean = torch.tensor(psnrs).mean().item()
+                psnr_train_mean = torch.tensor(psnrs_train).mean().item()
                 lpips_mean = torch.tensor(lpipss).mean().item()
 
                 print(f"  SSIM : {ssim_mean:>12.7f}")
                 print(f"  PSNR : {psnr_mean:>12.7f}")
+                print(f"  PSNR_train: {psnr_train_mean:>12.7f}")
                 print(f"  LPIPS: {lpips_mean:>12.7f}")
                 print("")
 
@@ -142,6 +148,7 @@ def evaluate(model_paths):
                 full_dict[scene_dir][method].update({
                     "SSIM": ssim_mean,
                     "PSNR": psnr_mean,
+                    "PSNR_train": psnr_train_mean,
                     "LPIPS": lpips_mean
                 })
 

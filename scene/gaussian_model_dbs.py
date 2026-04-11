@@ -817,7 +817,7 @@ class GaussianModel:
 
         return num_gs
 
-    def render(self, viewpoint_camera, render_mode="RGB", mask=None, use_tcgs=False):
+    def render(self, viewpoint_camera, render_mode="RGB", mask=None, use_tcgs=False, accutile=True):
         if mask is None:
             mask = torch.ones_like(self.get_opacity.squeeze()).bool()
 
@@ -871,6 +871,7 @@ class GaussianModel:
             render_mode=render_mode,
             covars=convs[mask],
             use_tcgs=use_tcgs,
+            accutile=accutile,
         )
 
         rgbs = rgbs.permute(0, 3, 1, 2).contiguous()[0]

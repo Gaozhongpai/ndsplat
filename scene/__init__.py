@@ -34,13 +34,13 @@ def get_gaussian_model(mode: str):
     if mode == "3dgs":  ## original 3DGS
         from scene.gaussian_model import GaussianModel
     elif mode == "ubs":  ## UBS (ICLR 2026)
-        from scene.gaussian_model_ubs_sh import GaussianModel
+        from scene.gaussian_model_ubs import GaussianModel
     elif mode == "ndgs":  ## N-DGS (supports both 6DGS and 7DGS with time, with merged parametrization)
         from scene.gaussian_model_ndgs import GaussianModel
     elif mode == "dgs":  ## Full DGS with view-dependent position, time-dependent rotation
         from ndsplat.scene.gaussian_model_dgs import GaussianModel
     elif mode == "dbs":  ## dBS: Direct Beta Splatting (dGS + UBS)
-        from scene.gaussian_model_dbs_sh import GaussianModel
+        from scene.gaussian_model_dbs import GaussianModel
     else:
         raise ValueError(f"Unknown mode: {mode}. Must be one of: 3dgs, ndgs, ubs, dgs, dbs.")
     return GaussianModel

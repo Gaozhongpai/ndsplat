@@ -28,7 +28,7 @@ base_dir="/code/dataset/nerf_synthetic/"
 MCMC_CAP_MAX=300000
 NOISE_LR=1.0
 OPACITY_REG=0.01
-SCALE_REG=0.01
+SCALE_REG=0
 
 # Function to run experiment for a given mode and output directory
 run_experiment() {
@@ -56,13 +56,11 @@ run_experiment() {
         --disable_viewer \
         -w
 
-    # Render at multiple iterations (including best)
-    for iter in 7000 30000 best; do
-        python render.py -m "$output_dir" \
-            --skip_train \
-            --iteration ${iter} \
-            $extra_args
-    done
+    # Render best iteration
+    python render.py -m "$output_dir" \
+        --skip_train \
+        --iteration best \
+        $extra_args
 
     # Compute metrics
     python metrics.py -m "$output_dir"
@@ -88,6 +86,7 @@ for dir in "$base_dir"*/; do
         run_experiment "3dgs" "$output_dir" "$dir" ""
     fi
 done
+python tools/summarize_results.py output/mcmc/3dgs/nerf_synthetic
 
 # ============================================
 # 2. opacity_only mode with MCMC (no position shift)
@@ -109,6 +108,7 @@ for dir in "$base_dir"*/; do
         run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos False"
     fi
 done
+python tools/summarize_results.py output/mcmc/opacity_only/nerf_synthetic
 
 # ============================================
 # 3. opacity_pos mode with MCMC (opacity + position)
@@ -130,6 +130,7 @@ for dir in "$base_dir"*/; do
         run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True"
     fi
 done
+python tools/summarize_results.py output/mcmc/opacity_pos/nerf_synthetic
 
 # ============================================
 # 3. opacity_pos_update mode with MCMC (opacity + position)
@@ -151,6 +152,7 @@ for dir in "$base_dir"*/; do
         run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True"
     fi
 done
+python tools/summarize_results.py output/mcmc/opacity_pos_update/nerf_synthetic
 
 
 # # ============================================
@@ -194,6 +196,7 @@ for dir in "$base_dir"*/; do
         run_experiment "ndgs" "$output_dir" "$dir"
     fi
 done
+python tools/summarize_results.py output/mcmc/ndgs/nerf_synthetic
 
 
 # ============================================
@@ -216,6 +219,7 @@ for dir in "$base_dir"*/; do
         run_experiment "ubs" "$output_dir" "$dir" "--use_gsplat --noise_lr 1000000"
     fi
 done
+python tools/summarize_results.py output/mcmc/ubs/nerf_synthetic
 
 
 # ============================================
@@ -238,5 +242,6 @@ for dir in "$base_dir"*/; do
         run_experiment "dbs" "$output_dir" "$dir" "--use_gsplat --noise_lr 1000000"
     fi
 done
+python tools/summarize_results.py output/mcmc/dbs/nerf_synthetic
 
 echo "MCMC Benchmark completed!"

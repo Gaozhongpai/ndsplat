@@ -1447,7 +1447,7 @@ class GaussianModel:
 
         return optimizable_tensors
 
-    def render(self, viewpoint_camera, render_mode="RGB", mask=None, use_tcgs=False):
+    def render(self, viewpoint_camera, render_mode="RGB", mask=None, use_tcgs=False, accutile=True):
         """Render using gsplat rasterization."""
         if mask is None:
             mask = torch.ones(self._xyz.shape[0], dtype=torch.bool, device=self._xyz.device)
@@ -1512,6 +1512,7 @@ class GaussianModel:
             render_mode=render_mode,
             covars=covars[mask],
             use_tcgs=use_tcgs,
+            accutile=accutile,
         )
 
         rgbs = rgbs.permute(0, 3, 1, 2).contiguous()[0]
