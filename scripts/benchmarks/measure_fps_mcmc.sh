@@ -6,7 +6,7 @@
 # - ndgs: N-DGS with full Cholesky precision
 # - opacity_only: Opacity conditioning only (no position)
 # - opacity_pos: Opacity + Position conditioning
-# - opacity_pos_update: Opacity + Position conditioning (updated version)
+# - dgs: Opacity + Position conditioning (updated version)
 #
 # Only processes models that exist in output/mcmc/
 
@@ -134,7 +134,7 @@ process_mode "opacity_only" "opacity_only" "--mode dgs --use_view_dependent_pos 
 process_mode "opacity_pos" "opacity_pos" "--mode dgs --use_view_dependent_pos True"
 
 # 4. Opacity + Position Update mode
-process_mode "opacity_pos_update" "opacity_pos_update" "--mode dgs --use_view_dependent_pos True"
+process_mode "dgs" "dgs" "--mode dgs --use_view_dependent_pos True"
 
 echo "=============================================="
 echo "All FPS measurements completed!"

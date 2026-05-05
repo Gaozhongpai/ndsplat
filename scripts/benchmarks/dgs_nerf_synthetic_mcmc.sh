@@ -133,10 +133,10 @@ done
 python tools/summarize_results.py output/mcmc/opacity_pos/nerf_synthetic
 
 # ============================================
-# 3. opacity_pos_update mode with MCMC (opacity + position)
+# 3. dgs mode with MCMC (opacity + position)
 # ============================================
 echo "=============================================="
-echo "Running opacity_pos_update mode benchmarks (MCMC)"
+echo "Running dgs mode benchmarks (MCMC)"
 echo "=============================================="
 
 for dir in "$base_dir"*/; do
@@ -147,12 +147,12 @@ for dir in "$base_dir"*/; do
             continue
         fi
 
-        output_dir="output/mcmc/opacity_pos_update/nerf_synthetic/${scene_name}"
-        echo "Processing ${scene_name} with mode opacity_pos_update (MCMC)..."
+        output_dir="output/mcmc/dgs/nerf_synthetic/${scene_name}"
+        echo "Processing ${scene_name} with mode dgs (MCMC)..."
         run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True"
     fi
 done
-python tools/summarize_results.py output/mcmc/opacity_pos_update/nerf_synthetic
+python tools/summarize_results.py output/mcmc/dgs/nerf_synthetic
 
 
 # # ============================================

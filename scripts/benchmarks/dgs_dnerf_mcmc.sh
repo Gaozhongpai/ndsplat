@@ -70,21 +70,21 @@ run_experiment() {
 }
 
 # ============================================
-# 1. opacity_pos_update mode with MCMC (dGS with position shift)
+# 1. dgs mode with MCMC (dGS with position shift)
 # ============================================
 echo "=============================================="
-echo "Running opacity_pos_update mode benchmarks (MCMC)"
+echo "Running dgs mode benchmarks (MCMC)"
 echo "=============================================="
 
 for scene_name in "${SCENES[@]}"; do
     scene_dir="${base_dir}${scene_name}"
     if [ -d "$scene_dir" ]; then
-        output_dir="output/mcmc/opacity_pos_update/dnerf/${scene_name}"
-        echo "Processing ${scene_name} with mode opacity_pos_update (MCMC)..."
+        output_dir="output/mcmc/dgs/dnerf/${scene_name}"
+        echo "Processing ${scene_name} with mode dgs (MCMC)..."
         run_experiment "dgs" "$output_dir" "$scene_dir" "$scene_name" "--use_view_dependent_pos True --l_22_inv_init_scale 0.02"
     fi
 done
-python tools/summarize_results.py output/mcmc/opacity_pos_update/dnerf
+python tools/summarize_results.py output/mcmc/dgs/dnerf
 
 # ============================================
 # 2. NDGS mode with MCMC

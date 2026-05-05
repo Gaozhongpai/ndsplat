@@ -146,10 +146,10 @@ for dir in "$base_dir"*/; do
 done
 
 # # ============================================
-# # 3. opacity_pos_update mode with MCMC (opacity + position)
+# # 3. dgs mode with MCMC (opacity + position)
 # # ============================================
 # echo "=============================================="
-# echo "Running opacity_pos_update mode benchmarks (MCMC)"
+# echo "Running dgs mode benchmarks (MCMC)"
 # echo "=============================================="
 
 # for dir in "$base_dir"*/; do
@@ -160,8 +160,8 @@ done
 #             continue
 #         fi
 
-#         output_dir="output/mcmc/opacity_pos_update/tandt_pbr/${scene_name}"
-#         echo "Processing ${scene_name} with mode opacity_pos_update (MCMC)..."
+#         output_dir="output/mcmc/dgs/tandt_pbr/${scene_name}"
+#         echo "Processing ${scene_name} with mode dgs (MCMC)..."
 #         run_experiment "dgs" "$output_dir" "$dir" "$scene_name" "--use_view_dependent_pos True --l_22_inv_init_scale 2.0"
 #     fi
 # done

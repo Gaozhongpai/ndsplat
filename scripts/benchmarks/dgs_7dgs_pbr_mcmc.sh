@@ -121,10 +121,10 @@ run_experiment() {
 # done
 
 # ============================================
-# 3. opacity_pos mode with MCMC (opacity + position)
+# 3. dgs mode with MCMC (opacity + position, weaker initial coupling)
 # ============================================
 echo "=============================================="
-echo "Running opacity_pos mode benchmarks (MCMC)"
+echo "Running dgs mode benchmarks (MCMC)"
 echo "=============================================="
 
 for dir in "$base_dir"*/; do
@@ -140,11 +140,12 @@ for dir in "$base_dir"*/; do
             l_22_scale=0.4
         fi
 
-        output_dir="output/mcmc/opacity_pos/7dgs_pbr/${scene_name}"
-        echo "Processing ${scene_name} with mode opacity_pos (MCMC, l_22_inv_init_scale=${l_22_scale})..."
-        run_experiment "dgs" "$output_dir" "$dir" "$scene_name" "--use_view_dependent_pos True --l_22_inv_init_scale ${l_22_scale}"
+        output_dir="output/mcmc/dgs/7dgs_pbr/${scene_name}"
+        echo "Processing ${scene_name} with mode dgs (MCMC, l_22_inv_init_scale=${l_22_scale}, lambda_init=-2.5)..."
+        run_experiment "dgs" "$output_dir" "$dir" "$scene_name" "--use_view_dependent_pos True --l_22_inv_init_scale ${l_22_scale} --lambda_init -2.5"
     fi
 done
+python tools/summarize_results.py output/mcmc/dgs/7dgs_pbr
 
 # ============================================
 # 4. NDGS mode with MCMC (full Cholesky precision)
@@ -165,6 +166,7 @@ for dir in "$base_dir"*/; do
         run_experiment "ndgs" "$output_dir" "$dir" "$scene_name" "--lambda_opc 0.2 --use_rot_scale_l_triangle True"
     fi
 done
+python tools/summarize_results.py output/mcmc/ndgs/7dgs_pbr
 
 
 # ============================================

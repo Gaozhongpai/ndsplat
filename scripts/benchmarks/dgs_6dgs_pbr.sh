@@ -137,10 +137,10 @@ done
 
 
 # ============================================
-# 2. opacity_pos_update mode (opacity + position)
+# 2. dgs mode (opacity + position)
 # ============================================
 echo "=============================================="
-echo "Running opacity_pos_update mode benchmarks"
+echo "Running dgs mode benchmarks"
 echo "=============================================="
 ## bunny and cloud lambda_init=-1.2
 for dir in "$base_dir"*/; do
@@ -150,8 +150,8 @@ for dir in "$base_dir"*/; do
             continue
         fi
 
-        output_dir="output/standard/opacity_pos_update/tandt_pbr/${scene_name}"
-        echo "Processing ${scene_name} with mode opacity_pos_update..."
+        output_dir="output/standard/dgs/tandt_pbr/${scene_name}"
+        echo "Processing ${scene_name} with mode dgs..."
         run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --l_22_inv_init_scale 2.0 --lambda_init 0.0" 
     fi
 done

@@ -120,10 +120,10 @@ done
 # done
 
 # ============================================
-# 2. opacity_pos_update mode (opacity + position)
+# 2. dgs mode (opacity + position)
 # ============================================
 echo "=============================================="
-echo "Running opacity_pos_update mode benchmarks"
+echo "Running dgs mode benchmarks"
 echo "=============================================="
 ### materials lambda_init=-1.2
 for dir in "$base_dir"*/; do
@@ -134,18 +134,18 @@ for dir in "$base_dir"*/; do
             continue
         fi
 
-        output_dir="output/standard/opacity_pos_update/nerf_synthetic/${scene_name}"
-        echo "Processing ${scene_name} with mode opacity_pos_update..."
+        output_dir="output/standard/dgs/nerf_synthetic/${scene_name}"
+        echo "Processing ${scene_name} with mode dgs..."
         run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --lambda_init -2.5"
     fi
 done
 
 
 # # ============================================
-# # 2. opacity_pos_update_beta mode (opacity + position)
+# # 2. dgs_beta mode (opacity + position)
 # # ============================================
 # echo "=============================================="
-# echo "Running opacity_pos_update_beta mode benchmarks"
+# echo "Running dgs_beta mode benchmarks"
 # echo "=============================================="
 
 # for dir in "$base_dir"*/; do
@@ -156,8 +156,8 @@ done
 #             continue
 #         fi
 
-#         output_dir="output/standard/opacity_pos_update_beta/nerf_synthetic/${scene_name}"
-#         echo "Processing ${scene_name} with mode opacity_pos_update_beta..."
+#         output_dir="output/standard/dgs_beta/nerf_synthetic/${scene_name}"
+#         echo "Processing ${scene_name} with mode dgs_beta..."
 #         run_experiment "dgs" "$output_dir" "$dir" "--use_view_dependent_pos True --use_beta True"
 #     fi
 # done
