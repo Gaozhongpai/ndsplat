@@ -9,7 +9,6 @@
 # For inquiries contact  george.drettakis@inria.fr
 #
 
-import json
 import os
 import time
 from argparse import ArgumentParser
@@ -41,13 +40,13 @@ def render_wrapper(view, gaussians, pipeline, background, mode, is_test=False, t
     Returns:
         Dictionary containing render outputs
     """
-    if "ubs" in mode or "ndgs" in mode or "dgs" in mode or "dbs" in mode:
+    if mode == "3dgs":
+        return gaussians.render_tcgs(view, pipeline, background, is_test=is_test)
+    elif "ubs" in mode or "ndgs" in mode or "dgs" in mode or "dbs" in mode:
         gaussians.background = background
         if use_gsplat and hasattr(gaussians, 'render'):
             return gaussians.render(view, render_mode="RGB", use_tcgs=is_test, accutile=accutile)
         return gaussians.render_tcgs(view, render_mode="RGB", use_tcgs=is_test, tight_snugbox=tight_snugbox)
-    elif "3dgs" in mode:
-        return gaussians.render_tcgs(view, pipeline, background, is_test=is_test)
     else:
         raise ValueError(f"Unknown mode: {mode}.")
 
@@ -85,15 +84,19 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         fpslist = []
         fps_measure_count = min(20, len(views))
 
-        print("Measuring FPS for first 20 frames (TCGS, tight_snugbox=True)...")
-        gaussians.background = background
+        print("Measuring FPS for first 20 frames...")
         for idx, view in enumerate(views[:fps_measure_count]):
-            num_frames = 500
+            num_frames = 100
 
-            # Measure rendering time with TCGS tensor core kernel
+            # Warmup
+            for _ in range(10):
+                render_wrapper(view, gaussians, pipeline, background, mode, is_test=True, tight_snugbox=True, use_gsplat=use_gsplat)
+
+            torch.cuda.synchronize()
             start_time = time.time()
             for _ in range(num_frames):
-                rendering = gaussians.render_tcgs(view, render_mode="RGB", use_tcgs=True, tight_snugbox=True)["render"]
+                render_wrapper(view, gaussians, pipeline, background, mode, is_test=True, tight_snugbox=True, use_gsplat=use_gsplat)
+            torch.cuda.synchronize()
             end_time = time.time()
 
             # Calculate FPS
@@ -113,7 +116,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
             with open(fps_path, 'w') as f:
                 f.write(f"{avg_fps:.2f}")
 
-    print("Rendering all frames for saving (use_tcgs=False for quality)...")
+    print("Rendering all frames for saving...")
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
         # Render with use_tcgs=False for quality-matched evaluation (same as training)
         renderings = render_wrapper(view, gaussians, pipeline, background, mode, is_test=False, tight_snugbox=False, use_gsplat=use_gsplat)
@@ -140,22 +143,24 @@ def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_
         # Get the appropriate GaussianModel class based on mode
         mode = dataset.mode
         GaussianModel = get_gaussian_model(mode)
-        if "ubs" in mode:
+        if mode == "3dgs":
+            gaussians = GaussianModel(dataset.sh_degree)
+        elif "ubs" in mode or "dbs" in mode:
             gaussians = GaussianModel(sh_degree=dataset.sh_degree, input_dim=dataset.input_dim)
         elif "ndgs" in mode:
             gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim,
                                         use_rot_scale_l_triangle=dataset.use_rot_scale_l_triangle,
                                         learnable_lambda_opc=dataset.learnable_lambda_opc,
                                         lambda_opc=dataset.lambda_opc)
-        elif mode == "dgs":
-            # DGS mode: Full DGS with configurable view-dependent position
+        elif "dgs" in mode:
             gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim,
                                       use_view_dependent_pos=dataset.use_view_dependent_pos,
                                       use_opacity_pos_decouple=dataset.use_opacity_pos_decouple,
                                       l_22_inv_init_scale=dataset.l_22_inv_init_scale,
-                                      lambda_init=dataset.lambda_init)
+                                      lambda_init=dataset.lambda_init,
+                                      lambda_opc=dataset.lambda_opc)
         else:
-            gaussians = GaussianModel(dataset.sh_degree)
+            raise ValueError(f"Unknown mode: {mode}")
 
         scene = Scene(
             dataset,

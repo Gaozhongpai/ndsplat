@@ -200,29 +200,6 @@ python tools/summarize_results.py output/mcmc/ndgs/nerf_synthetic
 
 
 # ============================================
-# 4. UBS mode with MCMC (full Cholesky precision)
-# ============================================
-echo "=============================================="
-echo "Running UBS mode benchmarks (MCMC)"
-echo "=============================================="
-
-for dir in "$base_dir"*/; do
-    if [ -d "$dir" ]; then
-        clean_dir="${dir%/}"
-        scene_name=$(basename "$clean_dir")
-        if [[ "$scene_name" == "README.txt" ]] || [[ "$scene_name" == *.zip ]]; then
-            continue
-        fi
-
-        output_dir="output/mcmc/ubs/nerf_synthetic/${scene_name}"
-        echo "Processing ${scene_name} with mode ubs (MCMC)..."
-        run_experiment "ubs" "$output_dir" "$dir" "--use_gsplat --noise_lr 1000000"
-    fi
-done
-python tools/summarize_results.py output/mcmc/ubs/nerf_synthetic
-
-
-# ============================================
 # 5. dBS mode with MCMC (gsplat rasterizer)
 # ============================================
 echo "=============================================="
@@ -244,4 +221,50 @@ for dir in "$base_dir"*/; do
 done
 python tools/summarize_results.py output/mcmc/dbs/nerf_synthetic
 
+
+# ============================================
+# 6. dBS-SH mode with MCMC (gsplat rasterizer, SH colors)
+# ============================================
+echo "=============================================="
+echo "Running dBS-SH mode benchmarks (MCMC, gsplat)"
+echo "=============================================="
+
+for dir in "$base_dir"*/; do
+    if [ -d "$dir" ]; then
+        clean_dir="${dir%/}"
+        scene_name=$(basename "$clean_dir")
+        if [[ "$scene_name" == "README.txt" ]] || [[ "$scene_name" == *.zip ]]; then
+            continue
+        fi
+
+        output_dir="output/mcmc/dbs-sh/nerf_synthetic/${scene_name}"
+        echo "Processing ${scene_name} with mode dbs-sh (MCMC, gsplat)..."
+        run_experiment "dbs-sh" "$output_dir" "$dir" "--use_gsplat --noise_lr 1000000"
+    fi
+done
+python tools/summarize_results.py output/mcmc/dbs-sh/nerf_synthetic
+
 echo "MCMC Benchmark completed!"
+
+
+# ============================================
+# 4. UBS mode with MCMC (full Cholesky precision)
+# ============================================
+echo "=============================================="
+echo "Running UBS mode benchmarks (MCMC)"
+echo "=============================================="
+
+for dir in "$base_dir"*/; do
+    if [ -d "$dir" ]; then
+        clean_dir="${dir%/}"
+        scene_name=$(basename "$clean_dir")
+        if [[ "$scene_name" == "README.txt" ]] || [[ "$scene_name" == *.zip ]]; then
+            continue
+        fi
+
+        output_dir="output/mcmc/ubs/nerf_synthetic/${scene_name}"
+        echo "Processing ${scene_name} with mode ubs (MCMC)..."
+        run_experiment "ubs" "$output_dir" "$dir" "--use_gsplat --noise_lr 1000000"
+    fi
+done
+python tools/summarize_results.py output/mcmc/ubs/nerf_synthetic

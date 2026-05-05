@@ -1,0 +1,704 @@
+\documentclass{article}
+
+% The default option is the Main Track submission mode with double-blind reviewing.
+\usepackage{neurips_2026}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage{arydshln}
+\usepackage{multirow}
+\usepackage{rotating}
+\usepackage{siunitx}
+\usepackage{makecell}
+\usepackage{bm}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{amsthm}
+\usepackage{gensymb}
+\usepackage{enumitem}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{xspace}
+\usepackage[capitalize,noabbrev]{cleveref}
+
+\newcommand{\return}{\textbf{return }}
+\newcommand{\Comment}[1]{\hfill $\triangleright$ #1}
+
+\makeatletter
+\DeclareRobustCommand\onedot{\futurelet\@let@token\@onedot}
+\def\@onedot{\ifx\@let@token.\else.\null\fi\xspace}
+\def\eg{\emph{e.g}\onedot} \def\Eg{\emph{E.g}\onedot}
+\def\ie{\emph{i.e}\onedot} \def\Ie{\emph{I.e}\onedot}
+\def\cf{\emph{c.f}\onedot} \def\Cf{\emph{C.f}\onedot}
+\def\etc{\emph{etc}\onedot} \def\vs{\emph{vs}\onedot}
+\def\wrt{w.r.t\onedot} \def\dof{d.o.f\onedot}
+\def\aka{\emph{a.k.a}\onedot}
+\def\etal{\emph{et al}\onedot}
+\makeatother
+
+\newcommand{\beginsupplement}{%
+\setcounter{table}{0}
+\renewcommand{\thetable}{S\arabic{table}}%
+\setcounter{figure}{0}
+\renewcommand{\thefigure}{S\arabic{figure}}%
+}
+
+\newcommand{\dgs}{\textit{d}GS\xspace}
+\newcommand{\dbs}{\textit{d}BS\xspace}
+\newcommand{\dgso}{\textit{d}GS-O\xspace}
+\newcommand{\dfamily}{\textit{d}-splatting\xspace}
+\newcommand{\modelname}{\dfamily}
+
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{assumption}[theorem]{Assumption}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+\title{Direct Conditional Parameterization for N-Dimensional Splatting}
+
+\author{%
+  Anonymous Author(s) \\
+  Affiliation \\
+  Address \\
+  \texttt{email}
+}
+
+\begin{document}
+
+\maketitle
+\begin{abstract}
+   N-dimensional splatting methods extend 3D Gaussian Splatting with conditioning variables (view direction, time) to model view-dependent and dynamic effects. State-of-the-art instances span two kernel families, Gaussian (N-DGS, including 6DGS and 7DGS) and Beta (UBS), but all share the same conditioning machinery: every effect (opacity modulation, position shift, covariance correction) is implicitly derived from a joint covariance matrix, requiring matrix inversions, regression multiplications, and covariance corrections per primitive in every forward pass. We argue that this implicit derivation is the bottleneck, not the kernel. We introduce \textbf{direct conditional parameterization}, which replaces covariance-derived conditioning with explicit, kernel-agnostic parameters: opacity via Cholesky precision factors and position via displacement matrices with learnable per-dimension coupling. Applying this to both kernel families yields \dgs{} (Gaussian) and \dbs{} (Beta), eliminating matrix inversions and covariance corrections in either case. Across five benchmarks spanning static, dynamic, and specular scenes, \dgs{} and \dbs{} match or exceed their covariance-derived counterparts (N-DGS, UBS) on quality (up to +0.97 dB on Mip-NeRF 360) while delivering 5--6$\times$ faster slicing kernels and up to 2.66$\times$ faster end-to-end rendering. The results demonstrate that direct conditioning is a kernel-agnostic drop-in replacement for the covariance-derived conditioning step in N-dimensional splatting.
+\end{abstract}
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.95\linewidth]{figures/teaser.pdf}
+\caption{\textbf{Rendering quality and efficiency comparison.} Our direct conditional parameterization yields two methods: \dgs{} (Gaussian kernel) outperforms its implicit-conditioning counterpart 6DGS \citep{gao20246dgs} on the static \texttt{bicycle} scene (left), and \dbs{} (Beta kernel) outperforms UBS \citep{liu2025universal} on the dynamic \texttt{heart1} scene (right). Both achieve higher quality and higher efficiency than their covariance-derived predecessors.}
+\label{fig:teaser}
+\end{figure}
+
+\section{Introduction}
+\label{sec:introduction}
+3D Gaussian Splatting (3DGS)~\citep{3dgs} revolutionized novel-view synthesis by achieving photorealistic quality at real-time speeds through explicit 3D Gaussian primitives. However, real-world scenes exhibit complex phenomena beyond static representations: specular reflections, temporal dynamics, and view-dependent effects that require richer modeling capacity.
+
+Recent work has extended 3DGS along two largely orthogonal axes. The first is \textit{kernel shape}: while the original 3DGS uses Gaussian kernels, alternatives such as Beta kernels~\citep{liu2025deformable,liu2025universal}, generalized exponentials~\citep{hamdi2024gesgeneralizedexponentialsplatting}, and Student-t distributions~\citep{zhu20253dstudentsplattingscooping} have been proposed for better geometric fidelity. The second is \textit{dimensionality}: N-dimensional Gaussians (N-DG)~\citep{diolatzis2024n}, refined as 6DGS~\citep{gao20246dgs} and 7DGS~\citep{gao20257dgs} (collectively N-DGS), lift primitives into higher-dimensional spaces to capture view-dependent and temporal effects through conditioning variables. Universal Beta Splatting (UBS)~\citep{liu2025universal} combines both axes by extending Beta kernels to N dimensions. The two kernel families together cover the state of the art in N-dimensional splatting.
+
+Despite their different kernel shapes, N-DGS and UBS share an identical \textit{conditioning} mechanism, and this is where their cost concentrates. Both methods derive every conditioning effect (opacity modulation, position shift, and covariance correction) from a single joint covariance matrix via conditional Gaussian formulas. Computing any single effect requires inverting the conditioning block $\boldsymbol{\Sigma}_{qq}$, performing regression matrix multiplications $\boldsymbol{\Sigma}_{pq}\boldsymbol{\Sigma}_{qq}^{-1}$, and computing covariance corrections $\boldsymbol{\Sigma}_{pq}\boldsymbol{\Sigma}_{qq}^{-1}\boldsymbol{\Sigma}_{pq}^\top$ per primitive in every forward pass. This overhead accumulates across millions of primitives and is independent of which kernel evaluates the resulting opacity. Moreover, this implicit derivation offers limited control: position and opacity conditioning are rigidly tied through the shared covariance structure, preventing independent adjustment of their coupling strengths. View-dependent reflections primarily need opacity modulation, while temporal motion requires position displacement, yet the fixed coupling forces the same relationship for all primitives. The monolithic design also risks numerical instabilities when covariance matrices become ill-conditioned.
+
+\textbf{Our Insight.} The bottleneck is the conditioning step, not the kernel. The conditional Gaussian formulas that derive all effects from $\boldsymbol{\Sigma}$ are elegant mathematically but computationally wasteful, and they are kernel-agnostic in spirit: N-DGS and UBS use the same conditioning machinery despite different kernels. Each conditioning effect can instead be \textbf{directly parameterized} with explicit, independent parameters. Opacity modulation only needs a precision matrix for distance computation; we parameterize it directly via Cholesky factors. Position shifts only need a displacement matrix scaled by query deviations; we parameterize it directly with bounded weights. By replacing implicit derivation with explicit parameters, we eliminate matrix inversions while gaining fine-grained control over each effect. Because this replacement touches only the conditioning step, it also transfers across kernel families.
+
+We introduce \textbf{direct conditional parameterization} for N-dimensional splatting and instantiate it for both kernel families. The result is two methods, collectively the \dfamily{} family: \dgs{} (Gaussian kernel) replaces N-DGS's covariance-derived conditioning, and \dbs{} (Beta kernel) replaces UBS's. Both share the same explicit \textbf{d}isplacement matrix for position and \textbf{d}irect Cholesky factor for opacity precision. Together they form a 2$\times$2 design matrix with N-DGS and UBS, isolating the contribution of direct conditioning from the choice of kernel:
+
+\begin{center}
+\small
+\begin{tabular}{lcc}
+\toprule
+ & \textbf{Gaussian kernel} & \textbf{Beta kernel} \\
+\midrule
+\textbf{Implicit (covariance-derived)} & N-DGS & UBS \\
+\textbf{Direct (ours)} & \dgs{} & \dbs{} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Our key contributions are:
+
+\begin{itemize}[leftmargin=*]
+\item \textbf{Direct conditional parameterization for N-dimensional splatting.} A kernel-agnostic alternative to covariance-derived conditioning that explicitly parameterizes opacity precision (via Cholesky factors) and position displacement (via spatially-scaled bounded matrices), eliminating matrix inversions, regression multiplications, and covariance corrections.
+
+\item \textbf{Learnable per-dimension coupling.} Position shifts and opacity decay are decoupled by default and re-coupled through per-dimension strengths in $[0,1]^C$, enabling adaptive interpolation between fully decoupled and fully covariance-coupled regimes per primitive.
+
+\item \textbf{Two kernel instantiations.} We develop the formulation for the Gaussian kernel (yielding \dgs{}, the direct counterpart of N-DGS) and show that the same direct conditioning extends to the Beta kernel via a drop-in opacity substitution (yielding \dbs{}, the direct counterpart of UBS). \dbs{} reuses UBS's per-dimension Beta bandwidth $\boldsymbol{\beta}$ as the coupling source, saving one parameter set per primitive relative to \dgs{}.
+
+\item \textbf{Efficient CUDA implementation.} Optimized CUDA kernels for direct conditioning and for the N-DGS/UBS baselines, fusing conditional operations with register-level computation. The N-DGS baseline was previously only available as a PyTorch implementation; we provide a fair CUDA comparison.
+\end{itemize}
+
+Experiments across five benchmarks (NeRF Synthetic, Mip-NeRF 360, 6DGS-PBR, D-NeRF, 7DGS-PBR) show that \dgs{} matches or exceeds N-DGS quality on every dataset (up to +0.97 dB on Mip-NeRF 360), and \dbs{} matches or exceeds UBS quality on shared benchmarks. Both achieve 5--6$\times$ faster slicing kernels and up to 2.66$\times$ faster end-to-end rendering than their covariance-derived counterparts.
+
+
+\section{Related Work}
+\label{sec:related_work}
+
+\textbf{3D Gaussian Splatting.}
+3D Gaussian Splatting (3DGS)~\citep{3dgs} achieves real-time novel view synthesis through explicit 3D Gaussian primitives with spherical harmonic color encoding. This has inspired extensions addressing multi-scale anti-aliasing~\citep{yu2023mipsplattingaliasfree3dgaussian,yan2024multiscale3dgaussiansplatting}, compression~\cite{lee2024compact,morgenstern2024compact}, and semantic modeling~\cite{shi2023languageembedded3dgaussians,zhou2024feature3dgssupercharging3d}. However, 3DGS remains limited to static geometry, relying on spherical harmonics for view-dependent appearance without mechanisms for temporal dynamics or view-dependent geometry.
+
+\textbf{Alternative Kernel Designs.}
+Several works explore non-Gaussian kernels to overcome limitations in 3D spatial modeling. Modified Gaussian variants include generalized exponentials~\cite{hamdi2024gesgeneralizedexponentialsplatting}, truncated kernels~\cite{liu2025tnt}, second-order formulations~\cite{zhang2025quadratic}, half-Gaussians~\cite{li20253d}, and discontinuity-aware profiles~\cite{qu2024disc}. Alternative probability distributions have also been explored: Beta kernels~\cite{liu2025deformable} for improved geometric fidelity, Student-t distributions~\cite{zhu20253dstudentsplattingscooping} for heavier tails, and Gabor functions~\cite{zhou20253dgabsplat3dgaborsplatting} for sharper features. Beyond volumetric representations, methods using convex shapes~\cite{held20243dconvexsplattingradiance}, triangles~\cite{held2025triangle}, and radial kernels~\cite{huang2025deformable} offer alternative geometric primitives. However, all these approaches focus on 3D spatial kernels and do not extend to higher dimensions for modeling view-dependent or temporal effects.
+
+\textbf{N-Dimensional Splatting.}
+To model view-dependent and temporal effects, recent methods lift primitives into higher-dimensional spaces, conditioning on view direction or time alongside position. 4DGS~\cite{yang2023real} extends 3DGS with temporal dimensions for dynamic scene reconstruction, and N-DG~\cite{diolatzis2024n} establishes a general framework for arbitrary-dimensional Gaussians. Building on this, 6DGS~\cite{gao20246dgs} jointly models spatial position and viewing direction, while 7DGS~\cite{gao20257dgs} unifies spatial, angular, and temporal dimensions; we refer to 6DGS and 7DGS collectively as N-DGS. Universal Beta Splatting (UBS)~\citep{liu2025universal} extends the same paradigm to Beta kernels, adding per-dimension bandwidth control. N-DGS and UBS represent the two kernel families currently used in N-dimensional splatting (Gaussian and Beta). Despite their different kernels, both share an identical conditioning mechanism: every conditioning effect is implicitly derived from a joint covariance matrix, requiring matrix inversions, regression multiplications, and covariance corrections per primitive. This shared bottleneck adds significant per-primitive overhead and risks numerical instability, motivating the kernel-agnostic direct conditioning we propose.
+
+\textbf{Dynamic Scene Modeling.}
+NeRF-based methods model dynamics through deformations: D-NeRF~\cite{pumarola2020dnerfneuralradiancefields} introduced canonical-to-deformed mappings, Nerfies~\cite{park2021nerfies} handled non-rigid motion, and HyperNeRF~\cite{park2021hypernerf} captured topological changes. For Gaussian Splatting, 4DGS~\cite{yang2023real} enables real-time dynamic rendering, while Dynamic 3D Gaussians~\cite{luiten2023dynamic} combines canonical representations with learned deformations. FreeTimeGS~\cite{wang2025freetimegs} allows Gaussians to appear at arbitrary times and locations with motion functions. These deformation-based approaches model dynamics as transformations of primitives, whereas 7DGS~\cite{gao20257dgs} achieves unified modeling through higher-dimensional conditioning.
+
+
+\section{Preliminary}
+
+% Our work builds upon prior Gaussian Splatting methods. To contextualize our contribution, we first detail the progression from static 3D models to the more complex 6D and 7D formulations, highlighting the trade-offs between expressive power and computational cost at each step.
+
+\paragraph{3D Gaussian Splatting}
+3D Gaussian Splatting (3DGS)~\cite{3dgs} revolutionized novel view synthesis by representing scenes as a collection of anisotropic 3D Gaussians. Each Gaussian is a primitive defined by a set of learnable attributes that describe its geometry and appearance. Its geometry is determined by a mean vector \(\boldsymbol{\mu} \in \mathbb{R}^3\) specifying its center in 3D space, and a covariance matrix \(\boldsymbol{\Sigma} \in \mathbb{R}^{3 \times 3}\) defining its shape, scale, and orientation. \(\boldsymbol{\Sigma}\) is parameterized by a diagonal scaling matrix \(\mathbf{S} = \operatorname{diag}(s_x, s_y, s_z)\) and a rotation matrix \(\mathbf{R}\) (represented as a quaternion), such that \(\boldsymbol{\Sigma} = \mathbf{R} \mathbf{S} \mathbf{S}^\top \mathbf{R}^\top\). The appearance of each Gaussian is governed by a scalar opacity \(\alpha \in [0, 1]\) that controls its transparency, and a view-dependent color modeled using Spherical Harmonics (SH). The color \(c\) for a given viewing direction \(d\) is computed as a sum over the SH basis functions \(Y_{\ell m}\):
+\begin{equation}
+c(d) = \sum_{\ell=0}^{L} \sum_{m=-\ell}^{\ell} \beta_{\ell m} Y_{\ell m}(d),
+\end{equation}
+where \(\beta_{\ell m}\) are the learnable SH coefficients. 3DGS achieves state-of-the-art quality and real-time rendering for static scenes. However, its representation is fundamentally static and cannot model geometric changes arising from complex view-dependent effects or temporal dynamics.
+
+\paragraph{N-Dimensional Splatting}
+
+To capture view-dependent and temporal effects, recent methods extend 3DGS into higher dimensions. Both N-DGS~\cite{gao20246dgs,gao20257dgs} (Gaussian kernel) and UBS~\citep{liu2025universal} (Beta kernel) parameterize each primitive as an N-dimensional distribution over position $\mathbf{X}_p \in \mathbb{R}^3$ and query variables $\mathbf{X}_q \in \mathbb{R}^C$ (view direction with $C=3$, view+time with $C=4$), characterized by a joint mean and covariance:
+\begin{align}
+\begin{pmatrix} \mathbf{X}_p \\ \mathbf{X}_q \end{pmatrix} \sim \left(
+\begin{pmatrix}
+\boldsymbol{\mu}_p \\ \boldsymbol{\mu}_q
+\end{pmatrix},
+\begin{pmatrix}
+\boldsymbol{\Sigma}_{pp} & \boldsymbol{\Sigma}_{pq} \\
+\boldsymbol{\Sigma}_{pq}^\top & \boldsymbol{\Sigma}_{qq}
+\end{pmatrix}
+\right).
+\end{align}
+At query $\mathbf{q}$, both methods derive the conditional position, opacity, and spatial covariance via the same conditional Gaussian formulas:
+\begin{align}
+\boldsymbol{\mu}_{\text{cond}} &= \boldsymbol{\mu}_p + \boldsymbol{\Sigma}_{pq}\,\boldsymbol{\Sigma}_{qq}^{-1}(\mathbf{q}-\boldsymbol{\mu}_q), \label{eq:prelim_mu}\\
+\boldsymbol{\Sigma}_{\text{cond}} &= \boldsymbol{\Sigma}_{pp} - \boldsymbol{\Sigma}_{pq}\,\boldsymbol{\Sigma}_{qq}^{-1}\,\boldsymbol{\Sigma}_{pq}^\top, \label{eq:prelim_sigma}\\
+\alpha_{\text{cond}} &= \alpha \cdot K\!\left(\mathbf{q}-\boldsymbol{\mu}_q;\,\boldsymbol{\Sigma}_{qq}\right), \label{eq:prelim_alpha}
+\end{align}
+where $K(\cdot;\boldsymbol{\Sigma}_{qq})$ is a kernel-specific opacity decay evaluated using the conditional precision $\boldsymbol{\Sigma}_{qq}^{-1}$. N-DGS uses a Gaussian kernel, $K_{\text{G}}(\boldsymbol{\delta};\boldsymbol{\Sigma}_{qq}) = \exp(-\lambda\,\boldsymbol{\delta}^\top \boldsymbol{\Sigma}_{qq}^{-1}\boldsymbol{\delta})$ with scaling $\lambda$ (default 0.35); UBS uses a Beta kernel, $K_{\text{B}}(\boldsymbol{\delta};\boldsymbol{\Sigma}_{qq}) = \prod_{i=1}^{C}(1-d_i)^{4\beta_i}$ with $d_i = \tanh\!\big((\hat{\mathbf{L}}_q^{-1}\boldsymbol{\delta})_i^2/2\big)$ and per-dimension bandwidth $\beta_i$, where $\hat{\mathbf{L}}_q$ is the Cholesky factor of $\boldsymbol{\Sigma}_{qq}$.
+
+\textbf{The shared bottleneck.} Equations~\eqref{eq:prelim_mu}--\eqref{eq:prelim_alpha} make the bottleneck explicit: regardless of kernel, every forward pass must invert $\boldsymbol{\Sigma}_{qq}$, compute the regression matrix $\boldsymbol{\Sigma}_{pq}\boldsymbol{\Sigma}_{qq}^{-1}$, and evaluate the covariance correction $\boldsymbol{\Sigma}_{pq}\boldsymbol{\Sigma}_{qq}^{-1}\boldsymbol{\Sigma}_{pq}^\top$ for every primitive. Although $C$ is small (3 or 4), these matrix operations accumulate across millions of primitives and risk numerical instability during training. Because they live in the conditioning step rather than the kernel evaluation, they are kernel-agnostic in nature, which motivates a kernel-agnostic replacement.
+
+
+
+\begin{figure*}[t]
+\centering
+
+\includegraphics[width=0.99\linewidth]{figures/pipeline.pdf} % Ensure this figure exists
+\caption{Overview of the \dgs{} pipeline. Given query deviation $\boldsymbol{\delta} = \mathbf{q} - \boldsymbol{\mu}_q$ from the canonical view/time, we directly parameterize two conditioning effects: (1) \textbf{Opacity modulation} via Cholesky factor $\mathbf{L}$, and (2) \textbf{Position displacement} via displacement matrix $\mathbf{V}_{pq}$ and scaled precision $\tilde{\mathbf{V}}_{qq}$ with learnable per-dimension coupling $\boldsymbol{\Lambda}$. The spatial covariance $\boldsymbol{\Sigma}_{pp}$ remains query-independent. This eliminates matrix inversions and covariance corrections; the same pipeline extends to the Beta kernel as \dbs{} (\cref{subsec:dbs}).}
+\label{fig:architecture}
+\vspace{-1em}
+\end{figure*}
+
+\section{Our Approach}
+
+Both N-DGS and UBS derive all conditioning effects from a single $(3+C) \times (3+C)$ joint covariance matrix via conditional Gaussian formulas (\cref{eq:prelim_mu,eq:prelim_sigma,eq:prelim_alpha}). Computing any effect requires inverting $\boldsymbol{\Sigma}_{qq}$, multiplying regression matrices, and computing covariance corrections per primitive per forward pass, regardless of which kernel evaluates opacity downstream.
+
+We propose \textbf{direct conditional parameterization}, which replaces this \textit{implicit derivation} with \textit{explicit parameters} dedicated to each conditioning effect. We develop the formulation for the Gaussian kernel (yielding \dgs{}, the direct counterpart of N-DGS) and then show in \cref{subsec:dbs} that the same parameterization extends to the Beta kernel as a drop-in substitution, yielding \dbs{} (the direct counterpart of UBS).
+
+\subsection{Overview}
+\label{subsec:overview}
+
+Given the deviation $\boldsymbol{\delta} = \mathbf{q} - \boldsymbol{\mu}_q$ from the canonical view/time, our approach replaces \cref{eq:prelim_mu,eq:prelim_alpha} with two directly parameterized components:
+\begin{align}
+\alpha_{\text{cond}} &= \alpha \cdot \exp\!\left(-\lambda_o\,\|\mathbf{L}^\top\boldsymbol{\delta}\|_2^2\right), & &\text{(Opacity)} \label{eq:direct_alpha}\\
+\boldsymbol{\mu}_{\text{cond}} &= \boldsymbol{\mu}_p + \mathbf{V}_{pq}\,\mathrm{diag}(\boldsymbol{\Lambda})\,\mathbf{V}_{qq}\,\boldsymbol{\delta}, & &\text{(Position)} \label{eq:direct_mu}
+\end{align}
+where $\mathbf{L} \in \mathbb{R}^{C \times C}$ is a directly parameterized lower-triangular Cholesky factor (exponential activation on the diagonal), so that $\mathbf{V}_{qq} = \mathbf{L}\mathbf{L}^\top$ \emph{is} the precision matrix (no inversion); $\lambda_o{=}0.35$ is a fixed opacity scaling factor (matching N-DGS); $\mathbf{V}_{pq} = \bar{s}\boldsymbol{\Theta}_{pq} \in \mathbb{R}^{3 \times C}$ is the displacement matrix (mean spatial scale $\bar{s}$ times normalized $\boldsymbol{\Theta}_{pq}$ with $\|\boldsymbol{\Theta}_{pq}\|_F = 1$); and $\boldsymbol{\Lambda} \in [0,1]^C$ contains learnable per-dimension coupling strengths (dimensions of the same type share parameters, e.g., one logit for view and one for time when $C=4$). The spatial covariance $\boldsymbol{\Sigma}_{pp}$ remains query-independent and uses the standard 3DGS quaternion-scale parameterization ($\boldsymbol{\Sigma}_{pp} = \mathbf{R}\mathbf{S}\mathbf{S}^\top \mathbf{R}^\top$), preserving compatibility with existing densification strategies.
+
+\textbf{Separating view and time for $C=4$.} For dynamic scenes with view and time conditioning, we use a block-diagonal precision matrix with zero cross-terms:
+\begin{equation}
+\mathbf{V}_{qq} = \mathbf{L}\mathbf{L}^\top = \begin{pmatrix}
+\mathbf{V}_{vv} & \mathbf{0} \\
+\mathbf{0} & v_t
+\end{pmatrix},
+\end{equation}
+where $\mathbf{V}_{vv} \in \mathbb{R}^{3 \times 3}$ is the view precision and $v_t \in \mathbb{R}$ is the time precision. This separation eliminates coupling between spatial view directions and temporal dynamics, reflecting the physical intuition that view-dependent effects and temporal changes are independent phenomena.
+
+
+\begin{table}[t!]
+\centering
+\caption{Per-primitive operations: N-DGS (implicit) vs.\ \dgs{} (direct). In N-DGS, $\mathbf{K} = \boldsymbol{\Sigma}_{pq}\boldsymbol{\Sigma}_{qq}^{-1}$ is computed once and reused for position shift and covariance correction. \dgs{} eliminates inversion, regression, and covariance correction. The same elimination applies to \dbs{} vs.\ UBS (\cref{subsec:dbs}); only the opacity kernel changes.}
+\label{tab:comparison_overview}
+\setlength{\tabcolsep}{4pt}
+\resizebox{0.48\textwidth}{!}{%
+\begin{tabular}{@{}l|ccc@{}}
+\toprule
+\textbf{Operation} & \textbf{N-DGS} & \textbf{\dgso{}} & \textbf{\dgs{}} \\
+\midrule
+Invert $\boldsymbol{\Sigma}_{qq}$ ($C{\times}C$) & $\boldsymbol{\Sigma}_{qq}^{-1}$ & --- & --- \\
+Regr.\ matrix $\mathbf{K}$ ($3{\times}C \cdot C{\times}C$) & $\boldsymbol{\Sigma}_{pq}\boldsymbol{\Sigma}_{qq}^{-1}$ & --- & --- \\
+Cov.\ correction ($3{\times}C \cdot C{\times}3$) & $\mathbf{K}\,\boldsymbol{\Sigma}_{pq}^\top$ & --- & --- \\
+Position shift & $\mathbf{K}\,\boldsymbol{\delta}$ & --- & $\mathbf{V}_{pq}\,\mathrm{diag}(\boldsymbol{\Lambda})\,\mathbf{V}_{qq}\,\boldsymbol{\delta}$ \\
+Opacity & $\boldsymbol{\delta}^\top \boldsymbol{\Sigma}_{qq}^{-1} \boldsymbol{\delta}$ & $\|\mathbf{L}^\top \boldsymbol{\delta}\|^2$ & $\|\mathbf{L}^\top \boldsymbol{\delta}\|^2$ \\
+\bottomrule
+\end{tabular}%
+}
+\vspace{-1em}
+\end{table}
+
+Table~\ref{tab:comparison_overview} compares the per-primitive operations of N-DGS and \dgs{}. N-DGS must compute the regression matrix $\mathbf{K} = \boldsymbol{\Sigma}_{pq}\boldsymbol{\Sigma}_{qq}^{-1}$, which is reused for position shift and covariance correction; \dgs{} eliminates all three operations. The key innovation beyond cost reduction is \textbf{learnable coupling strength} via per-dimension parameters $\boldsymbol{\Lambda}$: when $\boldsymbol{\Lambda} = \mathbf{0}$, position becomes query-independent ($\boldsymbol{\mu}_{\text{cond}} = \boldsymbol{\mu}_p$), which we denote as the simplified \dgso{} variant using only direct opacity parameterization for maximum efficiency; when $\boldsymbol{\Lambda} = \mathbf{1}$, position couples through the shared precision matrix $\mathbf{V}_{qq}$ like N-DGS but with direct rather than covariance-derived terms. The following subsections detail the direct parameterization of each component.
+
+\subsection{Opacity Conditioning}
+
+In N-DGS, opacity is modulated as $\alpha_{\text{cond}} = \alpha\cdot\exp(-\lambda_o\,\boldsymbol{\delta}^\top \boldsymbol{\Sigma}_{qq}^{-1}\boldsymbol{\delta})$, requiring matrix inversion of $\boldsymbol{\Sigma}_{qq}$.
+
+We instead parameterize the precision factor $\mathbf{L}$ directly, with exponential activation on the diagonal so that $\mathbf{V}_{qq} = \mathbf{L}\mathbf{L}^\top$ is always symmetric positive definite. Computing $\mathbf{L}^\top\boldsymbol{\delta}$ followed by $\|\cdot\|_2^2$ uses a single triangular matrix-vector product that requires no inversion. This eliminates the dominant cost of opacity conditioning and avoids numerical instabilities from ill-conditioned $\boldsymbol{\Sigma}_{qq}$.
+
+For dynamic scenes, the block-diagonal structure of $\mathbf{V}_{qq}$ enables \textbf{separated view and time opacity}. With $\boldsymbol{\delta} = (\boldsymbol{\delta}_v, \delta_t)^\top$ where $\boldsymbol{\delta}_v \in \mathbb{R}^3$ is the view deviation and $\delta_t \in \mathbb{R}$ is the time deviation, the opacity factors as:
+\begin{equation}
+\alpha_{\text{cond}} = \alpha \cdot \exp\!\left(-\lambda_o\left(\boldsymbol{\delta}_v^\top \mathbf{V}_{vv} \boldsymbol{\delta}_v + \delta_t^2 v_t\right)\right),
+\end{equation}
+with view precision $\mathbf{V}_{vv}$ parameterized by a $3 \times 3$ Cholesky factor (6 parameters) and time precision $v_t$ by a single scalar, for a total of 7 parameters instead of 10 for a full $4 \times 4$ precision. This separation reflects the physical intuition that view-dependent and temporal effects are independent phenomena.
+
+\subsection{Position Conditioning}
+\label{subsec:position}
+
+In N-DGS, position is computed as $\boldsymbol{\mu}_{\text{cond}} = \boldsymbol{\mu}_p + \boldsymbol{\Sigma}_{pq}\boldsymbol{\Sigma}_{qq}^{-1}(\mathbf{q}-\boldsymbol{\mu}_q)$, where both $\boldsymbol{\Sigma}_{pq}$ and $\boldsymbol{\Sigma}_{qq}^{-1}$ are implicitly derived from the joint covariance through Cholesky decomposition and matrix inversion.
+
+Our direct parameterization (\cref{eq:direct_mu}) replaces this with explicit, named components:
+\begin{equation*}
+\boldsymbol{\mu}_{\text{cond}} = \boldsymbol{\mu}_p + \underbrace{\bar{s} \boldsymbol{\Theta}_{pq}}_{\mathbf{V}_{pq}} \cdot \underbrace{\mathrm{diag}(\boldsymbol{\Lambda})\,\mathbf{V}_{qq}}_{\tilde{\mathbf{V}}_{qq}} \cdot \boldsymbol{\delta},
+\end{equation*}
+where $\bar{s} = \mathrm{mean}(s_x, s_y, s_z)$ is the spatial scale, $\boldsymbol{\Theta}_{pq} \in \mathbb{R}^{3 \times C}$ are learnable parameters normalized to unit Frobenius norm ($\|\boldsymbol{\Theta}_{pq}\|_F = 1$), $\mathrm{diag}(\boldsymbol{\Lambda}) \in \mathbb{R}^{C \times C}$ contains the per-dimension coupling strengths in $[0,1]$, and $\mathbf{V}_{qq} = \mathbf{L}\mathbf{L}^\top$ is the precision matrix shared with opacity conditioning. The coupling strength $\boldsymbol{\Lambda}$ controls how strongly position shifts respond to query deviations:
+\begin{itemize}[leftmargin=*]
+\item When $\boldsymbol{\Lambda} = \mathbf{0}$: $\tilde{\mathbf{V}}_{qq} = \mathbf{0}$, position becomes query-independent ($\boldsymbol{\mu}_{\text{cond}} = \boldsymbol{\mu}_p$, no conditioning), recovering the \dgso{} variant.
+\item When $\boldsymbol{\Lambda} = \mathbf{1}$: $\tilde{\mathbf{V}}_{qq} = \mathbf{V}_{qq}$, position and opacity couple through the shared precision matrix $\mathbf{V}_{qq}$ (similar to N-DGS, but with direct $\mathbf{V}_{pq}$ instead of covariance-derived $\boldsymbol{\Sigma}_{pq}$).
+\item Intermediate values: partial coupling with per-dimension control. Different query dimensions (e.g., view vs.\ time) can have different coupling strengths, with dimensions of the same type (e.g., the three view dimensions) sharing parameters.
+\end{itemize}
+This direct parameterization eliminates covariance inversion while providing fine-grained control over position conditioning strength. Each Gaussian learns optimal per-dimension coupling during training.
+
+Inspired by N-DGS's design principle that displacement should scale with spatial extent (so small Gaussians produce small displacements), our displacement matrix $\mathbf{V}_{pq} = \bar{s} \boldsymbol{\Theta}_{pq}$ goes beyond their implicit covariance-based approach through direct parameterization. By normalizing $\boldsymbol{\Theta}_{pq}$ to unit Frobenius norm ($\|\boldsymbol{\Theta}_{pq}\|_F = 1$), displacements scale proportionally with the average Gaussian extent $\bar{s} = \text{mean}(s_x, s_y, s_z)$, with each row uniformly bounded by $\|\mathbf{V}_{pq}^{(i)}\|_2 \leq \bar{s}$. In contrast, N-DGS's implicit Cholesky structure yields a looser displacement bound of $\sqrt{C}(i{-}1 + s_i)$ per spatial row $i$, where the constant offset $(i{-}1)\sqrt{C}$ can dominate for small Gaussians and introduces asymmetry across spatial dimensions depending on dimension ordering. Our direct parameterization provides a tighter bound ($\bar{s}$) with no offset and uniform treatment across all spatial dimensions, better handling anisotropic Gaussians. (See Appendix~\ref{sec:spatial_scaling_proof} for the full derivation.)
+
+
+\begin{algorithm}[tb]
+\caption{\dgs{} Conditional Slicing}
+\label{alg:slice}
+\begin{algorithmic}[1]
+\REQUIRE Primitive parameters: $\mu_p$, $\mu_q$, $\alpha$, $\mathbf{S}$, $\boldsymbol{\Theta}_{pq}$, $\mathbf{L}$, $\boldsymbol{\Lambda}$
+\REQUIRE Query point: $q$ (view/time)
+\STATE $\boldsymbol{\delta} \gets q - \mu_q$ %\Comment{Compute query deviation}
+\STATE $\alpha_{\text{cond}} \gets \alpha \cdot \exp(-\lambda_o\,\|\mathbf{L}^\top \boldsymbol{\delta}\|^2)$ \Comment{Conditional opacity}
+\IF{\dgso{} variant}
+    \STATE \return  $\alpha_{\text{cond}}, \mu_p$ \Comment{Early exit for opacity only}
+\ENDIF
+\STATE $\mathbf{V}_{pq} \gets \text{mean}(\text{diag}(\mathbf{S})) \cdot \boldsymbol{\Theta}_{pq}$ %\Comment{Displacement matrix}
+\STATE $\tilde{\mathbf{V}}_{qq} \gets \mathrm{diag}(\boldsymbol{\Lambda})\,\mathbf{L}\mathbf{L}^\top$ %\Comment{Scaled precision for coupling}
+\STATE $\mu_{\text{cond}} \gets \mu_p + \mathbf{V}_{pq} \cdot \tilde{\mathbf{V}}_{qq} \cdot \boldsymbol{\delta}$ %\Comment{Conditional position}
+\STATE \return $\alpha_{\text{cond}}$, $\mu_{\text{cond}}$
+\end{algorithmic}
+\end{algorithm}
+\setlength{\textfloatsep}{22pt}
+
+
+\subsection{CUDA Implementation}
+
+Since the original N-DGS methods (6DGS~\cite{gao20246dgs}, 7DGS~\cite{gao20257dgs}) use PyTorch's autograd for conditional Gaussian operations without custom CUDA kernels, we implement both \dgs{} and the N-DGS baseline with optimized CUDA kernels for fair comparison. Our implementation uses a custom kernel that fuses conditional position and opacity computations in a single pass, as shown in Algorithm~\ref{alg:slice}. The same kernel structure is reused for \dbs{} by swapping the opacity decay function (\cref{subsec:dbs}).
+
+\textbf{CUDA Kernel Design.} The kernel is templated on dimension $C$ (3 for 6D static scenes, 4 for 7D dynamic scenes) with compile-time loop unrolling for optimal performance. Each thread processes one Gaussian primitive independently, enabling perfect parallelization across millions of Gaussians. For opacity computation (Line 2 in Algorithm~\ref{alg:slice}), we compute the triangular matrix-vector product $\mathbf{L}^\top \boldsymbol{\delta}$ directly in registers using the lower-triangular structure: only $C(C+1)/2$ multiplications are needed, followed by a dot product for $\|\cdot\|_2^2$. For position displacement, we construct $\mathbf{V}_{pq}$ via spatial scaling of normalized $\boldsymbol{\Theta}_{pq}$, then compute the scaled precision $\tilde{\mathbf{V}}_{qq}$ by applying per-dimension scaling $\mathrm{diag}(\boldsymbol{\Lambda})$ to $\mathbf{L}\mathbf{L}^\top$. All matrix operations use registers rather than shared memory, as the small matrix sizes fit entirely in per-thread registers. This fused design minimizes global memory bandwidth by avoiding intermediate tensor allocations and maximizes GPU occupancy through register-level computation.
+
+\begin{figure*}[!t]
+    \centering
+\includegraphics[width=0.85\linewidth]{figures/qualitative.pdf}
+    \caption{Qualitative comparison of methods for static and dynamic scenes (zoom in for details).}
+    \label{fig:qualitative}
+    \vspace{-1em}
+\end{figure*}
+
+\textbf{Modular Compatibility.} Our implementation provides compile-time options to enable different levels of conditioning: (1) standard 3DGS with no conditioning, (2) \dgso{} with opacity modulation only, and (3) full \dgs{} with both opacity and position modulation. This modularity maintains compatibility with existing 3DGS codebases while allowing practitioners to select the appropriate complexity-performance tradeoff for their application.
+
+\textbf{Kernel Benchmarks.} As shown in Table~\ref{tab:comparison_overview}, N-DGS requires inversion, regression, and covariance correction per Gaussian, while \dgs{} eliminates all three. While each individual operation is small for $C{=}3$ or $4$, eliminating them collectively removes the dominant cost of the slicing kernel. To isolate the slicing speedup from other pipeline components (rasterization, densification), we benchmark the raw CUDA kernels (C++ forward pass, no autograd overhead) on an A100 GPU. Table~\ref{tab:kernel_benchmark} shows that our slicing kernel is consistently \textbf{5--6$\times$ faster} (\dgs{}) and \textbf{8--11$\times$ faster} (\dgso{}) than N-DGS across both $C{=}3$ and $C{=}4$ configurations and scales from 500K to 2M Gaussians. The same speedup carries over to \dbs{} vs.\ UBS, since the slicing step is kernel-agnostic. End-to-end rendering achieves up to 2.66$\times$ speedup (Table~\ref{tab:summary_results}), with the remaining time dominated by rasterization shared across all methods.
+
+\begin{table}[t]
+\centering
+\caption{CUDA kernel benchmark: slicing-only forward pass time (ms) on A100. N-DGS and \dgs{} share the same C++ entry point with identical inputs, isolating the slicing computation. The same speedup pattern holds for \dbs{} vs.\ UBS, since the slicing step is kernel-agnostic.}
+\label{tab:kernel_benchmark}
+\setlength{\tabcolsep}{4pt}
+\resizebox{0.48\textwidth}{!}{%
+\begin{tabular}{@{}c|r|rrr|cc@{}}
+\toprule
+& \#Gauss & N-DGS & \textit{d}GS-O & \textit{d}GS & N-DGS/\textit{d}GS-O & N-DGS/\textit{d}GS \\
+\midrule
+\multirow{3}{*}{$C{=}3$}
+& 500K & 0.44 & 0.05 & 0.09 & \textbf{9.5$\times$} & \textbf{5.1$\times$} \\
+& 1M & 0.85 & 0.11 & 0.16 & \textbf{8.0$\times$} & \textbf{5.2$\times$} \\
+& 2M & 1.63 & 0.20 & 0.31 & \textbf{8.1$\times$} & \textbf{5.3$\times$} \\
+\midrule
+\multirow{2}{*}{$C{=}4$}
+& 500K & 0.77 & 0.07 & 0.16 & \textbf{11.1$\times$} & \textbf{4.8$\times$} \\
+& 1M & 1.40 & 0.15 & 0.23 & \textbf{9.4$\times$} & \textbf{6.2$\times$} \\
+\bottomrule
+\end{tabular}}
+\vspace{-1em}
+\end{table}
+
+\subsection{Extension to Beta Kernel: \dbs{}}
+\label{subsec:dbs}
+
+The direct conditioning developed above touches only the slicing step (precision read-out, displacement, coupling), so it composes with kernel choices made downstream. We instantiate this composition by combining direct conditioning with the Beta kernel of UBS~\citep{liu2025universal}, yielding \dbs{} (direct Beta Splatting), the direct counterpart of UBS.
+
+Recall that UBS evaluates opacity as $\alpha\cdot\prod_i (1-\tanh((\hat{\mathbf{L}}_q^{-1}\boldsymbol{\delta})_i^2/2))^{4\beta_i}$, where $\hat{\mathbf{L}}_q$ is the Cholesky factor of $\boldsymbol{\Sigma}_{qq}$ obtained by inverting/back-substituting against the covariance, and $\boldsymbol{\beta}\in\mathbb{R}^C$ is the per-dimension Beta bandwidth. \dbs{} replaces the back-substitution $\hat{\mathbf{L}}_q^{-1}\boldsymbol{\delta}$ with our direct Cholesky product $\mathbf{z}=\mathbf{L}^\top\boldsymbol{\delta}$:
+\begin{align}
+\alpha_{\text{cond}} &= \alpha \cdot \prod_{i=1}^{C} \bigl(1-\tanh(z_i^2)\bigr)^{\beta_i}, \label{eq:dbs_alpha}\\
+\boldsymbol{\mu}_{\text{cond}} &= \boldsymbol{\mu}_p + \mathbf{V}_{pq}\,\mathrm{diag}(\boldsymbol{\Lambda}_\beta)\,\mathbf{V}_{qq}\,\boldsymbol{\delta}, \label{eq:dbs_mu}
+\end{align}
+where $\beta_i = 4\exp(\beta_i^{\text{raw}})$ for unconstrained learnable parameters $\beta_i^{\text{raw}}\in\mathbb{R}$ (the $4\exp(\cdot)$ activation matches UBS, ensuring $\beta_i > 0$ and giving a smooth gradient for bandwidth control). The position update~\eqref{eq:dbs_mu} mirrors \cref{eq:direct_mu} but reuses the \emph{same} $\boldsymbol{\beta}$ that drives opacity bandwidth as the source of position coupling, via a $[0,1]$-clamped rescaling $\boldsymbol{\Lambda}_\beta = \min(\boldsymbol{\beta}/4,\,\mathbf{1})$ analogous to \dgs{}'s learnable $\boldsymbol{\Lambda}$. This unification saves one parameter set per primitive relative to \dgs{}, since a single $\boldsymbol{\beta}$ controls both opacity bandwidth and position coupling. All other components ($\mathbf{L}$, $\mathbf{V}_{pq}$, $\boldsymbol{\Sigma}_{pp}$, the block-diagonal view/time structure, and the CUDA fusion) transfer unchanged from \dgs{}. Appendix~\ref{sec:dbs} gives the full side-by-side derivation against UBS.
+
+
+\begin{table*}[t]
+\centering
+\caption{Comparison on static and dynamic datasets with MCMC densification. Mean values across all scenes are reported (\#Gauss in K, training time in minutes). FPS denotes rendering with PyTorch-based conditional operations, while FPS$_{\text{CUDA}}$ uses our custom CUDA kernels integrated with TC-GS~\citep{liao2025tc}.}
+\label{tab:mcmc_comparison}
+\resizebox{0.72\textwidth}{!}{%
+\begin{tabular}{@{}cl|rrrr|ccc@{}}
+\toprule
+Dataset & Method & \#Gauss & Time $\downarrow$ & FPS $\uparrow$& FPS$_{\text{CUDA}}$ $\uparrow$& PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ \\
+\midrule
+\multirow{4}{*}{\makecell{\texttt{NeRF}\\\texttt{Synthetic}}}
+% & 3DGS & 300 & 7.80 & 303.09 & --- & 33.72 & 0.971 & 0.028 \\
+% \cdashline{2-9}
+& N-DGS & 300 & 10.43 & 179.12 & 348.95 & 34.04 & 0.973 & 0.027 \\
+% & \textit{d}GS-O (\textbf{Ours}) & 300 & 9.71 & \bf 400.96 & 587.84 & 34.25 & 0.973 & 0.026 \\
+& \textit{d}GS (\textbf{Ours}) & 300 & \bf 10.26 & \bf 267.33 & \bf 593.94 &  \bf 34.34 &  \bf 0.973 &  \bf 0.026 \\
+\cdashline{2-9}
+& UBS & 300 & 6.80 &  --- & 306.33 & 34.48 & 0.975 & 0.026 \\
+& \textit{d}BS (\textbf{Ours}) & 300 &  \bf5.48 & --- &  \bf 415.66 & \bf 34.53 & \bf 0.975 & \bf 0.025 \\
+\midrule
+\multirow{4}{*}{\makecell{\texttt{Mip-NeRF}\\\texttt{360}}}
+% & 3DGS & 3,104 &  40.16 & 47.62 & --- & 27.06 & 0.788 & 0.237 \\
+% \cdashline{2-9}
+& N-DGS & 2,852 & 51.23 & 33.79 & 75.31 & 26.88 & 0.775 & 0.263 \\
+% & \textit{d}GS-O (\textbf{Ours}) & 2,852 & 48.11 & \bf 91.43 & 200.17 & 27.36 & 0.788 & 0.242 \\
+& \textit{d}GS (\textbf{Ours}) & 2,574 & \bf 49.85 & \bf 43.72 & \bf 200.56 &  \bf 27.67 & \bf 0.794 & \bf  0.227 \\
+\cdashline{2-9}
+& UBS & 3,057 & 28.59 & --- & 76.18 & 28.50 & 0.841 & 0.183 \\
+& \textit{d}BS (\textbf{Ours}) & 3,057 &  \bf 24.42 & --- &  \bf 157.45 & \bf 28.70 & \bf 0.842 & \bf 0.185 \\
+\midrule
+\multirow{6}{*}{\texttt{6DGS-PBR}}
+% & 3DGS & 163 & 53.28& 183.78 & --- & 30.89 & 0.938 & 0.077 \\
+% \cdashline{2-9}
+& N-DGS & 163 & 54.80 & 292.60 & 476.79 & 40.06 & 0.976 & 0.039 \\
+% & \textit{d}GS-O (\textbf{Ours}) & 163 & 48.72  & \bf 467.06 & \bf 588.23& 39.51 & 0.971 & 0.046 \\
+& \textit{d}GS (\textbf{Ours}) & 163 & \bf 47.54 & \bf 364.74 & \bf 551.02 & \bf 40.34 & \bf 0.976 & \bf 0.038 \\
+\cdashline{2-9}
+& UBS & 163 & 8.70 & --- & 276.70 & 39.53 & 0.975 & 0.042 \\
+& \textit{d}BS (\textbf{Ours}) & 163 & \bf 8.47 & --- & \bf 296.02 & \bf 39.72 & \bf 0.976 & \bf 0.042 \\
+\midrule
+\midrule
+\multirow{4}{*}{\texttt{D-NeRF}}
+& N-DGS & 150 & 10.31 & --- & 501.52 & 34.63 & 0.976 & 0.033 \\
+& \textit{d}GS (\textbf{Ours}) & 150 & \bf 10.61 & --- & \bf 746.65 & \bf 34.64 & \bf 0.976 & \bf 0.030 \\
+\cdashline{2-9}
+& UBS & 150 & \bf 8.37 & 257.17 & 371.81 & 32.91 & 0.967 & 0.040 \\
+& \textit{d}BS (\textbf{Ours}) & 150 & 9.34 & \bf 221.33 & \bf 463.09 & \bf 33.55 & \bf 0.972 & \bf 0.033 \\
+\bottomrule
+\end{tabular}}
+\end{table*}
+
+
+
+\begin{table*}[h]
+\centering
+\caption{Comparison with N-DGS on three static and two dynamic datasets with standard 3DGS densification. Mean values across all scenes are reported (\#Gauss in K, training time in minutes). For comparisons with 3DGS \cite{3dgs} and 4DGS \cite{yang2023real} baselines, refer to the original N-DGS~\cite{gao20246dgs,gao20257dgs}. See Appendix~\ref{sec:detailed_results} for per-scene details.}
+\label{tab:summary_results}
+\resizebox{0.72\textwidth}{!}{%
+\begin{tabular}{@{}ccl|rrr|ccc@{}}
+\toprule
+& Dataset & Method & \#Gauss & Time $\downarrow$ & FPS$_{\text{CUDA}}$ $\uparrow$ & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ \\
+\midrule
+\multirow{9}{*}{\rotatebox{90}{STATIC}}
+& \multirow{3}{*}{\makecell{\texttt{NeRF}\\\texttt{Synthetic}}}
+& N-DGS & \bf 171 & 6.35 & 615.57 & 33.38 & 0.970 & 0.032 \\
+&& \textit{d}GS-O (\textbf{Ours}) & 201 & \bf 5.83 & \bf 754.98 & 33.84 & 0.971 & 0.030 \\
+&& \textit{d}GS (\textbf{Ours}) & 201 & 6.84 & 704.84 & \bf 33.91 & \bf 0.972 & \bf 0.029 \\
+\cmidrule{2-9}
+& \multirow{3}{*}{\makecell{\texttt{Mip-NeRF}\\\texttt{360}}}
+& N-DGS & \bf 1273 & 27.09 & 147.46 & 26.40 & 0.739 & 0.316 \\
+&& \textit{d}GS-O (\textbf{Ours}) & 2363 & \bf 25.58 & \bf 279.30 & 27.18 & 0.779 & 0.252 \\
+&& \textit{d}GS (\textbf{Ours}) & 2463 & 28.21 & 237.82 & \bf 27.37 & \bf 0.781 & \bf 0.251 \\
+\cmidrule{2-9}
+& \multirow{3}{*}{\texttt{6DGS-PBR}}
+& N-DGS & \bf 84 & \bf 26.77 & 678.40 & 37.11 & 0.971 & 0.054 \\
+&& \textit{d}GS-O (\textbf{Ours}) & 118 & 30.72 & \bf 696.31 & 36.54 & 0.965 & 0.059 \\
+&& \textit{d}GS (\textbf{Ours}) & 134 & 33.80 & 653.44 & \bf 37.75 & \bf 0.972 & \bf 0.052 \\
+
+\midrule
+\midrule
+\multirow{6}{*}{\rotatebox{90}{DYNAMIC}}
+& \multirow{3}{*}{\texttt{D-NeRF}}
+& N-DGS & \bf 69 & 14.08 & 852.01 & 33.13 & 0.968 & 0.038 \\
+&& \textit{d}GS-O (\textbf{Ours}) & 70 & \bf 13.20 & \bf 948.77 & 30.92 & 0.959 & 0.044 \\
+&& \textit{d}GS (\textbf{Ours}) & 85 & 15.56 & 818.41 & \bf 33.59 & \bf 0.971 & \bf 0.032 \\
+\cmidrule{2-9}
+& \multirow{3}{*}{\texttt{7DGS-PBR}}
+& N-DGS & \bf 162 & 38.14 & 709.83 & 31.75 & 0.955 & 0.055 \\
+&& \textit{d}GS-O (\textbf{Ours}) & 227 & \bf 34.58 & \bf 835.24 & 31.70 & 0.955 & 0.053 \\
+&& \textit{d}GS (\textbf{Ours}) & 226 & 36.96 & 753.77 & \bf 32.18 & \bf 0.956 & \bf 0.050 \\
+\bottomrule
+\end{tabular}}
+\vspace{-0.5em}
+\end{table*}
+
+\section{Experiments}
+\label{sec:experiments}
+
+\subsection{Experimental Setup}
+
+\textbf{Datasets.}
+We evaluate the \dfamily{} family across five diverse datasets covering both static and dynamic scenes:
+\vspace{-1em}
+\begin{itemize}[leftmargin=*]
+    \item \textit{Static scenes:} (1) \textit{NeRF Synthetic}~\cite{mildenhall2021nerf} with 8 synthetic scenes under controlled lighting for evaluating geometric reconstruction; (2) \textit{Mip-NeRF 360}~\cite{barron2021mipnerf} with 9 challenging unbounded real-world scenes for evaluating view synthesis; and (3) \textit{6DGS-PBR}~\cite{gao20246dgs} featuring 7 physically-based scenes with complex view-dependent effects.
+
+    \item \textit{Dynamic scenes:} (4) \textit{D-NeRF}~\cite{pumarola2020dnerfneuralradiancefields} with 8 synthetic sequences featuring various deformation types; and (5) \textit{7DGS-PBR}~\cite{gao20257dgs} containing 6 physically-based dynamic scenes with complex spatio-temporal-angular correlations.
+\end{itemize}
+
+
+\textbf{Evaluation Metrics.}
+We assess reconstruction quality using Peak Signal-to-Noise Ratio (PSNR), Structural Similarity Index (SSIM)~\cite{wang2004image}, and Learned Perceptual Image Patch Similarity (LPIPS)~\cite{zhang2018perceptual}. We also report rendering speed (FPS), training time (minutes), and Gaussian count (K) to evaluate computational efficiency.
+
+\textbf{Implementation Details.}
+All methods are implemented in PyTorch with custom CUDA kernels on a single NVIDIA A100 GPU. We organize comparisons along the 2$\times$2 design matrix introduced in Section~\ref{sec:introduction}: 1) \textbf{N-DGS} (Gaussian, covariance-derived) and 2) \textbf{UBS} (Beta, covariance-derived) as the two covariance-derived baselines, and 3) \textbf{\dgs{}} (Gaussian, direct) and 4) \textbf{\dbs{}} (Beta, direct) as our two direct counterparts. We additionally include \dgso{} (Gaussian, direct, opacity-only with $\boldsymbol{\Lambda}{=}\mathbf{0}$) as a maximum-efficiency variant. The fair comparison within each row of the 2$\times$2 controls for kernel choice and isolates the contribution of direct conditioning. We use the same training settings with the Adam optimizer for 30K iterations across all configurations. For initialization, we set the view mean $\boldsymbol{\mu}_d$ as random unit vectors (with time uniformly sampled in $[0, 1]$ for dynamic scenes), initialize displacement parameters $\boldsymbol{\Theta}_{pq}$ from $\mathcal{N}(0, 0.01^2)$, and set the Cholesky factor $\mathbf{L}$ with diagonal elements $\log(2.0)$ and off-diagonal elements 0.
+
+\subsection{Results with MCMC Densification}
+
+Table~\ref{tab:mcmc_comparison} compares our direct methods against their covariance-derived counterparts under MCMC densification~\cite{kheradmand20243d}, organized as two head-to-head pairs: \dgs{} vs.\ N-DGS (Gaussian kernel) and \dbs{} vs.\ UBS (Beta kernel). Equal Gaussian budgets within each row isolate the contribution of conditioning parameterization. Following the original settings, we set the maximum number of primitives to 300K for NeRF Synthetic, and use scene-specific caps for Mip-NeRF 360 (1.5M--6M) and D-NeRF (150K) depending on scene complexity.
+
+\textbf{Gaussian-kernel pair (\dgs{} vs.\ N-DGS).} Direct conditioning improves quality on every dataset and delivers large rendering speedups, with the gap widest on large scenes. On Mip-NeRF 360 (1.5M--6M primitives), \dgs{} achieves +0.79 dB PSNR with a +166\% FPS$_{\text{CUDA}}$ speedup (200.56 vs.\ 75.31). On NeRF Synthetic (300K), \dgs{} improves PSNR by +0.30 dB with a +70\% FPS$_{\text{CUDA}}$ speedup (593.94 vs.\ 348.95). On D-NeRF (150K, dynamic), \dgs{} matches N-DGS quality (+0.01 dB) while rendering +49\% faster (746.65 vs.\ 501.52 FPS$_{\text{CUDA}}$).
+
+\textbf{Beta-kernel pair (\dbs{} vs.\ UBS).} The same direct-conditioning advantage transfers to the Beta kernel. On NeRF Synthetic, \dbs{} matches UBS quality (+0.05 dB) while rendering +36\% faster (415.66 vs.\ 306.33 FPS$_{\text{CUDA}}$) and training in 5.48 vs.\ 6.80 minutes. On Mip-NeRF 360, \dbs{} improves PSNR by +0.20 dB and renders +107\% faster (157.45 vs.\ 76.18). On D-NeRF, \dbs{} delivers a substantial +0.64 dB PSNR gain over UBS with +25\% faster rendering (463.09 vs.\ 371.81). Across all three datasets, the speedup pattern matches the Gaussian-kernel pair, confirming that the gain stems from eliminating covariance-derived conditioning rather than from kernel-specific tricks.
+
+\textbf{CUDA Implementation Benefits.} Comparing FPS vs.\ FPS$_{\text{CUDA}}$ in Table~\ref{tab:mcmc_comparison} highlights the gains from our optimized CUDA kernels. For N-DGS, the CUDA path achieves 1.95$\times$ speedup on NeRF Synthetic (348.95 vs.\ 179.12) and 2.23$\times$ on Mip-NeRF 360 (75.31 vs.\ 33.79). \dgs{} shows even larger improvements: 2.22$\times$ on NeRF Synthetic (593.94 vs.\ 267.33) and 4.59$\times$ on Mip-NeRF 360 (200.56 vs.\ 43.72). On the Beta-kernel pair, \dbs{}'s CUDA path likewise outperforms its PyTorch baseline (e.g., 463.09 vs.\ 221.33 on D-NeRF, 2.09$\times$). The larger speedups on Mip-NeRF 360 confirm that CUDA optimization is increasingly critical for large-scale scenes, where direct conditioning's elimination of matrix inversions benefits most from GPU parallelization.
+
+\subsection{Results with Standard Densification}
+
+Table~\ref{tab:summary_results} summarizes quality (PSNR, SSIM, LPIPS) and efficiency metrics across all five datasets with standard 3DGS densification \citep{3dgs}, focusing on the Gaussian-kernel pair (\dgs{} vs.\ N-DGS) since standard densification is the protocol used by N-DGS originally. The Beta-kernel pair is covered above under MCMC densification, the protocol used by UBS originally. Per-scene results are in Appendix~\ref{sec:detailed_results}.
+
+\textbf{Static Scenes.}
+On NeRF Synthetic, both variants improve quality: \textit{d}GS-O by +0.46 dB and \textit{d}GS by +0.53 dB, with rendering speedups of 23\% and 15\% respectively. On Mip-NeRF 360, efficiency gains are most pronounced: \textit{d}GS-O achieves 89\% faster rendering with +0.78 dB improvement, while \textit{d}GS achieves 61\% faster rendering with +0.97 dB improvement. Notably, \textit{d}GS-O uses 86\% more primitives (2363K vs 1273K) yet remains faster, demonstrating that per-primitive computation cost dominates over primitive count. On 6DGS-PBR, \textit{d}GS-O shows modest 3\% speedup but -0.57 dB quality drop, while \textit{d}GS recovers and exceeds baseline quality (+0.64 dB).
+
+\textbf{Dynamic Scenes.}
+Position conditioning proves essential for temporal dynamics. On D-NeRF, \textit{d}GS-O suffers -2.21 dB quality drop despite 11\% faster rendering, while \textit{d}GS with learnable coupling via $\Lambda$ exceeds N-DGS by +0.46 dB, demonstrating adaptive coupling surpasses fixed coupling. On 7DGS-PBR combining dynamics with angular lighting, \textit{d}GS-O achieves 18\% faster rendering with minimal quality loss (-0.05 dB), while \textit{d}GS improves quality by +0.43 dB with 6\% faster rendering.
+
+\textbf{Primitive Count.} Under standard densification, \dgs{} retains more primitives than N-DGS (e.g., 2463K vs.\ 1273K on Mip-NeRF 360). This reflects N-DGS's tendency to over-prune on challenging scenes: on \texttt{stump}, N-DGS prunes to 644K / 23.32 dB while \dgs{} retains 3343K / 26.00 dB. Importantly, MCMC results in Table~\ref{tab:mcmc_comparison} cap all methods at the same primitive budget, and \dgs{} still outperforms N-DGS by +0.79 dB on Mip-NeRF 360, confirming that quality gains come from the parameterization, not additional primitives.
+
+Figure~\ref{fig:qualitative} presents qualitative comparisons. \dgs{} and \dbs{} improve novel-view synthesis quality with fewer artifacts than their respective covariance-derived baselines.
+
+\begin{table}[!t]
+\centering
+\caption{Ablation study on NeRF Synthetic and 6DGS-PBR datasets. $\Lambda{=}0$ corresponds to \textit{d}GS-O (opacity only), $\Lambda{=}1$ fixes full coupling, and learned $\Lambda$ is the full \textit{d}GS. ``w/o $\bar{s}$'' removes spatial scaling from displacement.}
+\label{tab:ablation}
+\setlength{\tabcolsep}{4pt}
+\resizebox{0.48\textwidth}{!}{%
+\begin{tabular}{l|ccc|ccc}
+\toprule
+ & \multicolumn{3}{c|}{\texttt{NeRF Synthetic}} & \multicolumn{3}{c}{\texttt{6DGS-PBR}} \\
+Config & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ \\
+\midrule
+$\Lambda{=}0$ (\textit{d}GS-O) & 33.84 & 0.971 & 0.030 & 36.54 & 0.965 & 0.059 \\
+$\Lambda{=}1$ (fixed) & 33.78 & 0.971 & 0.029 & 37.31 & \textbf{0.972} & 0.053 \\
+\textit{d}GS w/o $\bar{s}$ & 31.26 & 0.957 & 0.046 & 34.78 & 0.951 & 0.075 \\
+$\Lambda$ learned (\textit{d}GS) & \textbf{33.91} & \textbf{0.972} & \textbf{0.029} & \textbf{37.75} & \textbf{0.972} & \textbf{0.052} \\
+\bottomrule
+\end{tabular}}%
+\vspace{-1em}
+\end{table}
+
+\subsection{Ablation Study}
+
+To understand the contribution of each component, we conduct an ablation study comparing four configurations in Table~\ref{tab:ablation}: (1) \textbf{$\Lambda{=}0$} (\textit{d}GS-O): opacity conditioning only, (2) \textbf{$\Lambda{=}1$}: fixed full coupling, (3) \textbf{\textit{d}GS w/o $\bar{s}$}: learned $\Lambda$ without spatial scaling, and (4) \textbf{learned $\Lambda$} (\textit{d}GS): our full method.
+
+\textbf{Learned $\Lambda$ outperforms both fixed extremes.} On NeRF Synthetic, learned $\Lambda$ achieves 33.91 dB vs 33.84 ($\Lambda{=}0$) and 33.78 ($\Lambda{=}1$). On 6DGS-PBR (view-dependent scenes), the gap widens: 37.75 dB vs 36.54 ($\Lambda{=}0$, +1.21 dB) and 37.31 ($\Lambda{=}1$, +0.44 dB). This confirms that optimal coupling is scene-dependent: on diffuse scenes $\Lambda{=}0$ slightly outperforms $\Lambda{=}1$, while on specular scenes $\Lambda{=}1$ is substantially better (+0.77 dB), validating that per-Gaussian adaptive coupling is the right design.
+
+\textbf{Spatial scaling is critical.} Removing $\bar{s}$ from displacement degrades PSNR by 2.65 dB on NeRF Synthetic (33.91 vs 31.26) and 2.97 dB on 6DGS-PBR (37.75 vs 34.78). Position displacement without proper scaling (\textit{d}GS w/o $\bar{s}$) performs worse than no displacement at all ($\Lambda{=}0$), confirming that coupling displacement magnitude to Gaussian spatial extent is essential.
+
+\section{Limitations and Future Work}
+
+\textbf{Limitations.} Under standard densification, \dgs{} tends to retain more primitives than N-DGS (e.g., 2463K vs.\ 1273K on Mip-NeRF 360). While these additional primitives contribute positively to reconstruction quality and rendering remains faster due to per-primitive compute savings, they increase memory consumption. Under MCMC densification with equal budgets, \dgs{} still outperforms N-DGS (e.g., +0.79 dB on Mip-NeRF 360), confirming that quality gains are not solely from additional primitives. The \dfamily{} family is currently instantiated for two kernel families (Gaussian and Beta) covering today's state of the art in N-dimensional splatting; extending it to other recently proposed kernels (Student-t~\citep{zhu20253dstudentsplattingscooping}, Gabor~\citep{zhou20253dgabsplat3dgaborsplatting}, generalized exponentials~\citep{hamdi2024gesgeneralizedexponentialsplatting}) is straightforward in principle, since direct conditioning only requires a kernel that consumes $\mathbf{L}^\top\boldsymbol{\delta}$. We leave empirical evaluation to future work.
+
+\textbf{Future Work.} Direct conditional parameterization extends naturally to additional conditioning effects beyond opacity and position. Analogous to factorized attention mechanisms where primitive attributes (opacity, position) serve as \textbf{values} independently modulated by contextual variables (view direction, time) as \textbf{queries}, our framework provides systematic extensibility along two axes: the \textit{value space} (which attributes can be conditioned, such as \textbf{rotation} or \textbf{color}) and the \textit{query space} (which variables drive conditioning, such as \textbf{lighting direction} or \textbf{material properties}). Each new conditioning effect can be directly parameterized with dedicated parameters and learnable coupling strength, avoiding the growing overhead of covariance-derived conditioning where adding dimensions multiplies the cost of matrix inversions, regression multiplications, and covariance corrections. This modular design ensures per-primitive cost scales linearly with conditioning effects, and remains kernel-agnostic.
+
+\section{Conclusion}
+
+We presented \textbf{direct conditional parameterization} for N-dimensional splatting, a kernel-agnostic alternative to the covariance-derived conditioning shared by N-DGS and UBS. Our key insight is that the bottleneck lies in the conditioning step, not the kernel: each conditioning effect (opacity precision, position displacement) can be parameterized explicitly with dedicated, efficient parameters instead of being implicitly derived through a joint covariance matrix. Instantiating this principle in both kernel families yields \dgs{} (Gaussian) and \dbs{} (Beta), each the direct counterpart of an established covariance-derived method. The two share the precision factor, displacement matrix, and CUDA pipeline, differing only in the opacity kernel applied to $\mathbf{L}^\top\boldsymbol{\delta}$ and in the source of position/opacity coupling (independent $\boldsymbol{\Lambda}$ for \dgs{}, derived from $\boldsymbol{\beta}$ for \dbs{}). The framework delivers efficiency (5--6$\times$ faster slicing, up to 2.66$\times$ faster end-to-end rendering on Mip-NeRF 360), stability (Cholesky precision is symmetric positive-definite by construction), and flexibility (learnable per-dimension coupling between position and opacity). Experiments across five benchmarks confirm that \dgs{} matches or exceeds N-DGS, and \dbs{} matches or exceeds UBS, on every dataset. Direct conditioning is a drop-in replacement for the covariance-derived conditioning step, and the kernel-agnostic design suggests it can be a default building block for future N-dimensional splatting methods.
+
+\makeatletter
+\if@neuripsfinal
+\begin{ack}
+% Fill this section for the final camera-ready version.
+\end{ack}
+\fi
+\makeatother
+
+% References section
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% APPENDIX
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newpage
+\appendix
+\section{Comparison to Covariance-Derived Displacement Parameterization}
+\label{sec:spatial_scaling_proof}
+
+Both covariance-derived methods (N-DGS~\cite{gao20246dgs,gao20257dgs}, UBS~\citep{liu2025universal}) and our direct conditioning (\dgs{}, \dbs{}) scale displacement with spatial scale $s_i$, but differ in how tightly this coupling is achieved and in their parameterization approach. We illustrate using N-DGS's Cholesky structure; UBS shares the same structure for the displacement block.
+
+\textbf{N-DGS: Implicit coupling via Cholesky structure.} N-DGS parameterizes the full $(3+C) \times (3+C)$ covariance via Cholesky decomposition $\boldsymbol{\Sigma} = \mathbf{L}\mathbf{L}^\top$, where $\mathbf{L}$ is lower triangular with diagonal elements $L_{ii} = s_i$ (spatial and query scales) and off-diagonal elements $L_{ij} = \ell_{ij}$ for $i > j$, where $\ell_{ij} \in [-1,1]$ are bounded correlation parameters (initialized to zero).
+
+To illustrate this structure, consider 6DGS with 3 spatial and 3 view dimensions ($C=3$). The Cholesky factor $\mathbf{L} \in \mathbb{R}^{6 \times 6}$ has the form:
+\begin{equation}
+\mathbf{L} = \left(\begin{array}{rrrrrr}
+       s_1 &        0 &        0 &        0 &        0 &        0 \\
+\ell_{21} &       s_2 &        0 &        0 &        0 &        0 \\
+\ell_{31} & \ell_{32} &       s_3 &        0 &        0 &        0 \\
+\ell_{41} & \ell_{42} & \ell_{43} &       s_4 &        0 &        0 \\
+\ell_{51} & \ell_{52} & \ell_{53} & \ell_{54} &       s_5 &        0 \\
+\ell_{61} & \ell_{62} & \ell_{63} & \ell_{64} & \ell_{65} &       s_6
+\end{array}\right),
+\end{equation}
+where $s_1, s_2, s_3$ are spatial scales, $s_4, s_5, s_6$ are query dimension scales, and $\ell_{ij} \in [-1,1]$ are bounded correlations.
+
+% \resizebox{\textwidth}{!}{%
+% \begin{equation}    
+% \boldsymbol{\Sigma} = \left(\begin{array}{rrrrrr}
+% s_1^2 
+% &  
+% &  
+% &  
+% &  
+% &  \\
+% s_1 \ell_{21} 
+% & \ell_{21}^2 + s_2^2 
+% &  
+% &  
+% &  
+% &  \\
+% s_1 \ell_{31} 
+% & \ell_{21}\ell_{31} + s_2\ell_{32} 
+% & \ell_{31}^2 + \ell_{32}^2 + s_3^2 
+% &  
+% &  
+% &  \\
+% s_1 \ell_{41} 
+% & \ell_{21}\ell_{41} + s_2\ell_{42} 
+% & \ell_{31}\ell_{41} + \ell_{32}\ell_{42} + s_3\ell_{43} 
+% & \ell_{41}^2 + \ell_{42}^2 + \ell_{43}^2 + s_4^2 
+% &  
+% &  \\
+% s_1 \ell_{51} 
+% & \ell_{21}\ell_{51} + s_2\ell_{52} 
+% & \ell_{31}\ell_{51} + \ell_{32}\ell_{52} + s_3\ell_{53} 
+% & \ell_{41}\ell_{51} + \ell_{42}\ell_{52} + \ell_{43}\ell_{53} + s_4\ell_{54} 
+% & \ell_{51}^2 + \ell_{52}^2 + \ell_{53}^2 + \ell_{54}^2 + s_5^2 
+% &  \\
+% s_1 \ell_{61} 
+% & \ell_{21}\ell_{61} + s_2\ell_{62} 
+% & \ell_{31}\ell_{61} + \ell_{32}\ell_{62} + s_3\ell_{63} 
+% & \ell_{41}\ell_{61} + \ell_{42}\ell_{62} + \ell_{43}\ell_{63} + s_4\ell_{64} 
+% & \ell_{51}\ell_{61} + \ell_{52}\ell_{62} + \ell_{53}\ell_{63} + \ell_{54}\ell_{64} + s_5\ell_{65} 
+% & \ell_{61}^2 + \ell_{62}^2 + \ell_{63}^2 + \ell_{64}^2 + \ell_{65}^2 + s_6^2
+% \end{array}\right)
+% \end{equation}}
+
+The displacement block $\boldsymbol{\Sigma}_{pq} = (\mathbf{L}\mathbf{L}^\top)_{1:3,4:6}$ emerges from matrix multiplication. Computing via row-column dot products yields:
+\begin{equation}
+\boldsymbol{\Sigma}_{pq} = \left(\begin{array}{rrr}
+                           s_1 \ell_{41} &                            s_1 \ell_{51} &                            s_1 \ell_{61} \\
+     \ell_{21}\ell_{41} + s_2 \ell_{42} &      \ell_{21}\ell_{51} + s_2 \ell_{52} &      \ell_{21}\ell_{61} + s_2 \ell_{62} \\
+\ell_{31}\ell_{41} + \ell_{32}\ell_{42} + s_3 \ell_{43} & \ell_{31}\ell_{51} + \ell_{32}\ell_{52} + s_3 \ell_{53} & \ell_{31}\ell_{61} + \ell_{32}\ell_{62} + s_3 \ell_{63}
+\end{array}\right).
+\end{equation}
+Note that $\boldsymbol{\Sigma}_{pq}$ contains only spatial scales $s_1, s_2, s_3$ and bounded correlations $\ell_{ij}$ -- the query dimension scales $s_4, s_5, s_6$ do \textit{not} appear. This occurs because displacement describes how spatial position changes with query deviation, which should scale with the Gaussian's \textit{spatial} extent, not its query dimension spread.
+
+In general, each element of $\boldsymbol{\Sigma}_{pq}$ can be expressed as:
+\begin{equation}
+[\boldsymbol{\Sigma}_{pq}]_{ij} = \sum_{k=1}^{i} L_{ik} L_{(3+j),k} = \sum_{k=1}^{i-1} \ell_{ik} \ell_{(3+j),k} + s_i \cdot \ell_{(3+j),i}.
+\end{equation}
+
+Cross-terms from spatial correlations $\ell_{ik}$ (where $k < i$) accumulate in the displacement. The displacement in row $i$ satisfies:
+\begin{equation}
+\|\boldsymbol{\Sigma}_{pq}^{(i)}\|_2 \leq \sqrt{C}(i-1 + s_i).
+\end{equation}
+For large $s_i$, this approximates $s_i \sqrt{C}$, but the constant offset $(i-1)\sqrt{C}$ can dominate for small Gaussians. This bound also introduces an asymmetry across spatial dimensions: even when $s_1 = s_2 = s_3$, row $i$ accumulates more cross-terms than row 1, allowing arbitrarily different displacement magnitudes depending on the spatial dimension ordering. While N-DGS uses zero initialization of $\ell_{ij}$ to ensure displacement initially scales with $s_i$, training can learn non-zero correlations that introduce both the offset and this asymmetry.
+
+\textbf{Our method: Explicit coupling via scalar scaling.} We directly parameterize $\mathbf{V}_{pq} = \bar{s} \boldsymbol{\Theta}_{pq}$, where $\bar{s} = \text{mean}(s_x, s_y, s_z)$ is the average spatial scale and $\boldsymbol{\Theta}_{pq} \in \mathbb{R}^{3 \times C}$ are learnable parameters normalized to unit Frobenius norm ($\|\boldsymbol{\Theta}_{pq}\|_F = 1$). This gives:
+\begin{equation}
+\|\mathbf{V}_{pq}^{(i)}\|_2 = \bar{s} \|\boldsymbol{\Theta}_{i,:}\|_2 \leq \bar{s}.
+\end{equation}
+Each element in row $i$ scales uniformly with $\bar{s}$ with no cross-terms from other spatial dimensions, ensuring displacement scales with the average Gaussian size even for tiny Gaussians. The unit Frobenius norm constraint ensures bounded displacements while allowing flexible direction learning.
+
+\textbf{Key difference.} Both methods bound displacement by spatial scale, but differ fundamentally:
+\begin{itemize}[leftmargin=*]
+\item \textbf{N-DGS}: Displacement emerges \textit{implicitly} from Cholesky structure with bound $\sqrt{C}(i-1 + s_i)$. Cross-terms can allow disproportionately large displacements for small Gaussians and introduce asymmetry across spatial dimensions. For highly anisotropic Gaussians (e.g., $s_x \gg s_y, s_z$), displacement along each axis $i$ is constrained by its individual scale $s_i$, allowing excessive motion along large axes while limiting movement along smaller dimensions.
+\item \textbf{\dfamily{}}: Displacement is \textit{explicitly} parameterized with tight bound $\bar{s}$, ensuring proper scaling across all primitive sizes with uniform treatment of all spatial dimensions. Critically, using the mean $\bar{s}$ enables balanced displacement control: it allows sufficient movement along smaller dimensions while preventing excessive motion along larger axes, ensuring the primitive can move uniformly in all directions regardless of anisotropy.
+\end{itemize}
+
+Empirically, removing spatial scaling (ablation: \textit{d}GS w/o $\bar{s}$) degrades PSNR by 2.59 dB on NeRF Synthetic (Table~\ref{tab:ablation}), confirming that displacement scaling is critical. Our direct parameterization provides tighter bounds, avoids dimension-ordering artifacts, and enables learnable per-dimension coupling strength control via $\Lambda$.
+
+
+\section{Detailed Per-Scene Results}
+\label{sec:detailed_results}
+
+This section provides comprehensive per-scene breakdowns for all experiments. Table~\ref{tab:detailed_combined} presents quality metrics (PSNR, SSIM, LPIPS) for each scene across all five datasets: three static (NeRF Synthetic~\cite{mildenhall2021nerf}, Mip-NeRF 360~\cite{barron2021mipnerf}, 6DGS-PBR~\cite{gao20246dgs}) and two dynamic (D-NeRF~\cite{pumarola2020dnerfneuralradiancefields}, 7DGS-PBR~\cite{gao20257dgs}), while Table~\ref{tab:efficiency_combined} reports efficiency metrics (Gaussian count, training time, rendering FPS). These detailed results demonstrate the consistency of our method's performance across diverse scene types and complexity levels.
+
+\input{tables/detail_quality_table}
+\input{tables/detail_efficiency_table}
+
+\section{Cross-Family Comparison and UBS Reference}
+\label{sec:dbs}
+
+The 2$\times$2 design matrix decomposes into two orthogonal axes: \textit{conditioning} (direct vs.\ covariance-derived) and \textit{kernel} (Gaussian vs.\ Beta). The main paper compares each direct method against its covariance-derived counterpart in the same row (\dgs{} vs.\ N-DGS, \dbs{} vs.\ UBS). This appendix supplements those comparisons with a \textit{cross-row} comparison that mixes axes (\dgs{} vs.\ UBS), and gives the full UBS formulation alongside the implementation notes that distinguish \dbs{} from a literal substitution into UBS.
+
+\subsection{Cross-Family Comparison: \dgs{} vs.\ UBS}
+
+Table~\ref{tab:dgs_vs_ubs} compares \dgs{} (direct, Gaussian) and UBS (covariance-derived, Beta) on shared static benchmarks with MCMC densification. UBS's Beta kernel improves quality on NeRF Synthetic (+0.58 dB) and Mip-NeRF 360 (+0.99 dB), while \dgs{} is comparable on 6DGS-PBR (+0.24 dB). \dgs{} is consistently \textbf{$\sim$2$\times$ faster} across all datasets due to direct conditioning. This shows that the two axes contribute independently: the kernel choice (Gaussian vs.\ Beta) drives part of the quality gap on diffuse scenes, while the conditioning choice (covariance-derived vs.\ direct) drives the speed gap. The \dbs{} method (introduced in the main paper) combines the strengths of both axes: UBS's Beta kernel quality with \dgs{}'s direct-conditioning efficiency.
+
+\begin{table}[h]
+\centering
+\caption{Cross-family comparison of \dgs{} (direct, Gaussian) and UBS (covariance-derived, Beta) on shared static benchmarks (MCMC densification). Both use the same primitive budgets.}
+\label{tab:dgs_vs_ubs}
+\setlength{\tabcolsep}{4pt}
+\resizebox{0.5\textwidth}{!}{%
+\begin{tabular}{@{}cl|cccc@{}}
+\toprule
+Dataset & Method & PSNR $\uparrow$ & SSIM $\uparrow$ & LPIPS $\downarrow$ & FPS $\uparrow$ \\
+\midrule
+\multirow{2}{*}{\makecell{\texttt{NeRF}\\\texttt{Synthetic}}}
+& \textit{d}GS & 34.34 & 0.973 & 0.026 & \textbf{594} \\
+& UBS & \textbf{34.92} & \textbf{0.975} & \textbf{0.026} & 346 \\
+\midrule
+\multirow{2}{*}{\makecell{\texttt{Mip-NeRF}\\\texttt{360}}}
+& \textit{d}GS & 27.67 & 0.794 & 0.227 & \textbf{201} \\
+& UBS & \textbf{28.66} & \textbf{0.840} & \textbf{0.184} & 100 \\
+\midrule
+\multirow{2}{*}{\texttt{6DGS-PBR}}
+& \textit{d}GS & \textbf{40.34} & 0.976 & \textbf{0.038} & \textbf{551} \\
+& UBS & 40.10 & \textbf{0.979} & 0.039 & 290 \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\subsection{UBS Reference and Implementation Notes}
+
+For comparison, the full UBS formulation (covariance-derived) is:
+\begin{align}
+\mathbf{z}^{\text{UBS}} &= \hat{\mathbf{L}}_q^{-1} \boldsymbol{\delta}, \quad d_i = \tanh\!\bigl((z_i^{\text{UBS}})^2/2\bigr), \\
+\alpha_{\text{cond}} &= \alpha \prod_{i=1}^{C} (1 - d_i)^{4\beta_i}, \\
+\boldsymbol{\mu}_{\text{cond}} &= \boldsymbol{\mu}_p + \boldsymbol{\Sigma}_{pq} \boldsymbol{\Sigma}_{qq}^{-1} \operatorname{diag}(\boldsymbol{\beta}_q) \boldsymbol{\delta}, \\
+\boldsymbol{\Sigma}_{\text{cond}} &= \boldsymbol{\Sigma}_{pp} - \boldsymbol{\Sigma}_{pq} \boldsymbol{\Sigma}_{qq}^{-1} \operatorname{diag}(\boldsymbol{\beta}_q) \boldsymbol{\Sigma}_{qp},
+\end{align}
+where $\hat{\mathbf{L}}_q$ is the Cholesky factor of $\boldsymbol{\Sigma}_{qq}$ obtained by inverting/back-substituting against the covariance. \dbs{} (\cref{eq:dbs_alpha,eq:dbs_mu}) replaces $\hat{\mathbf{L}}_q^{-1}\boldsymbol{\delta}$ with the direct product $\mathbf{L}^\top\boldsymbol{\delta}$, replaces $\boldsymbol{\Sigma}_{pq}\boldsymbol{\Sigma}_{qq}^{-1}$ with the direct displacement $\mathbf{V}_{pq}$, and drops the covariance correction (using $\boldsymbol{\Sigma}_{\text{cond}}=\boldsymbol{\Sigma}_{pp}$).
+
+Two implementation choices in \dbs{} differ from a literal substitution into the UBS form. First, the $\tanh$ argument drops the factor of $1/2$ used by UBS; this is a kernel-bandwidth choice we found marginally cleaner empirically. Second, the coupling matrix is $\operatorname{diag}(\boldsymbol{\Lambda}_\beta)$ with $\boldsymbol{\Lambda}_\beta = \min(\boldsymbol{\beta}/4,\mathbf{1})$ rather than $\operatorname{diag}(\boldsymbol{\beta})$ directly: since $\beta_i = 4\exp(\beta_i^{\text{raw}})$ is unbounded above, dividing by 4 brings $\beta_i/4 = \exp(\beta_i^{\text{raw}})$ to roughly unit magnitude near initialization, and clamping to $[0,1]$ gives a normalized coupling strength comparable to \dgs{}'s $\boldsymbol{\Lambda}$.
+
+
+
+
+\newpage
+\input{checklist.tex}
+
+\end{document}

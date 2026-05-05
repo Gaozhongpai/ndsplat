@@ -67,7 +67,7 @@ class GaussianModel:
         _mean: [N, C] conditioning mean (C=3 view dir, or C=4 view+time)
         _L_22_inv: [N, C*(C+1)/2] Cholesky of precision V_qq = L @ L^T
         _v_12: [N, 3*C] position displacement matrix
-        _beta: [N, C] per-dimension beta (activation: 4.0 * exp(beta))
+        _beta: [N, C+1] per-dimension beta (col 0 = spatial; cols 1: = conditioning); activation: 4.0 * exp(beta)
 
     Conditioning:
         delta = query - mean
@@ -93,9 +93,13 @@ class GaussianModel:
 
         self.beta_activation = beta_activation
 
-    def __init__(self, sh_degree: int = 3, input_dim: int = 6):
+    def __init__(self, sh_degree: int = 3, input_dim: int = 6, l_22_inv_init_scale: float = 1.0,
+                 beta_init_view: float = -3.0, time_duration: list = [0.0, 1.0]):
         self.input_dim = input_dim
         self.cond_dim = input_dim - 3  # C = 3 for 6DGS, 4 for 7DGS
+        self.l_22_inv_init_scale = l_22_inv_init_scale
+        self.beta_init_view = beta_init_view
+        self.time_duration = time_duration  # Time range for 7DGS
 
         self._xyz = torch.empty(0)
         self._mean = torch.empty(0)
@@ -103,7 +107,7 @@ class GaussianModel:
         self._l_triangle = torch.empty(0)  # [N, 3] rotation only (skew-symmetric)
         self._rgb = torch.empty(0)
         self._opacity = torch.empty(0)
-        self._beta = torch.empty(0)  # [N, C]
+        self._beta = torch.empty(0)  # [N, C+1] (col 0 = spatial, cols 1: = conditioning)
         self._L_22_inv = torch.empty(0)  # [N, C*(C+1)/2]
         self._v_12 = torch.empty(0)  # [N, 3*C]
         self.background = torch.empty(0)
@@ -224,14 +228,24 @@ class GaussianModel:
             query,
             self.get_v_12,
             self._L_22_inv,
-            self.get_beta,
+            self.get_beta[:, 1:],  # skip spatial beta (col 0); pass conditioning betas only
         )
 
     def create_from_pcd(self, pcd: BasicPointCloud, spatial_lr_scale: float,
                         mcmc_cap_max: int = None, densification_strategy: str = "standard"):
         self.spatial_lr_scale = spatial_lr_scale
-        fused_point_cloud = torch.tensor(np.asarray(pcd.points)).float().cuda()
-        fused_color = torch.tensor(np.asarray(pcd.colors)).float().cuda()
+
+        pcd_points = np.asarray(pcd.points)
+        pcd_colors = np.asarray(pcd.colors)
+
+        if densification_strategy == "mcmc" and mcmc_cap_max is not None and len(pcd_points) > mcmc_cap_max:
+            print(f"\n[MCMC Init] Point cloud has {len(pcd_points)} points, sampling {mcmc_cap_max} for initialization")
+            sampled_indices = np.random.choice(len(pcd_points), mcmc_cap_max, replace=False)
+            pcd_points = pcd_points[sampled_indices]
+            pcd_colors = pcd_colors[sampled_indices]
+
+        fused_point_cloud = torch.tensor(pcd_points).float().cuda()
+        fused_color = torch.tensor(pcd_colors).float().cuda()
         N = fused_point_cloud.shape[0]
         C = self.cond_dim
 
@@ -256,15 +270,29 @@ class GaussianModel:
             0.5 * torch.ones((N, 1), dtype=torch.float, device="cuda")
         )
 
-        # Beta: [N, C], initialized to zeros (activated = 4.0)
-        betas = torch.zeros((N, C), dtype=torch.float, device="cuda")
+        # Beta: [N, C+1] — first column is spatial Beta (used by gsplat rasterizer),
+        # remaining C columns are conditioning Betas (used by slice_dbs).
+        # Layout matches UBS: betas[:, 0] = spatial, betas[:, 1:] = conditioning.
+        # All initialized to zeros (activated = 4.0).
+        betas = torch.zeros((N, C + 1), dtype=torch.float, device="cuda")
         if self.input_dim == 7:
-            betas[:, :3] -= 3  # Lower view betas for 7DGS
+            betas[:, 1:4] = self.beta_init_view  # Lower view betas for 7DGS (default -3)
 
         # L_22_inv: [N, C*(C+1)/2], Cholesky of precision
-        # Diagonal = log(1.0) = 0.0, off-diagonal = 0.0
+        # Diagonal entries are exponentiated in the CUDA kernel; raw value = log(scale).
+        # Off-diagonals: small N(0, 1e-5) noise to break symmetry (matches UBS-style init);
+        # note dBS parameterizes the precision Cholesky while UBS parameterizes the covariance
+        # Cholesky -- the noise is just for symmetry-breaking, sign convention is irrelevant.
         n_L = C * (C + 1) // 2
-        L_22_inv = torch.zeros((N, n_L), device="cuda")
+        L_22_inv = torch.normal(0, 1e-5, size=(N, n_L), device="cuda")
+        for i in range(C):
+            diag_idx = i * (i + 1) // 2 + i
+            if self.input_dim == 7 and i == C - 1:
+                # Time precision (matches dGS): L_diag = sqrt(precision) = 1/sqrt(duration/10)
+                dist_t = (self.time_duration[1] - self.time_duration[0]) / 10
+                L_22_inv[:, diag_idx] = math.log(1.0 / math.sqrt(dist_t))
+            else:
+                L_22_inv[:, diag_idx] = math.log(self.l_22_inv_init_scale)
         # For 7DGS: block-diagonal (zero cross-terms between view and time)
         # Cross-term indices for C=4: indices 6, 7, 8 (row 3, cols 0,1,2) are already 0
 

@@ -1,0 +1,147 @@
+
+
+% Combined Detailed Efficiency Comparison Table
+\begin{table*}[tbp]
+  \centering
+  \caption{\small{Detailed efficiency comparison across all datasets at 30K iterations. N-DGS, \textit{d}GS-O, and \textit{d}GS are compared showing number of Gaussians (K), training time (minutes), and rendering FPS on static benchmarks (NeRF Synthetic, Mip-NeRF 360, 6DGS-PBR) and dynamic benchmarks (7DGS-PBR, D-NeRF).}} %Note, NeRF Synthetic and 7DGS-PBR use decoupled opacity and position.
+  \resizebox{0.85\linewidth}{!}{
+        \begin{tabular}{@{\hskip 2pt}cc|@{\hskip 2pt}l@{\hskip 2pt}|@{\hskip 2pt}r@{\hskip 2pt}r@{\hskip 2pt}r|@{\hskip 2pt}r@{\hskip 2pt}r@{\hskip 2pt}r|@{\hskip 2pt}r@{\hskip 2pt}r@{\hskip 2pt}r@{\hskip 2pt}}
+
+    \toprule
+
+    \multicolumn{2}{@{\hskip 2pt}c|@{\hskip 2pt}}{\multirow{2}[4]{*}{Dataset}} & \multicolumn{1}{c|@{\hskip 2pt}}{\multirow{2}[4]{*}{Scene}}
+        & \multicolumn{3}{c|@{\hskip 2pt}}{N-DGS}
+        & \multicolumn{3}{c|@{\hskip 2pt}}{\textit{d}GS-O (\textbf{Ours})}
+        & \multicolumn{3}{@{\hskip 2pt}c}{\textit{d}GS (\textbf{Ours})} \\
+\cmidrule{4-12}
+          &&       & \multicolumn{1}{@{\hskip 2pt}c@{\hskip 2pt}}{\#Gauss$\downarrow$}
+                  & \multicolumn{1}{@{\hskip 2pt}c@{\hskip 2pt}}{Time$\downarrow$}
+                  & \multicolumn{1}{c|@{\hskip 2pt}}{FPS$_{\text{CUDA}}$$\uparrow$}
+                  & \multicolumn{1}{@{\hskip 2pt}c@{\hskip 2pt}}{\#Gauss$\downarrow$}
+                  & \multicolumn{1}{@{\hskip 2pt}c@{\hskip 2pt}}{Time$\downarrow$}
+                  & \multicolumn{1}{c|@{\hskip 2pt}}{FPS$_{\text{CUDA}}$$\uparrow$}
+                  & \multicolumn{1}{@{\hskip 2pt}c@{\hskip 2pt}}{\#Gauss$\downarrow$}
+                  & \multicolumn{1}{@{\hskip 2pt}c@{\hskip 2pt}}{Time$\downarrow$}
+                  & \multicolumn{1}{@{\hskip 2pt}c@{\hskip 2pt}}{FPS$_{\text{CUDA}}$$\uparrow$} \\
+    \midrule
+
+\multicolumn{1}{@{\hskip 2pt}c}{\multirow{30}[4]{*}{\begin{sideways}STATIC SCENES\end{sideways}}}
+
+    % ---------------- nerf_synthetic ----------------
+& \multicolumn{1}{c|@{\hskip 2pt}}{\multirow{9}[4]{*}{\begin{sideways}NeRF Synthetic\end{sideways}}}
+    & \texttt{chair}     & \bf 178 & 6.11 & 635.27 & 206 & \bf 5.54 & \bf 713.54 & 199 & 5.86 & 677.38 \\
+    & & \texttt{drums}     & \bf 193 & 6.19 & 476.51 & 239 & \bf 5.62 & \bf 683.86 & 242 & 6.04 & 646.90 \\
+    & & \texttt{ficus}     & \bf 117 & 4.58 & 840.56 & 147 & \bf 4.27 & \bf 973.46 & 136 & 4.53 & 900.59 \\
+    & & \texttt{hotdog}    & 102 & 6.04 & 871.45 & \bf 98 & \bf 5.56 & \bf 982.05 & 104 & 6.02 & 876.19 \\
+    & & \texttt{lego}      & \bf 186 & 7.06 & 480.97 & 220 & \bf 5.67 & \bf 697.44 & 225 & 6.23 & 669.15 \\
+    & & \texttt{materials} & \bf 136 & 5.38 & 767.74 & 182 & \bf 5.09 & 759.30 & 180 & 5.54 & 689.29 \\
+    & & \texttt{mic}       & \bf 188 & 5.84 & 486.29 & 260 & 6.21 & \bf 625.05 & 260 & 11.17 & 594.08 \\
+    & & \texttt{ship}      & 271 & 9.60 & 365.77 & \bf 256 & \bf 8.68 & \bf 605.15 & 259 & 9.28 & 585.17 \\
+\cmidrule{3-12}
+    & & \texttt{avg}
+      & \bf 171
+      & 6.35
+      & 615.57
+      & 201
+      & \bf 5.83
+      & \bf 754.98
+      & 201
+      & 6.84
+      & 704.84 \\
+    \cmidrule{2-12}
+
+    % ---------------- mipnerf360 ----------------
+& \multicolumn{1}{c|@{\hskip 2pt}}{\multirow{10}[4]{*}{\begin{sideways}Mip-NeRF 360\end{sideways}}}
+        & \texttt{bicycle}   & \bf 2243 & \bf 32.54 & 70.31 & 4452 & 33.46 & \bf 144.01 & 4644 & 38.30 & 118.20 \\
+        & & \texttt{bonsai}    & \bf 751 & 23.49 & 186.80 & 1048 & \bf 20.02 & \bf 419.45 & 1091 & 21.77 & 359.76 \\
+        & & \texttt{counter}   & \bf 555 & 22.79 & 237.17 & 880 & \bf 22.41 & \bf 430.22 & 902 & 23.98 & 380.55 \\
+        & & \texttt{flowers}   & \bf 1547 & 26.28 & 100.84 & 2587 & \bf 24.43 & \bf 237.63 & 2679 & 26.27 & 196.76 \\
+        & & \texttt{garden}    & \bf 2674 & 38.90 & 58.64 & 3552 & \bf 29.36 & \bf 174.37 & 3767 & 33.70 & 141.57 \\
+        & & \texttt{kitchen}   & \bf 770 & 27.28 & 178.89 & 1148 & \bf 24.95 & \bf 354.03 & 1175 & 26.41 & 312.45 \\
+        & & \texttt{room}      & \bf 792 & 24.62 & 177.95 & 1286 & \bf 23.81 & \bf 351.34 & 1356 & 25.75 & 298.32 \\
+        & & \texttt{stump}     & \bf 644 & 21.29 & 212.22 & 3272 & \bf 27.56 & 199.15 & 3343 & 30.01 & 165.52 \\
+        & & \texttt{treehill}  & \bf 1481 & 26.62 & 104.35 & 3042 & \bf 24.22 & \bf 203.51 & 3209 & 27.64 & 167.23 \\
+    \cmidrule{3-12}
+        & & \texttt{avg}
+          & \bf 1273
+          & 27.09
+          & 147.46
+          & 2363
+          & \bf 25.58
+          & \bf 279.30
+          & 2463
+          & 28.21
+          & 237.82 \\
+\cmidrule{2-12}
+
+  % ---------------- tandt_pbr ----------------
+& \multicolumn{1}{c|@{\hskip 2pt}}{\multirow{8}[4]{*}{\begin{sideways}6DGS-PBR\end{sideways}}}
+    & \texttt{bunny} & \bf 24 & 33.69 & \bf 718.47 & 63 & 42.62 & 689.88 & 62 & 45.03 & 642.86 \\
+    & & \texttt{cloud}     & \bf 17 & 32.61 & 597.10 & 62 & 39.08 & \bf 700.35 & 60 & 41.31 & 654.93 \\
+    & & \texttt{dragon}    & \bf 93 & 12.76 & \bf 855.89 & 118 & 12.87 & 787.64 & 134 & 13.28 & 753.36 \\
+    & & \texttt{explosion} & \bf 35 & 22.13 & \bf 875.48 & 72 & 29.54 & 813.28 & 73 & 40.77 & 753.18 \\
+    & & \texttt{ct-scan}     & \bf 171 & 6.57 & 689.47 & 221 & \bf 6.44 & \bf 796.54 & 299 & 7.45 & 695.69 \\
+    & & \texttt{smoke}     & \bf 52 & 46.48 & \bf 608.02 & 72 & 55.67 & 568.30 & 74 & 58.15 & 547.93 \\
+    & & \texttt{suzanne}   & \bf 201 & 33.16 & 404.34 & 221 & \bf 28.80 & \bf 518.17 & 233 & 30.58 & 526.10 \\
+\cmidrule{3-12}
+    & & \texttt{avg}
+      & \bf 85
+      & 26.77
+      & 678.40
+      & 118
+      & 30.72
+      & \bf 696.31
+      & 134
+      & 33.80
+      & 653.44 \\
+
+    \midrule
+    \midrule
+
+\multicolumn{1}{@{\hskip 2pt}c}{\multirow{16}[4]{*}{\begin{sideways}DYNAMIC SCENES\end{sideways}}}
+
+& \multirow{7}{*}{\begin{sideways}7DGS-PBR\end{sideways}}
+    & \texttt{cloud}    & \bf 48 & 76.87 & 950.04 & 63 & \bf 75.47 & \bf 953.38 & 70 & 76.11 & 892.36 \\
+    & & \texttt{dust}     & \bf 16 & 13.11 & 1052.85 & 23 & \bf 12.06 & \bf 1165.85 & 30 & 16.89 & 990.11 \\
+    & & \texttt{flame}    & \bf 22 & \bf 14.91 & \bf 1063.87 & 23 & 16.87 & 1015.92 & 40 & 19.30 & 926.17 \\
+    & & \texttt{heart1}   & \bf 140 & 30.75 & 593.96 & 182 & \bf 28.75 & \bf 697.33 & 188 & 30.08 & 639.83 \\
+    & & \texttt{heart2}   & \bf 181 & 22.75 & 432.58 & 237 & \bf 20.12 & \bf 729.08 & 261 & 22.60 & 662.23 \\
+    & & \texttt{suzanne}  & \bf 564 & 70.47 & 165.70 & 837 & \bf 54.23 & \bf 449.89 & 767 & 56.75 & 411.89 \\
+    \cmidrule{3-12}
+        & & \texttt{avg}
+          & \bf 162
+          & 38.14
+          & 709.83
+          & 227
+          & \bf 34.58
+          & \bf 835.24
+          & 226
+          & 36.96
+          & 753.77 \\
+    \cmidrule{2-12}
+
+& \multirow{9}{*}{\begin{sideways}D-NeRF\end{sideways}}
+        & \texttt{b.balls}  & 179 & 22.73 & 398.65 & \bf 103 & \bf 16.09 & \bf 770.99 & 128 & 17.72 & 636.37 \\
+        & & \texttt{h.warrior}& \bf 13 & 8.25 & \bf 1151.03 & 17 & \bf 7.87 & 1141.34 & 18 & 9.23 & 1068.65 \\
+        & & \texttt{hook}     & \bf 37 & \bf 9.71 & \bf 1042.00 & 55 & 11.42 & 1027.26 & 75 & 14.58 & 865.61 \\
+        & & \texttt{j.jacks}  & \bf 25 & \bf 9.61 & 1069.25 & 31 & 10.67 & \bf 1101.29 & 71 & 14.48 & 899.56 \\
+        & & \texttt{lego}     & \bf 114 & 21.09 & 583.20 & 143 & \bf 17.93 & \bf 700.47 & 125 & 19.28 & 685.07 \\
+        & & \texttt{mutant}   & \bf 63 & 14.74 & 829.30 & 67 & \bf 13.27 & \bf 930.20 & 79 & 15.47 & 810.36 \\
+        & & \texttt{standup}  & \bf 21 & 9.71 & 1074.73 & 26 & \bf 9.28 & \bf 1140.56 & 51 & 14.00 & 867.39 \\
+        & & \texttt{trex}     & \bf 101 & \bf 16.77 & 667.96 & 118 & 19.09 & \bf 778.03 & 134 & 19.69 & 714.27 \\
+    \cmidrule{3-12}
+        & & \texttt{avg}
+          & \bf 69
+          & 14.08
+          & 852.01
+          & 70
+          & \bf 13.20
+          & \bf 948.77
+          & 85
+          & 15.56
+          & 818.41 \\
+    \bottomrule
+    \end{tabular}
+    }
+  \label{tab:efficiency_combined}
+\end{table*}

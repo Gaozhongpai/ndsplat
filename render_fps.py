@@ -40,12 +40,11 @@ def render_wrapper(view, gaussians, pipeline, background, mode, is_test=False, t
     Returns:
         Dictionary containing render outputs
     """
-    if "ubs" in mode or "ndgs" in mode or "dgs" in mode or "dbs" in mode:
-        # UBS/N-DGS/dGS/dBS mode: use render_tcgs with CUDA-accelerated conditional slicing
+    if mode == "3dgs":
+        return gaussians.render_tcgs(view, pipeline, background, is_test=is_test)
+    elif "ubs" in mode or "ndgs" in mode or "dgs" in mode or "dbs" in mode:
         gaussians.background = background
         return gaussians.render_tcgs(view, render_mode="RGB", use_tcgs=is_test, tight_snugbox=tight_snugbox)
-    elif "3dgs" in mode:
-        return gaussians.render_tcgs(view, pipeline, background, is_test=is_test)
     else:
         raise ValueError(f"Unknown mode: {mode}.")
 
@@ -116,19 +115,20 @@ def measure_fps_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, 
         # Get the appropriate GaussianModel class based on mode
         mode = dataset.mode
         GaussianModel = get_gaussian_model(mode)
-        if "ubs" in mode:
+        if mode == "3dgs":
+            gaussians = GaussianModel(dataset.sh_degree)
+        elif "ubs" in mode or "dbs" in mode:
             gaussians = GaussianModel(sh_degree=dataset.sh_degree, input_dim=dataset.input_dim)
         elif "ndgs" in mode:
             gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim,
                                         use_rot_scale_l_triangle=dataset.use_rot_scale_l_triangle,
                                         lambda_opc=dataset.lambda_opc)
-        elif mode == "dgs":
-            # DGS mode: Full DGS with configurable view-dependent position
+        elif "dgs" in mode:
             gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim,
                                       use_view_dependent_pos=dataset.use_view_dependent_pos,
                                       use_opacity_pos_decouple=dataset.use_opacity_pos_decouple)
         else:
-            gaussians = GaussianModel(dataset.sh_degree)
+            raise ValueError(f"Unknown mode: {mode}")
 
         scene = Scene(
             dataset,

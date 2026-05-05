@@ -145,26 +145,26 @@ for dir in "$base_dir"*/; do
     fi
 done
 
-# ============================================
-# 3. opacity_pos_update mode with MCMC (opacity + position)
-# ============================================
-echo "=============================================="
-echo "Running opacity_pos_update mode benchmarks (MCMC)"
-echo "=============================================="
+# # ============================================
+# # 3. opacity_pos_update mode with MCMC (opacity + position)
+# # ============================================
+# echo "=============================================="
+# echo "Running opacity_pos_update mode benchmarks (MCMC)"
+# echo "=============================================="
 
-for dir in "$base_dir"*/; do
-    if [ -d "$dir" ]; then
-        clean_dir="${dir%/}"
-        scene_name=$(basename "$clean_dir")
-        if [[ "$scene_name" == *.zip ]]; then
-            continue
-        fi
+# for dir in "$base_dir"*/; do
+#     if [ -d "$dir" ]; then
+#         clean_dir="${dir%/}"
+#         scene_name=$(basename "$clean_dir")
+#         if [[ "$scene_name" == *.zip ]]; then
+#             continue
+#         fi
 
-        output_dir="output/mcmc/opacity_pos_update/tandt_pbr/${scene_name}"
-        echo "Processing ${scene_name} with mode opacity_pos_update (MCMC)..."
-        run_experiment "dgs" "$output_dir" "$dir" "$scene_name" "--use_view_dependent_pos True --l_22_inv_init_scale 2.0"
-    fi
-done
+#         output_dir="output/mcmc/opacity_pos_update/tandt_pbr/${scene_name}"
+#         echo "Processing ${scene_name} with mode opacity_pos_update (MCMC)..."
+#         run_experiment "dgs" "$output_dir" "$dir" "$scene_name" "--use_view_dependent_pos True --l_22_inv_init_scale 2.0"
+#     fi
+# done
 
 # ============================================
 # 4. NDGS mode with MCMC (full Cholesky precision)
@@ -186,5 +186,52 @@ for dir in "$base_dir"*/; do
         run_experiment "ndgs" "$output_dir" "$dir" "$scene_name" "--use_rot_scale_l_triangle True"
     fi
 done
+
+
+# ============================================
+# 5. UBS mode with MCMC (full Cholesky precision)
+# ============================================
+echo "=============================================="
+echo "Running UBS mode benchmarks (MCMC)"
+echo "=============================================="
+
+for dir in "$base_dir"*/; do
+    if [ -d "$dir" ]; then
+        clean_dir="${dir%/}"
+        scene_name=$(basename "$clean_dir")
+        if [[ "$scene_name" == *.zip ]]; then
+            continue
+        fi
+
+        output_dir="output/mcmc/ubs/tandt_pbr/${scene_name}"
+        echo "Processing ${scene_name} with mode ubs (MCMC)..."
+        run_experiment "ubs" "$output_dir" "$dir" "$scene_name" "--use_gsplat"
+    fi
+done
+python tools/summarize_results.py output/mcmc/ubs/tandt_pbr
+
+
+# ============================================
+# 6. dBS mode with MCMC (gsplat rasterizer)
+# ============================================
+echo "=============================================="
+echo "Running dBS mode benchmarks (MCMC, gsplat)"
+echo "=============================================="
+
+for dir in "$base_dir"*/; do
+    if [ -d "$dir" ]; then
+        clean_dir="${dir%/}"
+        scene_name=$(basename "$clean_dir")
+        if [[ "$scene_name" == *.zip ]]; then
+            continue
+        fi
+
+        output_dir="output/mcmc/dbs/tandt_pbr/${scene_name}"
+        echo "Processing ${scene_name} with mode dbs (MCMC, gsplat)..."
+        run_experiment "dbs" "$output_dir" "$dir" "$scene_name" "--use_gsplat"
+    fi
+done
+python tools/summarize_results.py output/mcmc/dbs/tandt_pbr
+
 
 echo "MCMC Benchmark completed!"

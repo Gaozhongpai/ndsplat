@@ -24,23 +24,17 @@ shopt -s dotglob
 
 base_dir="/code/dataset/360_v2/"
 
-# List of all scenes in 360_v2 dataset
-SCENES=(
-    "bicycle"
-    "bonsai"
-    "counter"
-    "flowers"
-    "garden"
-    "kitchen"
-    "room"
-    "stump"
-    "treehill"
-)
+# Outdoor scenes: -r 4 (high-res source images)
+# Indoor scenes: -r 2 (lower-res source images)
+# Following 3DGS (Kerbl et al., SIGGRAPH 2023) standard protocol
+OUTDOOR_SCENES=("bicycle" "flowers" "garden" "stump" "treehill")
+INDOOR_SCENES=("bonsai" "counter" "kitchen" "room")
+SCENES=("${OUTDOOR_SCENES[@]}" "${INDOOR_SCENES[@]}")
 
-# MCMC parameters (per-scene cap_max)
+# MCMC parameters
 NOISE_LR=1.0
 OPACITY_REG=0.01
-SCALE_REG=0.01
+SCALE_REG=0
 
 # Scene-specific cap_max values
 declare -A MCMC_CAP_MAX
@@ -53,6 +47,11 @@ MCMC_CAP_MAX["room"]=1500000
 MCMC_CAP_MAX["counter"]=1500000
 MCMC_CAP_MAX["kitchen"]=1500000
 MCMC_CAP_MAX["bonsai"]=1500000
+
+# Scene-specific resolution factors (-r 4 outdoor, -r 2 indoor)
+declare -A RESOLUTION
+for s in "${OUTDOOR_SCENES[@]}"; do RESOLUTION[$s]=4; done
+for s in "${INDOOR_SCENES[@]}"; do RESOLUTION[$s]=2; done
 
 # Function to run experiment for a given mode and output directory
 run_experiment() {
@@ -68,34 +67,41 @@ run_experiment() {
         return
     fi
 
-    # Get scene-specific cap_max
+    # Get scene-specific cap_max and resolution
     local cap_max=${MCMC_CAP_MAX[$scene_name]}
     if [ -z "$cap_max" ]; then
         cap_max=300000  # default fallback
     fi
+    local res=${RESOLUTION[$scene_name]}
+    if [ -z "$res" ]; then
+        res=2  # default fallback
+    fi
 
-    echo "  Using cap_max: $cap_max"
+    echo "  Using cap_max: $cap_max, resolution: -r $res"
 
-    # Train with MCMC densification
-    python train.py -s "$scene_dir" \
-        --model_path "$output_dir" \
-        --mode "$mode" \
-        --densification_strategy mcmc \
-        --mcmc_cap_max $cap_max \
-        --noise_lr $NOISE_LR \
-        --opacity_reg $OPACITY_REG \
-        --scale_reg $SCALE_REG \
-        $extra_args \
-        --eval \
-        --disable_viewer
+    # Train with MCMC densification (skip if point cloud already exists)
+    if [ -d "$output_dir/point_cloud" ]; then
+        echo "  Skipping training (point_cloud exists)"
+    else
+        python train.py -s "$scene_dir" \
+            --model_path "$output_dir" \
+            --mode "$mode" \
+            -r $res \
+            --densification_strategy mcmc \
+            --mcmc_cap_max $cap_max \
+            --noise_lr $NOISE_LR \
+            --opacity_reg $OPACITY_REG \
+            --scale_reg $SCALE_REG \
+            $extra_args \
+            --eval \
+            --disable_viewer
+    fi
         
-    # Render at multiple iterations (including best)
-    for iter in 7000 30000 best; do
-        python render.py -m "$output_dir" \
-            --skip_train \
-            --iteration ${iter} \
-            $extra_args
-    done
+    # Render best iteration
+    python render.py -m "$output_dir" \
+        --skip_train \
+        --iteration best \
+        $extra_args
 
     # Compute metrics
     python metrics.py -m "$output_dir"
@@ -116,6 +122,7 @@ for scene_name in "${SCENES[@]}"; do
         run_experiment "3dgs" "$output_dir" "$scene_dir" "$scene_name" ""
     fi
 done
+python tools/summarize_results.py output/mcmc/3dgs/360_v2
 
 # ============================================
 # 2. opacity_only mode with MCMC (no position shift)
@@ -132,6 +139,7 @@ for scene_name in "${SCENES[@]}"; do
         run_experiment "dgs" "$output_dir" "$scene_dir" "$scene_name" "--use_view_dependent_pos False"
     fi
 done
+python tools/summarize_results.py output/mcmc/opacity_only/360_v2
 
 # ============================================
 # 3. opacity_pos mode with MCMC (opacity + position)
@@ -148,6 +156,7 @@ for scene_name in "${SCENES[@]}"; do
         run_experiment "dgs" "$output_dir" "$scene_dir" "$scene_name" "--use_view_dependent_pos True"
     fi
 done
+python tools/summarize_results.py output/mcmc/opacity_pos/360_v2
 
 # ============================================
 # 3. opacity_pos_update mode with MCMC (opacity + position)
@@ -164,6 +173,7 @@ for scene_name in "${SCENES[@]}"; do
         run_experiment "dgs" "$output_dir" "$scene_dir" "$scene_name" "--use_view_dependent_pos True"
     fi
 done
+python tools/summarize_results.py output/mcmc/opacity_pos_update/360_v2
 
 # ============================================
 # 4. NDGS mode with MCMC (full Cholesky precision)
@@ -180,5 +190,60 @@ for scene_name in "${SCENES[@]}"; do
         run_experiment "ndgs" "$output_dir" "$scene_dir" "$scene_name" ""
     fi
 done
+python tools/summarize_results.py output/mcmc/ndgs/360_v2
+
+
+# ============================================
+# 6. dBS mode with MCMC (gsplat rasterizer)
+# ============================================
+echo "=============================================="
+echo "Running dBS mode benchmarks (MCMC, gsplat)"
+echo "=============================================="
+
+for scene_name in "${SCENES[@]}"; do
+    scene_dir="${base_dir}${scene_name}"
+    if [ -d "$scene_dir" ]; then
+        output_dir="output/mcmc/dbs/360_v2/${scene_name}"
+        echo "Processing ${scene_name} with mode dbs (MCMC, gsplat)..."
+        run_experiment "dbs" "$output_dir" "$scene_dir" "$scene_name" "--use_gsplat --noise_lr 1000000"
+    fi
+done
+python tools/summarize_results.py output/mcmc/dbs/360_v2
+
+
+# ============================================
+# 7. dBS-SH mode with MCMC (gsplat rasterizer, SH colors)
+# ============================================
+echo "=============================================="
+echo "Running dBS-SH mode benchmarks (MCMC, gsplat)"
+echo "=============================================="
+
+for scene_name in "${SCENES[@]}"; do
+    scene_dir="${base_dir}${scene_name}"
+    if [ -d "$scene_dir" ]; then
+        output_dir="output/mcmc/dbs-sh/360_v2/${scene_name}"
+        echo "Processing ${scene_name} with mode dbs-sh (MCMC, gsplat)..."
+        run_experiment "dbs-sh" "$output_dir" "$scene_dir" "$scene_name" "--use_gsplat --noise_lr 1000000"
+    fi
+done
+python tools/summarize_results.py output/mcmc/dbs-sh/360_v2
 
 echo "MCMC Benchmark for 360_v2 completed!"
+
+
+# ============================================
+# 5. UBS mode with MCMC (full covariance, Beta kernel)
+# ============================================
+echo "=============================================="
+echo "Running UBS mode benchmarks (MCMC)"
+echo "=============================================="
+
+for scene_name in "${SCENES[@]}"; do
+    scene_dir="${base_dir}${scene_name}"
+    if [ -d "$scene_dir" ]; then
+        output_dir="output/mcmc/ubs/360_v2/${scene_name}"
+        echo "Processing ${scene_name} with mode ubs (MCMC)..."
+        run_experiment "ubs" "$output_dir" "$scene_dir" "$scene_name" "--use_gsplat --noise_lr 1000000"
+    fi
+done
+python tools/summarize_results.py output/mcmc/ubs/360_v2

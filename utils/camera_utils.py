@@ -51,19 +51,19 @@ def cameraList_from_camInfos(cam_infos, resolution_scale, args):
     if not cam_infos:
         return camera_list
 
-    # Determine whether to use compression (default: auto-enable for datasets > 1000 images)
-    use_jpeg_compression = getattr(args, 'use_jpeg_compression', len(cam_infos) > 1000)
+    # Determine whether to use compression (default: auto-enable for datasets > 2000 images)
+    use_jpeg_compression = getattr(args, 'use_jpeg_compression', len(cam_infos) > 2000)
 
     # Safety override: force enable for very large datasets to prevent OOM
-    if not use_jpeg_compression and len(cam_infos) > 1000:
-        print(f"[WARNING] Compression disabled but dataset has {len(cam_infos)} images (>1000).")
+    if not use_jpeg_compression and len(cam_infos) > 2000:
+        print(f"[WARNING] Compression disabled but dataset has {len(cam_infos)} images (>2000).")
         print(f"[WARNING] Force-enabling compression to prevent GPU OOM.")
         use_jpeg_compression = True
 
     if use_jpeg_compression:
-        print(f"[INFO] Using JPEG compression for {len(cam_infos)} images to reduce GPU memory usage (~8-10x savings)")
+        print(f"[INFO] Storing {len(cam_infos)} images as compressed bytes (lossless: original JPEG/PNG, or PNG re-encode) to reduce GPU memory ~8-10x; decoded on demand")
     else:
-        print(f"[INFO] Loading {len(cam_infos)} images directly to GPU (use --use_jpeg_compression to save memory)")
+        print(f"[INFO] Loading {len(cam_infos)} images directly to GPU as decoded tensors (use --use_jpeg_compression to trade memory for decode-on-access)")
 
     max_workers = 4 # min(32, (os.cpu_count() or 1) * 2)
     with ThreadPoolExecutor(max_workers=max_workers) as executor:

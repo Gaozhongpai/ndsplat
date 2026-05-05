@@ -178,7 +178,8 @@ class GaussianModel:
 
     def __init__(self, sh_degree: int, input_dim: int = 6,
                  use_view_dependent_pos: bool = True, use_opacity_pos_decouple: bool = False,
-                time_duration: list = [0.0, 1.0], l_22_inv_init_scale: float = 1.0, lambda_init: float = -1.2):
+                time_duration: list = [0.0, 1.0], l_22_inv_init_scale: float = 1.0, lambda_init: float = -1.2,
+                lambda_opc: float = 0.35):
         """
         Initialize Full DGS with view-dependent position, time-dependent rotation, and opacity.
 
@@ -192,6 +193,8 @@ class GaussianModel:
                                Using 1.0 gives log(1.0)=0.0 (standard initialization).
                                Using 2.0 gives log(2.0)≈0.693 (wider Gaussian for PBR scenes).
             lambda_init: Initial value for lambda_view and lambda_time parameters (default: -1.2).
+            lambda_opc: Opacity scaling factor for view-dependent attenuation (default: 0.35).
+                       Controls strength of exp(-lambda_opc * D^2) opacity modulation.
         """
         self.active_sh_degree = 0
         self.max_sh_degree = sh_degree
@@ -201,6 +204,7 @@ class GaussianModel:
         self.time_duration = time_duration  # Time range for 7DGS
         self.l_22_inv_init_scale = l_22_inv_init_scale  # Initialization scale for L_22_inv diagonal
         self.lambda_init = lambda_init  # Initial value for lambda parameters
+        self.default_lambda_opc = lambda_opc  # Opacity scaling factor
         self.cond_dim = input_dim - 3  # C = 3 for view-only, 4 for view+time
 
         # Standard 3DGS parameters
@@ -477,7 +481,7 @@ class GaussianModel:
         """
         # Set default lambda_opc based on input_dim
         if lambda_opc is None:
-            lambda_opc = 0.35
+            lambda_opc = self.default_lambda_opc
 
         # Apply sigmoid to lambda parameters (stored in logit space)
         # Only used when use_view_dependent_pos is True
@@ -1274,7 +1278,6 @@ class GaussianModel:
             params.get('v_12_direction'),
             params.get('lambda_view'),
             params.get('lambda_time'),
-            params.get('beta'),
         )
 
         # Reset optimizer state for source indices

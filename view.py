@@ -25,8 +25,10 @@ def viewing(model_params, viewer_params, ply_path, input_dim=6, auto_camera=True
     GaussianModel = get_gaussian_model(model_params.mode)
 
     # Initialize model
-    if "ubs" in model_params.mode or "dbs" in model_params.mode:
-        gaussians = GaussianModel(model_params.sh_degree, input_dim=input_dim)
+    if model_params.mode == "3dgs":
+        gaussian_model = GaussianModel(model_params.sh_degree)
+    elif "ubs" in model_params.mode or "dbs" in model_params.mode:
+        gaussian_model = GaussianModel(model_params.sh_degree, input_dim=input_dim)
     elif "ndgs" in model_params.mode:
         gaussian_model = GaussianModel(model_params.sh_degree, input_dim=input_dim,
                                        use_rot_scale_l_triangle=model_params.use_rot_scale_l_triangle)
@@ -37,10 +39,11 @@ def viewing(model_params, viewer_params, ply_path, input_dim=6, auto_camera=True
             use_view_dependent_pos=model_params.use_view_dependent_pos,
             use_opacity_pos_decouple=model_params.use_opacity_pos_decouple,
             l_22_inv_init_scale=model_params.l_22_inv_init_scale,
-            lambda_init=model_params.lambda_init
+            lambda_init=model_params.lambda_init,
+            lambda_opc=model_params.lambda_opc
         )
     else:
-        gaussian_model = GaussianModel(model_params.sh_degree)
+        raise ValueError(f"Unknown mode: {model_params.mode}")
 
     # Load model from file
     print(f"Loading model from {ply_path}")

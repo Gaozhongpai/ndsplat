@@ -64,13 +64,13 @@ def render_wrapper(viewpoint_cam, gaussians, pipe, bg, mode, scaling_modifier=1.
         scaling_modifier: Scaling modifier for rendering
         use_gsplat: If True, use gsplat rasterizer instead of TCGS for UBS/DGS modes
     """
-    if "ubs" in mode or "ndgs" in mode or "dgs" in mode or "dbs" in mode:
+    if mode == "3dgs":
+        return gaussians.render_tcgs(viewpoint_cam, pipe, bg, scaling_modifier)
+    elif "ubs" in mode or "ndgs" in mode or "dgs" in mode or "dbs" in mode:
         gaussians.background = bg
         if use_gsplat and hasattr(gaussians, 'render'):
             return gaussians.render(viewpoint_cam, render_mode="RGB", accutile=accutile)
         return gaussians.render_tcgs(viewpoint_cam, render_mode="RGB", use_tcgs=False, scaling_modifier=scaling_modifier)
-    elif "3dgs" in mode:
-        return gaussians.render_tcgs(viewpoint_cam, pipe, bg, scaling_modifier)
     else:
         raise ValueError(f"Unknown mode: {mode}.")
 
@@ -87,8 +87,14 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
 
     # Initialize model based on mode
     # For NDGS mode, pass the use_rot_scale_l_triangle flag
-    if "ubs" in mode or "dbs" in mode:
+    if mode == "3dgs":
+        gaussians = GaussianModel(dataset.sh_degree)
+    elif "ubs" in mode:
         gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim)
+    elif "dbs" in mode:
+        gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim,
+                                  l_22_inv_init_scale=dataset.l_22_inv_init_scale,
+                                  beta_init_view=dataset.beta_init_view)
     elif "ndgs" in mode:
         gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim,
                                     use_rot_scale_l_triangle=dataset.use_rot_scale_l_triangle,
@@ -100,22 +106,23 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
                                   use_view_dependent_pos=dataset.use_view_dependent_pos,
                                   use_opacity_pos_decouple=dataset.use_opacity_pos_decouple,
                                   l_22_inv_init_scale=dataset.l_22_inv_init_scale,
-                                  lambda_init=dataset.lambda_init)
+                                  lambda_init=dataset.lambda_init,
+                                  lambda_opc=dataset.lambda_opc)
     else:
-        gaussians = GaussianModel(dataset.sh_degree)
+        raise ValueError(f"Unknown mode: {mode}")
 
     scene = Scene(dataset, gaussians, opt_params=opt)
     gaussians.training_setup(opt)
 
-    # Replace optimizer with SelectiveAdam (CUDA-fused, visibility-aware)
-    # Works with both gsplat and tcgs_speedy_rasterizer backends
-    use_selective_adam = True
-    try:
-        from gsplat import SelectiveAdam
-        gaussians.optimizer.__class__ = SelectiveAdam
-        print("Using SelectiveAdam optimizer (CUDA-fused, visibility-aware)")
-    except ImportError:
-        use_selective_adam = False
+    # # Replace optimizer with SelectiveAdam (CUDA-fused, visibility-aware)
+    # # Works with both gsplat and tcgs_speedy_rasterizer backends
+    # use_selective_adam = True
+    # try:
+    #     from gsplat import SelectiveAdam
+    #     gaussians.optimizer.__class__ = SelectiveAdam
+    #     print("Using SelectiveAdam optimizer (CUDA-fused, visibility-aware)")
+    # except ImportError:
+    use_selective_adam = False
 
     if checkpoint:
         if checkpoint.endswith('.ply'):
@@ -367,14 +374,14 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
             # Use MCMC-specific densify_until_iter if MCMC strategy is chosen (default 25k vs standard 15k)
             densify_until = opt.mcmc_densify_until_iter if opt.densification_strategy == "mcmc" else opt.densify_until_iter
 
-            if iteration < densify_until:
+            if iteration > opt.densify_from_iter and iteration < densify_until:
                 if opt.densification_strategy == "standard":
                     # Standard gradient-based densification (clone, split, prune)
                     # Keep track of max radii in image-space for pruning
                     gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
                     gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
 
-                    if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
+                    if iteration % opt.densification_interval == 0:
                         size_threshold = 20 if iteration > opt.opacity_reset_interval else None
                         min_opacity = 0.005 if "3dgs" in mode else 0.01 ## RSNA 0.005, paper 0.01
                         gaussians.densify_and_prune(opt.densify_grad_threshold, min_opacity, scene.cameras_extent, size_threshold, iteration)
