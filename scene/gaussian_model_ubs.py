@@ -29,8 +29,11 @@ from gsplat import rasterization
 from gsplat import (
     l_triangle_to_rotmat,
     rot_scale_l_triangle_to_covar,
-    cond_mean_convariance_opacity,
 )
+if os.environ.get("GSPLAT_TORCH_SLICE", "0") == "1":
+    from gsplat import _cond_mean_convariance_opacity as cond_mean_convariance_opacity
+else:
+    from gsplat import cond_mean_convariance_opacity
 
 # Import compression utilities
 from utils.compress_utils import compress_png, decompress_png, sort_param_dict

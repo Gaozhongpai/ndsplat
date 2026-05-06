@@ -24,8 +24,11 @@ from gsplat import (
     rasterization,
     l_triangle_to_rotmat,
     rot_scale_l_triangle_to_covar,
-    slice_dbs,
 )
+if os.environ.get("GSPLAT_TORCH_SLICE", "0") == "1":
+    from gsplat import _slice_dbs as slice_dbs
+else:
+    from gsplat import slice_dbs
 import json
 import time
 from .beta_viewer import BetaRenderTabState
@@ -230,13 +233,21 @@ class GaussianModel:
             m_cond: [N, 3] conditional position
             opacity_scale: [N, 1] opacity scaling factor
         """
+        C = self.cond_dim
+        betas_full = self.get_beta
+        # Current layout: [N, C+1] with col 0 = spatial; cols 1: = conditioning.
+        # Legacy checkpoints saved [N, C] (no spatial col) — fall back to that.
+        if betas_full.shape[1] == C + 1:
+            cond_betas = betas_full[:, 1:1 + C]
+        else:
+            cond_betas = betas_full[:, :C]
         return slice_dbs(
             self._xyz,
             self._mean,
             query,
             self.get_v_12,
             self._L_22_inv,
-            self.get_beta[:, 1:],  # skip spatial beta (col 0); pass conditioning betas only
+            cond_betas,
         )
 
     def create_from_pcd(self, pcd: BasicPointCloud, spatial_lr_scale: float,

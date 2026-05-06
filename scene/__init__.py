@@ -66,11 +66,12 @@ class Scene:
             if load_iteration == -1:
                 self.loaded_iter = searchForMaxIteration(os.path.join(self.model_path, "point_cloud"))
             elif load_iteration == "best":
-                # Load best iteration from iteration_best folder
-                best_iter_file = os.path.join(self.model_path, "point_cloud", "iteration_best", "iteration.txt")
-                if os.path.exists(best_iter_file):
-                    with open(best_iter_file, 'r') as f:
-                        self.loaded_iter = "best"
+                # Load best iteration from iteration_best folder. Some checkpoints
+                # have iteration_best/ without an iteration.txt sentinel — accept
+                # the folder itself as evidence.
+                best_dir = os.path.join(self.model_path, "point_cloud", "iteration_best")
+                if os.path.isdir(best_dir):
+                    self.loaded_iter = "best"
                     print("Loading best model checkpoint")
                 else:
                     print("Warning: No best checkpoint found, loading latest instead")

@@ -33,12 +33,15 @@ from utils.ndgs_utils import strip_lower_diag
 # )
 
 from gsplat import (
-    slice_gaussian_ndgs,
     l_triangle_to_covar,
     l_triangle_to_rotmat,
     rot_scale_l_triangle_to_covar,
     rasterization,
 )
+if os.environ.get("GSPLAT_TORCH_SLICE", "0") == "1":
+    from gsplat import _slice_gaussian_ndgs as slice_gaussian_ndgs
+else:
+    from gsplat import slice_gaussian_ndgs
 
 # Import TCGS rasterizer
 from tcgs_speedy_rasterizer import (

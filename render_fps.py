@@ -69,7 +69,7 @@ def measure_fps(views, gaussians, pipeline, background, mode, num_frames=500, nu
     fpslist = []
     fps_measure_count = min(num_views, len(views))
 
-    render_mode_str = "CUDA optimized (is_test=True, tight_snugbox=True)" if is_cuda else "Standard (is_test=False, tight_snugbox=False)"
+    render_mode_str = "TCGS (is_test=True, tight_snugbox=True)" if is_cuda else "Standard (is_test=False, tight_snugbox=False)"
     print(f"Measuring FPS for first {fps_measure_count} views ({render_mode_str})...")
 
     for idx in tqdm(range(fps_measure_count), desc="FPS measurement", unit="view"):
@@ -112,6 +112,9 @@ def measure_fps_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, 
                  If False, use standard rendering (is_test=False, tight_snugbox=False)
     """
     with torch.no_grad():
+        slice_impl = "torch" if os.environ.get("GSPLAT_TORCH_SLICE", "0") == "1" else "cuda"
+        print(f"Slicing implementation: {slice_impl}")
+
         # Get the appropriate GaussianModel class based on mode
         mode = dataset.mode
         GaussianModel = get_gaussian_model(mode)
@@ -184,14 +187,15 @@ def measure_fps_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, 
         os.makedirs(output_dir, exist_ok=True)
 
         iteration_str = str(scene.loaded_iter)
-        output_file = os.path.join(output_dir, f"fps_iteration_{iteration_str}.txt")
+        output_file = os.path.join(output_dir, f"fps_iteration_{iteration_str}_{slice_impl}.txt")
 
         with open(output_file, 'w') as f:
             f.write(f"FPS Measurement Results\n")
             f.write(f"Model: {dataset.model_path}\n")
             f.write(f"Iteration: {scene.loaded_iter}\n")
             f.write(f"Mode: {mode}\n")
-            f.write(f"CUDA Optimizations: {'Enabled (is_test=True, tight_snugbox=True)' if is_cuda else 'Disabled (is_test=False, tight_snugbox=False)'}\n")
+            f.write(f"Slicing implementation: {slice_impl}\n")
+            f.write(f"TCGS: {'Enabled (is_test=True, tight_snugbox=True)' if is_cuda else 'Disabled (is_test=False, tight_snugbox=False)'}\n")
             f.write(f"Frames per view: {num_frames}\n")
             f.write(f"Number of views tested: {num_views}\n")
             f.write("\n")
@@ -206,6 +210,25 @@ def measure_fps_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, 
                 f.write(f"Test Set FPS per view: {', '.join([f'{fps:.2f}' for fps in results['test']['fps_list']])}\n")
 
         print(f"\nResults saved to: {output_file}")
+
+        # Append a one-line summary to <model>/fps.txt keyed by slicing impl,
+        # so cuda + torch runs accumulate side-by-side next to results.json.
+        if 'test' in results:
+            avg = results['test']['avg_fps']
+        elif 'train' in results:
+            avg = results['train']['avg_fps']
+        else:
+            avg = float('nan')
+        fps_txt = os.path.join(dataset.model_path, "fps.txt")
+        line = f"{slice_impl}\t{avg:.2f}\titer={scene.loaded_iter}\tnum_views={num_views}\tnum_frames={num_frames}\n"
+        existing = []
+        if os.path.exists(fps_txt):
+            with open(fps_txt, 'r') as f:
+                existing = [l for l in f.readlines() if not l.startswith(f"{slice_impl}\t")]
+        with open(fps_txt, 'w') as f:
+            f.writelines(existing)
+            f.write(line)
+        print(f"Appended to: {fps_txt}")
 
         # Print summary
         print("\n" + "="*50)
@@ -232,7 +255,27 @@ if __name__ == "__main__":
     parser.add_argument("--quiet", action="store_true", help="Suppress output")
     args = get_combined_args(parser)
     print("Measuring FPS for " + args.model_path)
-    print(f"CUDA optimizations: {'Enabled' if args.is_cuda else 'Disabled'}")
+    print(f"TCGS: {'Enabled' if args.is_cuda else 'Disabled'}")
+    print(f"Slicing implementation: {'torch' if os.environ.get('GSPLAT_TORCH_SLICE', '0') == '1' else 'cuda'}")
+
+    # Resolve iteration directory now (before safe_state silences stdout under --quiet)
+    pc_root = os.path.join(args.model_path, "point_cloud")
+    if args.iteration == "best":
+        resolved_iter = "best"
+    elif args.iteration == "-1":
+        nums = []
+        if os.path.isdir(pc_root):
+            for fname in os.listdir(pc_root):
+                suffix = fname.split("_")[-1]
+                try:
+                    nums.append(int(suffix))
+                except ValueError:
+                    continue
+        resolved_iter = str(max(nums)) if nums else "?"
+    else:
+        resolved_iter = args.iteration
+    print(f"Loaded PLY: {os.path.join(pc_root, f'iteration_{resolved_iter}', 'point_cloud.ply')}")
+
     args.eval = True
 
     # Initialize system state (RNG)

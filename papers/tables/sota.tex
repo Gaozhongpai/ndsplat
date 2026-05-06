@@ -1,0 +1,63 @@
+\begin{table*}[thp]
+    \centering
+    \caption{Comparison with SOTA methods on Mip-NeRF360 \citep{barron2021mipnerf} and NeRF Synthetic \citep{mildenhall2021nerf}. We follow the standard evaluation protocol used by 3DGS~\citep{3dgs} and most subsequent splatting work: (i) test-set PSNR computed by averaging over the batch dimension (joint over RGB), rather than averaging over the channel dimension as in the training log; and (ii) NeRF Synthetic rendered against a white background on NeRF Synthetic. UBS-6D and \textit{d}BS-6D in this table are re-evaluated under this protocol; the UBS-6D numbers therefore differ from those reported in the original UBS paper~\citep{liu2025universal}, which uses channel-averaged PSNR and a black background on NeRF Synthetic.}
+    \resizebox{0.95\linewidth}{!}{%
+    \begin{tabular}{cl|ccc|ccc}
+        \toprule
+        & \multirow{2}{*}{Methods}
+        & \multicolumn{3}{c|}{Mip-NeRF360}
+        & \multicolumn{3}{c}{NeRF Synthetic}\\
+        \cmidrule(lr){3-8}
+         &
+         & PSNR$\uparrow$ & SSIM$\uparrow$ & LPIPS$\downarrow$
+         & PSNR$\uparrow$ & SSIM$\uparrow$ & LPIPS$\downarrow$ \\
+        \midrule
+        \parbox[t]{2mm}{\multirow{3}{*}{\rotatebox[origin=c]{90}{implicit}}}
+         & Instant-NGP~\citep{M_ller_2022}
+           & 25.51 & 0.684 & 0.398
+           &33.18 & 0.959&0.055\\
+         & Mip-NeRF360~\citep{barron2021mipnerf}
+           & 27.69 & 0.792 & 0.237
+           &33.25&0.962&0.039\\
+         & Zip-NeRF~\citep{barron2023zipnerfantialiasedgridbasedneural}
+           & 28.54 & 0.828 & 0.189
+           &33.10&0.971&0.031\\
+        \midrule
+        \parbox[t]{2mm}{\multirow{11}{*}{\rotatebox[origin=c]{90}{explicit}}}
+         & 3DGS~\citep{3dgs}
+           & 27.20 & 0.815 & 0.214
+           &33.31&0.969&0.037\\
+         & GES~\citep{hamdi2024gesgeneralizedexponentialsplatting}
+           &26.91&0.794&0.250
+           & - & - & -  \\
+         & 2DGS~\citep{2dgs}
+           & 27.04 & 0.805 & 0.297
+           &33.07&-&-\\
+         & Mip-Splatting~\citep{yu2023mipsplattingaliasfree3dgaussian}
+           & 27.79 & 0.827 & 0.203
+           &33.33&0.969&0.039\\
+         & 3DGS-MCMC~\citep{kheradmand20243dgaussiansplattingmarkov}
+           & 28.29 & 0.840 & 0.210
+           &33.80&0.970&0.040\\
+         & DRKS \citep{huang2025deformable}
+           &26.76&0.787&0.236
+           &33.82&-&-\\
+         &Textured GS \citep{chao2025textured}
+           &27.35 & 0.827 & 0.186
+           &33.24 & 0.967 & 0.043\\
+         & Quadratic GS \citep{zhang2025quadratic}
+           &27.39&0.813&0.213
+           &-&-&-\\
+         &Disc-GS \citep{qu2024disc}
+           &28.01&0.833&0.189
+           &-&-&-\\
+         & UBS\citep{liu2025universal}
+           & \cellcolor{orange!25}28.50 & \cellcolor{orange!25}0.841 & \cellcolor{red!25}0.183
+           & \cellcolor{orange!25}34.48 & \cellcolor{red!25}0.975 & \cellcolor{orange!25}0.026\\
+         & \textit{d}BS (\textbf{Ours})
+           & \cellcolor{red!25}28.70 & \cellcolor{red!25}0.842 & \cellcolor{orange!25}0.185
+           & \cellcolor{red!25}34.53 & \cellcolor{red!25}0.975 & \cellcolor{red!25}0.025\\
+        \bottomrule
+    \end{tabular}}
+    \label{tab:sota}
+\end{table*}

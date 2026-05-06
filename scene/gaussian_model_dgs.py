@@ -42,9 +42,12 @@ from utils.general_utils import strip_symmetric, build_scaling_rotation
 # from gsplat import (_slice_gaussian_full as slice_gaussian_full,
 #                      _slice_gaussian_full_v2 as slice_gaussian_full_v2)
 
-from gsplat import (slice_gaussian_full,
-                    rasterization,
+from gsplat import (rasterization,
                     quat_scale_to_covar_preci)
+if os.environ.get("GSPLAT_TORCH_SLICE", "0") == "1":
+    from gsplat import _slice_gaussian_full as slice_gaussian_full
+else:
+    from gsplat import slice_gaussian_full
 
 
 def quaternion_multiply(q1, q2):
