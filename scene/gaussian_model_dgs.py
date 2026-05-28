@@ -726,6 +726,11 @@ class GaussianModel:
             l.append('lambda_view')
             if self.input_dim == 7:
                 l.append('lambda_time')
+        # Per-Gaussian segmentation label (e.g. TotalSegmentator class). Only emit
+        # if _label has one entry per Gaussian, so models that never received a
+        # label tensor (most public datasets) keep their existing schema.
+        if self._label.numel() == self._xyz.shape[0]:
+            l.append('label')
         return l
 
     def save_ply(self, path):
@@ -757,6 +762,14 @@ class GaussianModel:
             if self.input_dim == 7:
                 lambda_time = self._lambda_time.detach().cpu().numpy()[:, np.newaxis]  # [N, 1]
                 attrs_list.append(lambda_time)
+        # Per-Gaussian segmentation label, kept in lockstep with the header in
+        # construct_list_of_attributes. Skip when there's no per-Gaussian label
+        # tensor (the public 3DGS datasets).
+        if self._label.numel() == xyz.shape[0]:
+            label = self._label.detach().to(torch.float32).cpu().numpy()
+            if label.ndim == 1:
+                label = label[:, np.newaxis]
+            attrs_list.append(label)
         attributes = np.concatenate(attrs_list, axis=1)
         elements[:] = list(map(tuple, attributes))
         el = PlyElement.describe(elements, 'vertex')
@@ -802,19 +815,38 @@ class GaussianModel:
             rots[:, idx] = np.asarray(plydata.elements[0][attr_name])
 
         # Load view direction [N, 3]
+        property_name_set = {p.name for p in plydata.elements[0].properties}
         mean_view_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("mean_view_")]
+        view_mean_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("view_mean_")]
         if mean_view_names:
             mean_view_names = sorted(mean_view_names, key=lambda x: int(x.split('_')[-1]))
             mean_view = np.zeros((xyz.shape[0], len(mean_view_names)))
             for idx, attr_name in enumerate(mean_view_names):
                 mean_view[:, idx] = np.asarray(plydata.elements[0][attr_name])
-        else:
+        elif len(view_mean_names) >= 3:
             # Backward compatibility: try old view_mean format
-            view_mean_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("view_mean_")]
             view_mean_names = sorted(view_mean_names, key=lambda x: int(x.split('_')[-1]))
             mean_view = np.zeros((xyz.shape[0], 3))
             for idx in range(3):
                 mean_view[:, idx] = np.asarray(plydata.elements[0][view_mean_names[idx]])
+        elif {"nx", "ny", "nz"}.issubset(property_name_set):
+            # RenderFM pred PLYs store canonical view direction in the standard
+            # PLY "normal" fields (nx/ny/nz). Accept that as a fallback so
+            # train.py --start_checkpoint can warm-start from a RenderFM
+            # prediction directly. Matches the convention used by
+            # renderfm/scan_renders/finetune_renderfm_dgs.py.
+            mean_view = np.stack(
+                (
+                    np.asarray(plydata.elements[0]["nx"]),
+                    np.asarray(plydata.elements[0]["ny"]),
+                    np.asarray(plydata.elements[0]["nz"]),
+                ),
+                axis=1,
+            )
+        else:
+            # No view-direction property anywhere in the PLY: initialize to
+            # zeros (will be learned from scratch by --start_checkpoint training).
+            mean_view = np.zeros((xyz.shape[0], 3), dtype=np.float32)
 
         # Load view time [N, 1] (only for input_dim=7)
         mean_time_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("mean_time_")]
@@ -885,6 +917,15 @@ class GaussianModel:
             self._lambda_view = nn.Parameter(torch.tensor(lambda_view, dtype=torch.float, device="cuda").requires_grad_(not self.use_opacity_pos_decouple))
             if self.input_dim == 7:
                 self._lambda_time = nn.Parameter(torch.tensor(lambda_time, dtype=torch.float, device="cuda").requires_grad_(not self.use_opacity_pos_decouple))
+
+        # Per-Gaussian segmentation label. Used by the medical-viewer pipeline
+        # to filter bone/organ at render time (see scan_renders/finetune_renderfm_dgs.py
+        # lookup_mode_1/lookup_mode_2). Read it back if the PLY carries one so
+        # the property survives load -> train -> save round-trip; otherwise leave
+        # the empty placeholder set in __init__.
+        if "label" in property_name_set:
+            label = np.asarray(plydata.elements[0]["label"], dtype=np.float32)[..., np.newaxis]
+            self._label = torch.tensor(label, dtype=torch.float32, device="cuda")
 
         self.active_sh_degree = self.max_sh_degree
 
