@@ -135,6 +135,13 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
             gaussians.xyz_gradient_accum = torch.zeros((num_points, 1), device="cuda")
             gaussians.denom = torch.zeros((num_points, 1), device="cuda")
             gaussians.max_radii2D = torch.zeros((num_points,), device="cuda")
+            # CRITICAL: load_ply replaced self._xyz/_opacity/etc. with brand-new
+            # nn.Parameter instances. The optimizer created by the earlier
+            # training_setup() still holds references to the discarded
+            # tensors, so Adam.step() would update those instead of the
+            # currently-rendered ones (= silently frozen training). Re-build
+            # the optimizer so its param groups point at the loaded tensors.
+            gaussians.training_setup(opt)
             print(f"Note: Loading from PLY resets optimizer state and starts from iteration 0")
             print(f"Loaded {num_points} Gaussians from PLY file")
         else:
