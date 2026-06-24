@@ -284,10 +284,13 @@ em { font-style: italic; }
 .data-table thead th:first-child, .data-table thead th:nth-child(2) { text-align: left; }
 /* #Gauss count varies widely in width (163 vs 2,852); centering reads cleaner
    than right-align, where short values drift far from the header label. */
-.data-table thead th:nth-child(3), .data-table tbody td:nth-child(3) { text-align: center; }
+.data-table thead th:nth-child(3) { text-align: center; }
 .data-table tbody td { padding: 11px 12px; text-align: right; border-top: 1px solid var(--line); white-space: nowrap; color: var(--ink-soft); }
+/* Body alignment is class-based, not nth-child: the rowspan'd Dataset cell
+   shifts cell positions in non-leading rows, so positional rules misfire. */
 .data-table tbody td:first-child { text-align: left; font-weight: 600; color: var(--ink); vertical-align: middle; }
-.data-table tbody td:nth-child(2) { text-align: left; color: var(--ink); }
+.data-table tbody td.c-method { text-align: left; color: var(--ink); }
+.data-table tbody td.c-gauss { text-align: center; }
 .data-table tbody tr.grp td { border-top: 2px solid var(--line); }
 .data-table tbody tr.dash td:not(:first-child) { border-top: 1px dashed var(--line); }
 .data-table tbody tr.ours { background: var(--ours-bg); }
