@@ -273,7 +273,10 @@ em { font-style: italic; }
 .table-cap em { font-style: italic; }
 
 .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); background: var(--bg); }
-.data-table { width: 100%; border-collapse: collapse; font-size: .9rem; min-width: 720px; }
+.data-table { width: 100%; border-collapse: collapse; font-size: .9rem; min-width: 720px;
+  /* tabular figures so bold and regular numbers share a fixed digit width and
+     stay vertically aligned within centered/right-aligned columns */
+  font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }
 .data-table thead th {
   background: #11131e; color: #fff; font-weight: 600; padding: 14px 12px; text-align: right;
   white-space: nowrap; font-size: .82rem; position: sticky; top: 0;
