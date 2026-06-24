@@ -131,6 +131,11 @@ em { font-style: italic; }
 }
 .btn:hover { text-decoration: none; transform: translateY(-2px); }
 .btn em { font-style: italic; }
+
+/* Method names like "dGS"/"dBS": the italic d's slant otherwise reads as a gap
+   before the upright letters. Tighten it so the d hugs the rest. */
+.mname { white-space: nowrap; }
+.mname em { font-style: italic; margin-right: -0.06em; }
 .btn-primary {
   background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff;
   box-shadow: 0 8px 26px rgba(109,92,246,.42);
