@@ -279,6 +279,9 @@ em { font-style: italic; }
   white-space: nowrap; font-size: .82rem; position: sticky; top: 0;
 }
 .data-table thead th:first-child, .data-table thead th:nth-child(2) { text-align: left; }
+/* #Gauss count varies widely in width (163 vs 2,852); centering reads cleaner
+   than right-align, where short values drift far from the header label. */
+.data-table thead th:nth-child(3), .data-table tbody td:nth-child(3) { text-align: center; }
 .data-table tbody td { padding: 11px 12px; text-align: right; border-top: 1px solid var(--line); white-space: nowrap; color: var(--ink-soft); }
 .data-table tbody td:first-child { text-align: left; font-weight: 600; color: var(--ink); vertical-align: middle; }
 .data-table tbody td:nth-child(2) { text-align: left; color: var(--ink); }
