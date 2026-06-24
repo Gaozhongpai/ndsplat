@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NDSplat &mdash; N-Dimensional Splatting</title>
+  <meta name="description" content="NDSplat: a unified framework and research line for N-dimensional Gaussian and Beta splatting — dGS/dBS, Universal Beta Splatting, 6DGS, 7DGS, and Render-FM." />
+  <meta name="author" content="Zhongpai Gao" />
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="NDSplat — N-Dimensional Splatting" />
+  <meta property="og:description" content="A unified research line for N-dimensional Gaussian and Beta splatting: dGS/dBS, UBS, 6DGS, 7DGS, and Render-FM." />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="assets/css/style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🪄</text></svg>" />
+</head>
+<body>
+
+  <!-- ============ NAV ============ -->
+  <header class="nav" id="nav">
+    <div class="nav-inner">
+      <a class="nav-brand" href="#top">
+        <span class="brand-mark">ND</span><span class="brand-text">Splat</span>
+      </a>
+      <nav class="nav-links">
+        <a href="#overview">Overview</a>
+        <a href="#dgsdbs">dGS / dBS</a>
+        <a href="#ubs">UBS</a>
+        <a href="#ndgs">6DGS / 7DGS</a>
+        <a href="#renderfm">Render-FM</a>
+        <a href="#bibtex">Cite</a>
+      </nav>
+      <button class="nav-toggle" id="navToggle" aria-label="Toggle navigation">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+  </header>
+
+  <!-- ============ HERO ============ -->
+  <section class="hero" id="top">
+    <div class="hero-bg" aria-hidden="true"></div>
+    <div class="hero-content">
+      <p class="hero-eyebrow">N-Dimensional Splatting</p>
+      <h1 class="hero-title">
+        Photorealistic rendering<br />
+        <span class="grad">beyond three dimensions</span>
+      </h1>
+      <p class="hero-sub">
+        A unified research line that lifts Gaussian and Beta primitives into higher-dimensional
+        space &mdash; conditioning on <strong>view direction</strong>, <strong>time</strong>, and
+        beyond &mdash; for real-time, view-dependent, and dynamic novel-view synthesis.
+      </p>
+      <div class="hero-cta">
+        <a class="btn btn-primary" href="#dgsdbs">Latest work: <em>d</em>GS / <em>d</em>BS</a>
+        <a class="btn btn-ghost" href="https://github.com/Gaozhongpai/ndsplat" target="_blank" rel="noopener">
+          <svg viewBox="0 0 16 16" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+          Code
+        </a>
+      </div>
+
+      <div class="hero-stats">
+        <div class="stat"><span class="stat-num">3D&rarr;7D</span><span class="stat-label">spatial · angular · temporal</span></div>
+        <div class="stat"><span class="stat-num">2&times; kernels</span><span class="stat-label">Gaussian &amp; Beta</span></div>
+        <div class="stat"><span class="stat-num">7.7&times;</span><span class="stat-label">faster conditional slicing</span></div>
+      </div>
+    </div>
+    <a class="scroll-hint" href="#overview" aria-label="Scroll down"><span></span></a>
+  </section>
+
+  <!-- ============ OVERVIEW ============ -->
+  <section class="section" id="overview">
+    <div class="container">
+      <div class="section-head">
+        <span class="kicker">The big picture</span>
+        <h2>One framework, many dimensions</h2>
+        <p class="lead">
+          Static 3D Gaussian Splatting cannot express specular reflections, temporal dynamics, or
+          view-dependent geometry. <strong>N-dimensional splatting</strong> solves this by lifting
+          each primitive into a joint distribution over 3D position and conditioning variables, then
+          <em>conditionally slicing</em> it at render time to recover a 3D primitive whose mean,
+          opacity, and covariance vary continuously with view or time.
+        </p>
+      </div>
+
+      <div class="lineage">
+        <div class="lineage-track">
+          <a class="node" href="#ndgs">
+            <span class="node-year">ICLR 2025</span>
+            <span class="node-name">6DGS</span>
+            <span class="node-desc">+ view direction</span>
+          </a>
+          <span class="node-arrow">&rarr;</span>
+          <a class="node" href="#ndgs">
+            <span class="node-year">ICCV 2025</span>
+            <span class="node-name">7DGS</span>
+            <span class="node-desc">+ time</span>
+          </a>
+          <span class="node-arrow">&rarr;</span>
+          <a class="node" href="#ubs">
+            <span class="node-year">ICLR 2026</span>
+            <span class="node-name">UBS</span>
+            <span class="node-desc">Beta kernels</span>
+          </a>
+          <span class="node-arrow">&rarr;</span>
+          <a class="node node-accent" href="#dgsdbs">
+            <span class="node-year">latest</span>
+            <span class="node-name"><em>d</em>GS / <em>d</em>BS</span>
+            <span class="node-desc">direct conditioning</span>
+          </a>
+        </div>
+        <p class="lineage-aside">
+          Render-FM (ECCV 2026) brings the same 6D representation to <a href="#renderfm">feedforward
+          medical volumetric rendering</a>.
+        </p>
+      </div>
+
+      <div class="axes">
+        <div class="axis-card">
+          <div class="axis-icon">◳</div>
+          <h3>Dimensionality</h3>
+          <p>Lift primitives from 3D to 6D (view) and 7D (view + time) so a single primitive can carry view-dependent and dynamic behavior.</p>
+        </div>
+        <div class="axis-card">
+          <div class="axis-icon">◐</div>
+          <h3>Kernel shape</h3>
+          <p>Swap the Gaussian opacity decay for an anisotropic Beta kernel with per-dimension bandwidth control for richer light transport.</p>
+        </div>
+        <div class="axis-card">
+          <div class="axis-icon">⚡</div>
+          <h3>Conditioning</h3>
+          <p>Replace covariance-derived slicing (inversion + regression) with a directly parameterized Cholesky precision &mdash; kernel-agnostic and far faster.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ dGS / dBS ============ -->
+  <section class="section section-feature" id="dgsdbs">
+    <div class="container">
+      <div class="section-head">
+        <span class="kicker kicker-accent">Latest work &middot; under review</span>
+        <h2>Direct Conditional Parameterization<br />for N-Dimensional Splatting</h2>
+        <p class="authors">Direct Gaussian Splatting (<em>d</em>GS) &amp; Direct Beta Splatting (<em>d</em>BS)</p>
+      </div>
+
+      <div class="feature-grid">
+        <div class="feature-text">
+          <p class="lead">
+            N-DGS (6DGS/7DGS) and UBS are the leading N-dimensional formulations across Gaussian and
+            Beta kernels &mdash; but they share the same expensive <em>conditional-slicing</em> step:
+            every forward pass inverts a covariance block and multiplies a regression matrix, once per
+            primitive, scaling linearly with primitive count.
+          </p>
+          <p>
+            <strong>Our insight:</strong> the slicing step needs far less than the full joint covariance.
+            Opacity only needs a precision matrix in the query space; position only needs a small
+            displacement matrix. We parameterize both <em>directly</em>: a <strong>Cholesky precision
+            factor</strong> for opacity and a <strong>spatially-scaled displacement matrix</strong> with
+            learnable per-dimension coupling for position.
+          </p>
+          <p>
+            Because the change touches only the conditioning step, it is <strong>kernel-agnostic</strong>:
+            it instantiates as <em>d</em>GS (Gaussian, the direct counterpart of N-DGS) and
+            <em>d</em>BS (Beta, the direct counterpart of UBS). Matched-pair evaluation isolates the gain
+            of direct conditioning from the choice of kernel.
+          </p>
+        </div>
+        <div class="feature-side">
+          <div class="highlight-card">
+            <h4>At a glance</h4>
+            <ul class="check-list">
+              <li><span>6.9&ndash;7.7&times;</span> faster conditional slicing</li>
+              <li><span>up to 2.66&times;</span> faster end-to-end rendering</li>
+              <li><span>+1.26 dB</span> top PSNR gain (7DGS-PBR, dBS)</li>
+              <li><span>no inversion</span> — direct Cholesky precision</li>
+              <li><span>drop-in</span> — covariance-derived replacement</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- Equations -->
+      <div class="eq-block">
+        <p class="eq-label">Direct conditioning, given query deviation <em>&delta; = q &minus; &mu;<sub>q</sub></em>:</p>
+        <div class="eq-row">
+          <div class="eq">
+            <span class="eq-tag">Opacity</span>
+            <code>&alpha;<sub>cond</sub> = &alpha; &middot; exp( &minus;&lambda;<sub>o</sub> &middot; ‖ L<sup>⊤</sup>&delta; ‖² )</code>
+          </div>
+          <div class="eq">
+            <span class="eq-tag">Position</span>
+            <code>&mu;<sub>cond</sub> = &mu;<sub>p</sub> + V<sub>pq</sub> &middot; diag(&Lambda;) &middot; V<sub>qq</sub> &middot; &delta;</code>
+          </div>
+        </div>
+        <p class="eq-note">
+          <strong>L</strong> is a lower-triangular Cholesky factor, so <strong>V<sub>qq</sub> = LL<sup>⊤</sup></strong>
+          is the precision matrix with no inversion. <strong>&Lambda; &isin; [0,1]<sup>C</sup></strong> is a per-dimension
+          coupling: <strong>0</strong> decouples position from opacity, <strong>1</strong> recovers full N-DGS-style coupling.
+          For the Beta kernel, the opacity decay becomes <code>&prod;<sub>i</sub> (1 &minus; tanh(z<sub>i</sub>²))<sup>&beta;<sub>i</sub></sup></code> with <em>z = L<sup>⊤</sup>&delta;</em>.
+        </p>
+      </div>
+
+      <!-- Main results table -->
+      <h3 class="table-title">MCMC densification results &mdash; matched Gaussian budgets</h3>
+      <p class="table-cap">Each direct method paired against its covariance-derived counterpart, so any difference reflects the conditioning parameterization. <em>FPS</em> uses a PyTorch reference slicer; <em>FPS<sub>CUDA</sub></em> uses the fused CUDA slicing kernel. Best of each pair in <strong>bold</strong>.</p>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Dataset</th><th>Method</th>
+              <th>#Gauss&nbsp;(K)</th><th>Time&nbsp;(m)&darr;</th>
+              <th>FPS&uarr;</th><th>FPS<sub>CUDA</sub>&uarr;</th>
+              <th>PSNR&uarr;</th><th>SSIM&uarr;</th><th>LPIPS&darr;</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="grp"><td rowspan="4">NeRF Synthetic</td><td>N-DGS</td><td>300</td><td>10.43</td><td>183.58</td><td>348.95</td><td>34.04</td><td>0.973</td><td>0.027</td></tr>
+            <tr class="ours"><td><em>d</em>GS</td><td>300</td><td><b>10.26</b></td><td><b>245.18</b></td><td><b>593.94</b></td><td><b>34.34</b></td><td><b>0.973</b></td><td><b>0.026</b></td></tr>
+            <tr class="dash"><td>UBS</td><td>300</td><td>6.80</td><td>155.96</td><td>306.33</td><td>34.48</td><td>0.975</td><td>0.026</td></tr>
+            <tr class="ours"><td><em>d</em>BS</td><td>300</td><td><b>5.48</b></td><td><b>239.09</b></td><td><b>415.66</b></td><td><b>34.53</b></td><td><b>0.975</b></td><td><b>0.025</b></td></tr>
+
+            <tr class="grp"><td rowspan="4">Mip-NeRF 360</td><td>N-DGS</td><td>2,852</td><td>51.23</td><td>35.69</td><td>75.31</td><td>26.88</td><td>0.775</td><td>0.263</td></tr>
+            <tr class="ours"><td><em>d</em>GS</td><td>2,574</td><td><b>49.85</b></td><td><b>42.49</b></td><td><b>200.56</b></td><td><b>27.67</b></td><td><b>0.794</b></td><td><b>0.227</b></td></tr>
+            <tr class="dash"><td>UBS</td><td>3,057</td><td>28.59</td><td>40.94</td><td>76.18</td><td>28.50</td><td>0.841</td><td><b>0.183</b></td></tr>
+            <tr class="ours"><td><em>d</em>BS</td><td>3,057</td><td><b>24.42</b></td><td><b>62.05</b></td><td><b>157.45</b></td><td><b>28.70</b></td><td><b>0.842</b></td><td>0.185</td></tr>
+
+            <tr class="grp"><td rowspan="4">6DGS-PBR</td><td>N-DGS</td><td>163</td><td>54.80</td><td>328.75</td><td>476.79</td><td>40.06</td><td>0.976</td><td>0.039</td></tr>
+            <tr class="ours"><td><em>d</em>GS</td><td>163</td><td><b>47.54</b></td><td><b>356.15</b></td><td><b>551.02</b></td><td><b>40.34</b></td><td><b>0.976</b></td><td><b>0.038</b></td></tr>
+            <tr class="dash"><td>UBS</td><td>163</td><td>8.70</td><td>239.87</td><td>348.63</td><td>39.53</td><td>0.975</td><td>0.042</td></tr>
+            <tr class="ours"><td><em>d</em>BS</td><td>163</td><td><b>8.47</b></td><td><b>305.33</b></td><td><b>401.93</b></td><td><b>39.72</b></td><td><b>0.976</b></td><td><b>0.042</b></td></tr>
+
+            <tr class="grp dyn"><td rowspan="4">D-NeRF<span class="dyn-tag">dynamic</span></td><td>N-DGS</td><td>150</td><td><b>10.31</b></td><td>306.51</td><td>501.52</td><td>34.63</td><td>0.976</td><td>0.033</td></tr>
+            <tr class="ours"><td><em>d</em>GS</td><td>150</td><td>10.61</td><td><b>407.40</b></td><td><b>746.65</b></td><td><b>34.64</b></td><td><b>0.976</b></td><td><b>0.030</b></td></tr>
+            <tr class="dash"><td>UBS</td><td>150</td><td><b>8.37</b></td><td>229.83</td><td>371.81</td><td>32.91</td><td>0.967</td><td>0.040</td></tr>
+            <tr class="ours"><td><em>d</em>BS</td><td>150</td><td>9.34</td><td><b>323.75</b></td><td><b>463.09</b></td><td><b>33.55</b></td><td><b>0.972</b></td><td><b>0.033</b></td></tr>
+
+            <tr class="grp dyn"><td rowspan="4">7DGS-PBR<span class="dyn-tag">dynamic</span></td><td>N-DGS</td><td>175</td><td><b>28.44</b></td><td>294.48</td><td>511.12</td><td>29.20</td><td>0.944</td><td>0.063</td></tr>
+            <tr class="ours"><td><em>d</em>GS</td><td>175</td><td>31.12</td><td><b>366.06</b></td><td><b>577.38</b></td><td><b>29.90</b></td><td><b>0.948</b></td><td><b>0.061</b></td></tr>
+            <tr class="dash"><td>UBS</td><td>175</td><td>9.90</td><td>232.17</td><td>396.33</td><td>30.61</td><td>0.951</td><td>0.057</td></tr>
+            <tr class="ours"><td><em>d</em>BS</td><td>175</td><td><b>8.79</b></td><td><b>347.93</b></td><td><b>539.57</b></td><td><b>31.87</b></td><td><b>0.955</b></td><td><b>0.053</b></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="table-foot">All methods: NVIDIA A100, 30K iterations, TC-GS rasterizer, identical learning rates and densification schedules per dataset.</p>
+    </div>
+  </section>
+
+  <!-- ============ UBS ============ -->
+  <section class="section" id="ubs">
+    <div class="container">
+      <article class="paper">
+        <div class="paper-meta">
+          <span class="venue venue-iclr">ICLR 2026</span>
+          <h2 class="paper-title">Universal Beta Splatting</h2>
+          <p class="paper-authors">Rong Liu, Zhongpai Gao, Benjamin Planche, Meida Chen, Van Nguyen Nguyen, Meng Zheng, Anwesa Choudhuri, Terrence Chen, Yue Wang, Andrew Feng, Ziyan Wu</p>
+        </div>
+        <p class="paper-abstract">
+          UBS generalizes 3D Gaussian Splatting to <strong>N-dimensional anisotropic Beta kernels</strong>.
+          Unlike fixed Gaussian primitives, Beta kernels enable controllable dependency modeling across
+          <strong>spatial, angular, and temporal</strong> dimensions. The learned Beta parameters
+          automatically decompose scene properties &mdash; without explicit supervision &mdash; into
+          spatial, angular, and temporal components, achieving real-time rendering while remaining
+          backward-compatible with Gaussian Splatting and outperforming prior methods across static,
+          view-dependent, and dynamic benchmarks.
+        </p>
+        <div class="paper-links">
+          <a class="link-chip" href="https://rongliu-leo.github.io/universal-beta-splatting/" target="_blank" rel="noopener">Project page</a>
+          <a class="link-chip" href="https://arxiv.org/abs/2510.03312" target="_blank" rel="noopener">arXiv 2510.03312</a>
+          <a class="link-chip" href="https://github.com/RongLiu-Leo/universal-beta-splatting" target="_blank" rel="noopener">Code</a>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <!-- ============ 6DGS / 7DGS ============ -->
+  <section class="section section-alt" id="ndgs">
+    <div class="container">
+      <div class="section-head">
+        <span class="kicker">N-DGS &middot; the Gaussian-kernel lineage</span>
+        <h2>6DGS &amp; 7DGS</h2>
+        <p class="lead">Where N-dimensional splatting began: lifting Gaussian primitives along view direction (6D) and then time (7D), with an efficient conditional-slicing mechanism.</p>
+      </div>
+
+      <div class="paper-pair">
+        <article class="paper">
+          <div class="paper-meta">
+            <span class="venue venue-iclr">ICLR 2025</span>
+            <h3 class="paper-title">6DGS: Enhanced Direction-Aware Gaussian Splatting for Volumetric Rendering</h3>
+            <p class="paper-authors">Zhongpai Gao, Benjamin Planche, Meng Zheng, Anwesa Choudhuri, Terrence Chen, Ziyan Wu</p>
+          </div>
+          <p class="paper-abstract">
+            6DGS extends 3D Gaussian Splatting into 6D space to capture view-dependent effects, jointly
+            modeling spatial position and view direction. By enhancing color and opacity representations
+            and leveraging additional directional information, it achieves up to a <strong>15.73 dB PSNR
+            improvement</strong> with <strong>66.5% fewer Gaussian points</strong> than 3DGS &mdash; while
+            staying compatible with the established 3DGS framework.
+          </p>
+          <div class="paper-links">
+            <a class="link-chip" href="https://gaozhongpai.github.io/6dgs/" target="_blank" rel="noopener">Project page</a>
+            <a class="link-chip" href="https://arxiv.org/abs/2410.04974" target="_blank" rel="noopener">arXiv 2410.04974</a>
+          </div>
+        </article>
+
+        <article class="paper">
+          <div class="paper-meta">
+            <span class="venue venue-iccv">ICCV 2025</span>
+            <h3 class="paper-title">7DGS: Unified Spatial-Temporal-Angular Gaussian Splatting</h3>
+            <p class="paper-authors">Zhongpai Gao, Benjamin Planche, Meng Zheng, Anwesa Choudhuri, Terrence Chen, Ziyan Wu</p>
+          </div>
+          <p class="paper-abstract">
+            7DGS represents scenes as <strong>seven-dimensional Gaussians</strong> unifying spatial
+            position (3D), time (1D), and viewing direction (3D). An efficient conditional slicing
+            mechanism converts these 7D primitives into view- and time-conditioned 3D Gaussians,
+            enabling real-time rendering of dynamic scenes with view-dependent effects &mdash; surpassing
+            prior methods by up to <strong>7.36 dB PSNR at 401 FPS</strong>.
+          </p>
+          <div class="paper-links">
+            <a class="link-chip" href="https://gaozhongpai.github.io/7dgs/" target="_blank" rel="noopener">Project page</a>
+            <a class="link-chip" href="https://arxiv.org/abs/2503.07946" target="_blank" rel="noopener">arXiv 2503.07946</a>
+          </div>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ RENDER-FM ============ -->
+  <section class="section" id="renderfm">
+    <div class="container">
+      <article class="paper paper-wide">
+        <div class="paper-meta">
+          <span class="venue venue-eccv">ECCV 2026</span>
+          <h2 class="paper-title">Render-FM: Feedforward Model for Real-time Photorealistic Volumetric Rendering</h2>
+          <p class="paper-authors">Zhongpai Gao, Benjamin Planche, Meng Zheng, Anwesa Choudhuri, Van Nguyen Nguyen, Terrence Chen, Ziyan Wu</p>
+        </div>
+        <p class="paper-abstract">
+          Render-FM brings the 6D representation to medicine. It directly predicts 6D Gaussian Splatting
+          parameters from CT volumes in <strong>2.8 seconds</strong> &mdash; a <strong>500&times; speedup</strong>
+          over per-scan optimization &mdash; while maintaining quality. Anatomy-Guided Priming incorporates
+          segmentation masks and transfer functions as structural priors, so the feedforward model
+          generalizes to unseen anatomies and supports real-time interactive rendering on standard GPUs
+          without per-scan optimization.
+        </p>
+        <div class="paper-links">
+          <a class="link-chip" href="https://gaozhongpai.github.io/renderfm/" target="_blank" rel="noopener">Project page</a>
+          <a class="link-chip" href="https://arxiv.org/abs/2505.17338" target="_blank" rel="noopener">arXiv 2505.17338</a>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <!-- ============ BIBTEX ============ -->
+  <section class="section section-alt" id="bibtex">
+    <div class="container">
+      <div class="section-head">
+        <span class="kicker">Cite this line of work</span>
+        <h2>BibTeX</h2>
+      </div>
+      <div class="bib-wrap">
+        <button class="copy-btn" data-target="bib">Copy all</button>
+        <pre id="bib"><code>@inproceedings{gao20246dgs,
+  title     = {6DGS: Enhanced Direction-Aware Gaussian Splatting for Volumetric Rendering},
+  author    = {Gao, Zhongpai and Planche, Benjamin and Zheng, Meng and
+               Choudhuri, Anwesa and Chen, Terrence and Wu, Ziyan},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year      = {2025}
+}
+
+@inproceedings{gao20257dgs,
+  title     = {7DGS: Unified Spatial-Temporal-Angular Gaussian Splatting},
+  author    = {Gao, Zhongpai and Planche, Benjamin and Zheng, Meng and
+               Choudhuri, Anwesa and Chen, Terrence and Wu, Ziyan},
+  booktitle = {Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV)},
+  pages     = {26316--26325},
+  year      = {2025}
+}
+
+@inproceedings{liu2025universal,
+  title     = {Universal Beta Splatting},
+  author    = {Liu, Rong and Gao, Zhongpai and Planche, Benjamin and Chen, Meida and
+               Nguyen, Van Nguyen and Zheng, Meng and Choudhuri, Anwesa and
+               Chen, Terrence and Wang, Yue and Feng, Andrew and Wu, Ziyan},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year      = {2026}
+}
+
+@inproceedings{gao2026renderfm,
+  title     = {Render-FM: Feedforward Model for Real-time Photorealistic Volumetric Rendering},
+  author    = {Gao, Zhongpai and Planche, Benjamin and Zheng, Meng and Choudhuri, Anwesa and
+               Nguyen, Van Nguyen and Chen, Terrence and Wu, Ziyan},
+  booktitle = {European Conference on Computer Vision (ECCV)},
+  year      = {2026}
+}</code></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ FOOTER ============ -->
+  <footer class="footer">
+    <div class="container footer-inner">
+      <div class="footer-brand"><span class="brand-mark">ND</span><span class="brand-text">Splat</span></div>
+      <p class="footer-note">A unified framework for N-dimensional splatting &mdash; multiple kernels, conditioning parameterizations, and dimensionalities.</p>
+      <div class="footer-links">
+        <a href="https://github.com/Gaozhongpai/ndsplat" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://gaozhongpai.github.io/" target="_blank" rel="noopener">Author</a>
+      </div>
+    </div>
+  </footer>
+
+  <script src="assets/js/main.js"></script>
+</body>
+</html>
