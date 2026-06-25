@@ -204,7 +204,30 @@ em { font-style: italic; }
 .node-accent .node-year, .node-accent .node-desc { color: rgba(255,255,255,.85); }
 .node-accent:hover { border-color: transparent; }
 .node-arrow { display: flex; align-items: center; color: var(--ink-faint); font-size: 1.3rem; font-weight: 300; }
-.lineage-aside { text-align: center; margin: 22px 0 0; font-size: .92rem; color: var(--ink-soft); }
+
+/* ---------- Render-FM branch (application off the main track) ---------- */
+.lineage-branch {
+  display: flex; align-items: center; justify-content: center; gap: 22px;
+  margin: 0 auto; max-width: 660px; position: relative; padding-top: 30px;
+}
+.branch-connector {
+  position: absolute; top: 0; left: 50%; width: 2px; height: 30px;
+  background: linear-gradient(var(--line), var(--accent-2)); border-radius: 2px;
+}
+.node-branch {
+  position: relative; min-width: 200px; border-style: dashed; border-color: var(--accent-2);
+  background: linear-gradient(180deg, #ffffff, #f3fdff);
+}
+.node-branch:hover { border-color: var(--accent-2); border-style: solid; }
+.node-branch .node-desc { line-height: 1.35; }
+.node-badge {
+  position: absolute; top: -10px; left: 50%; transform: translateX(-50%);
+  background: var(--accent-2); color: #04222a; font-size: .62rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .08em; padding: 3px 10px; border-radius: 999px;
+  white-space: nowrap;
+}
+.branch-note { margin: 0; font-size: .92rem; color: var(--ink-soft); text-align: left; max-width: 320px; }
+.branch-note strong { color: var(--ink); font-weight: 600; }
 
 /* ---------- Axes cards ---------- */
 .axes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; }
@@ -399,6 +422,8 @@ em { font-style: italic; }
   .node-arrow { transform: rotate(90deg); }
   .lineage-track { flex-direction: column; align-items: center; }
   .node { width: 100%; max-width: 280px; }
+  .lineage-branch { flex-direction: column; gap: 16px; max-width: 280px; }
+  .branch-note { text-align: center; }
   .paper { padding: 26px; }
   .hero-stats .stat { min-width: 130px; }
 }
