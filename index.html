@@ -256,6 +256,66 @@
         </table>
       </div>
       <p class="table-foot">All methods: NVIDIA A100, 30K iterations, TC-GS rasterizer, identical learning rates and densification schedules per dataset.</p>
+
+      <!-- SOTA comparison table -->
+      <h3 class="table-title" style="margin-top: 64px;">Comparison with state-of-the-art methods</h3>
+      <p class="table-cap"><span class="mname"><em>d</em>BS</span> situated against implicit and explicit static-scene methods on Mip-NeRF&nbsp;360 and NeRF&nbsp;Synthetic. It achieves the best PSNR on Mip-NeRF&nbsp;360 (28.70&nbsp;dB) and ties for best PSNR on NeRF&nbsp;Synthetic (34.53&nbsp;dB). UBS and <span class="mname"><em>d</em>BS</span> are re-evaluated under the 3DGS protocol, so UBS numbers differ from the original paper.</p>
+      <div class="table-wrap">
+        <table class="data-table sota-table">
+          <thead>
+            <tr class="grp-head">
+              <th rowspan="2"></th><th rowspan="2">Method</th>
+              <th colspan="3">Mip-NeRF 360</th>
+              <th colspan="3" class="sep">NeRF Synthetic</th>
+            </tr>
+            <tr>
+              <th>PSNR&uarr;</th><th>SSIM&uarr;</th><th>LPIPS&darr;</th>
+              <th class="sep">PSNR&uarr;</th><th>SSIM&uarr;</th><th>LPIPS&darr;</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="grp"><td class="c-type" rowspan="3">Implicit</td><td class="c-name">Instant-NGP</td>
+              <td>25.51</td><td>0.684</td><td>0.398</td><td class="sep">33.18</td><td>0.959</td><td>0.055</td></tr>
+            <tr><td class="c-name">Mip-NeRF 360</td>
+              <td>27.69</td><td>0.792</td><td>0.237</td><td class="sep">33.25</td><td>0.962</td><td>0.039</td></tr>
+            <tr><td class="c-name">Zip-NeRF</td>
+              <td>28.54</td><td>0.828</td><td>0.189</td><td class="sep">33.10</td><td>0.971</td><td>0.031</td></tr>
+
+            <tr class="grp"><td class="c-type" rowspan="15">Explicit</td><td class="c-name">3DGS</td>
+              <td>27.20</td><td>0.815</td><td>0.214</td><td class="sep">33.31</td><td>0.969</td><td>0.037</td></tr>
+            <tr><td class="c-name">GES</td>
+              <td>26.91</td><td>0.794</td><td>0.250</td><td class="sep">&ndash;</td><td>&ndash;</td><td>&ndash;</td></tr>
+            <tr><td class="c-name">2DGS</td>
+              <td>27.04</td><td>0.805</td><td>0.297</td><td class="sep">33.07</td><td>&ndash;</td><td>&ndash;</td></tr>
+            <tr><td class="c-name">Mip-Splatting</td>
+              <td>27.79</td><td>0.827</td><td>0.203</td><td class="sep">33.33</td><td>0.969</td><td>0.039</td></tr>
+            <tr><td class="c-name">3DGS-MCMC</td>
+              <td>28.29</td><td>0.840</td><td>0.210</td><td class="sep">33.80</td><td>0.970</td><td>0.040</td></tr>
+            <tr><td class="c-name">DRKS</td>
+              <td>26.76</td><td>0.787</td><td>0.236</td><td class="sep">33.82</td><td>&ndash;</td><td>&ndash;</td></tr>
+            <tr><td class="c-name">Textured GS</td>
+              <td>27.35</td><td>0.827</td><td>0.186</td><td class="sep">33.24</td><td>0.967</td><td>0.043</td></tr>
+            <tr><td class="c-name">Quadratic GS</td>
+              <td>27.39</td><td>0.813</td><td>0.213</td><td class="sep">&ndash;</td><td>&ndash;</td><td>&ndash;</td></tr>
+            <tr><td class="c-name">Disc-GS</td>
+              <td>28.01</td><td>0.833</td><td>0.189</td><td class="sep">&ndash;</td><td>&ndash;</td><td>&ndash;</td></tr>
+            <tr><td class="c-name">Triangle Splatting</td>
+              <td>27.00</td><td>0.808</td><td>0.231</td><td class="sep">&ndash;</td><td>&ndash;</td><td>&ndash;</td></tr>
+            <tr><td class="c-name">Radiance Meshes</td>
+              <td>27.15</td><td>0.810</td><td>0.274</td><td class="sep">&ndash;</td><td>&ndash;</td><td>&ndash;</td></tr>
+            <tr><td class="c-name">Spherical Voronoi</td>
+              <td class="second">28.57</td><td>0.835</td><td>0.230</td><td class="sep best">34.53</td><td class="second">0.973</td><td>0.032</td></tr>
+            <tr><td class="c-name">UBS</td>
+              <td>28.50</td><td class="second">0.841</td><td class="best">0.183</td><td class="sep second">34.48</td><td class="best">0.975</td><td class="second">0.026</td></tr>
+            <tr class="ours"><td class="c-name"><span class="mname"><em>d</em>BS</span></td>
+              <td class="best">28.70</td><td class="best">0.842</td><td class="second">0.185</td><td class="sep best">34.53</td><td class="best">0.975</td><td class="best">0.025</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="sota-legend">
+        <span><i class="best"></i> Best</span>
+        <span><i class="second"></i> Second best</span>
+      </div>
     </div>
   </section>
 

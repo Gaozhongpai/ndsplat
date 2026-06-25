@@ -327,6 +327,28 @@ em { font-style: italic; }
 }
 .table-foot { text-align: center; font-size: .85rem; color: var(--ink-faint); margin: 18px 0 0; }
 
+/* ---------- SOTA comparison table ---------- */
+.sota-table { min-width: 760px; }
+.sota-table thead th { text-align: center; }
+.sota-table thead th:first-child, .sota-table thead th:nth-child(2) { text-align: left; }
+.sota-table thead tr.grp-head th { font-size: .76rem; letter-spacing: .04em; }
+.sota-table tbody td { text-align: center; }
+.sota-table tbody td.c-type { text-align: center; font-weight: 700; color: var(--ink-faint);
+  text-transform: uppercase; letter-spacing: .06em; font-size: .68rem; border-right: 1px solid var(--line); }
+.sota-table tbody td.c-name { text-align: left; color: var(--ink); }
+.sota-table tbody td.sep { border-left: 1px solid var(--line); }
+.sota-table tbody tr.ours { background: var(--ours-bg); }
+.sota-table tbody tr.ours td.c-name { font-weight: 700; color: var(--accent-ink); }
+.sota-table tbody tr.grp td { border-top: 2px solid var(--line); }
+/* rank highlights: best = accent fill, second = soft accent */
+.sota-table td.best { background: rgba(109,92,246,.16); color: var(--accent-ink); font-weight: 800; border-radius: 6px; }
+.sota-table td.second { background: rgba(24,182,201,.14); color: #0d8090; font-weight: 700; }
+.sota-legend { display: flex; gap: 18px; justify-content: center; flex-wrap: wrap; margin: 14px 0 0; font-size: .82rem; color: var(--ink-faint); }
+.sota-legend span { display: inline-flex; align-items: center; gap: 7px; }
+.sota-legend i { width: 14px; height: 14px; border-radius: 4px; display: inline-block; }
+.sota-legend i.best { background: rgba(109,92,246,.16); }
+.sota-legend i.second { background: rgba(24,182,201,.14); }
+
 /* ============================================================
    PAPER CARDS
    ============================================================ */
