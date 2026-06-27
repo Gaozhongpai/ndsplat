@@ -587,7 +587,7 @@ if __name__ == "__main__":
     vp = ViewerParams(parser)
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
-    parser.add_argument("--test_iterations", nargs="+", type=int, default=[i for i in range(500, 30_001, 500)])
+    parser.add_argument("--test_iterations", nargs="+", type=int, default=None)
     parser.add_argument("--save_iterations", nargs="+", type=int, default=[500, 2_000, 7_000, 15_000, 30_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
@@ -596,11 +596,16 @@ if __name__ == "__main__":
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
 
-    # For static scenes (input_dim != 7), use less frequent testing and skip best checkpoint
-    # Dynamic scenes (input_dim=7) need frequent testing to track best checkpoint
-    if args.input_dim != 7:
-        # Static scene: only test at key iterations (same as save_iterations)
-        args.test_iterations = [500, 2_000, 7_000, 15_000, 30_000]
+    # Resolve --test_iterations default. When the user did NOT pass it (None),
+    # pick a schedule by scene type; an explicit value is always respected so a
+    # fine-grained schedule for best-checkpoint selection works.
+    if args.test_iterations is None:
+        if args.input_dim != 7:
+            # Static scene default: test only at key iterations.
+            args.test_iterations = [500, 2_000, 7_000, 15_000, 30_000]
+        else:
+            # Dynamic scene default: frequent testing to track best checkpoint.
+            args.test_iterations = [i for i in range(500, args.iterations + 1, 500)]
 
     print("Optimizing " + args.model_path)
 

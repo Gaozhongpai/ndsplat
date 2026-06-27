@@ -295,7 +295,163 @@ def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
                            ply_path=ply_path)
     return scene_info
 
+def readDF3DVCameras(cam_extrinsics, cam_intrinsics, images_folder):
+    """Read DF3DV cameras, rescaling intrinsics to match the on-disk (downsampled)
+    image resolution. COLMAP poses are stored at full resolution, but
+    undistortion_images_8/ holds images downsampled by ~8x, so FoV must be
+    derived from the actual image dimensions rather than the COLMAP width/height.
+    """
+    cam_infos = []
+    for key in tqdm(cam_extrinsics, desc="Reading DF3DV camera metadata"):
+        extr = cam_extrinsics[key]
+        intr = cam_intrinsics[extr.camera_id]
+
+        R = np.transpose(qvec2rotmat(extr.qvec))
+        T = np.array(extr.tvec)
+
+        image_path = os.path.join(images_folder, os.path.basename(extr.name))
+        if not os.path.exists(image_path):
+            # Some scenes keep .JPG in COLMAP but downsampled files share the
+            # same basename/extension; skip cleanly if the image is absent.
+            continue
+        image_name = os.path.basename(image_path).split(".")[0]
+
+        # Actual (downsampled) resolution on disk.
+        with Image.open(image_path) as img:
+            width, height = img.size
+
+        # FoV is resolution-independent: compute from the COLMAP focal length
+        # scaled to the on-disk resolution.
+        colmap_w, colmap_h = intr.width, intr.height
+        if intr.model in ("SIMPLE_PINHOLE", "SIMPLE_RADIAL"):
+            fx = intr.params[0]
+            fy = intr.params[0]
+        elif intr.model == "PINHOLE":
+            fx = intr.params[0]
+            fy = intr.params[1]
+        else:
+            assert False, f"DF3DV: unsupported COLMAP camera model {intr.model} (expect undistorted PINHOLE/SIMPLE_PINHOLE)"
+
+        sx = width / colmap_w
+        sy = height / colmap_h
+        FovX = focal2fov(fx * sx, width)
+        FovY = focal2fov(fy * sy, height)
+
+        cam_infos.append(
+            CameraInfo(
+                uid=intr.id,
+                R=R,
+                T=T,
+                FovY=FovY,
+                FovX=FovX,
+                image_path=image_path,
+                image_name=image_name,
+                width=width,
+                height=height,
+                x_threshold=None,
+                label=None,
+                color_idx=None,
+                timestamp=0.0,
+            )
+        )
+    return cam_infos
+
+
+def readDF3DVSceneInfo(path, images, eval, llffhold=8):
+    """Load a DF3DV-41 / DF3DV-1K scene.
+
+    Layout (per scene, inside the <scene>-All directory passed as `path`):
+        undistortion_sparse/0/{cameras,images,points3D}.{bin,txt}
+        undistortion_images_8/{clutter_*,extra_*}.JPG   (downsampled by 8)
+        split.json   (optional; clutter=train / extra=eval)
+
+    Train = clutter_* images, Eval = extra_* (clean) images. The split is keyed
+    on the image-name prefix, which the benchmark's leaderboard tooling relies on.
+    """
+    sparse_dir = os.path.join(path, "undistortion_sparse", "0")
+    try:
+        cam_extrinsics = read_extrinsics_binary(os.path.join(sparse_dir, "images.bin"))
+        cam_intrinsics = read_intrinsics_binary(os.path.join(sparse_dir, "cameras.bin"))
+    except Exception:
+        cam_extrinsics = read_extrinsics_text(os.path.join(sparse_dir, "images.txt"))
+        cam_intrinsics = read_intrinsics_text(os.path.join(sparse_dir, "cameras.txt"))
+
+    reading_dir = images if images not in (None, "images") else "undistortion_images_8"
+    cam_infos_unsorted = readDF3DVCameras(
+        cam_extrinsics=cam_extrinsics,
+        cam_intrinsics=cam_intrinsics,
+        images_folder=os.path.join(path, reading_dir),
+    )
+    cam_infos = sorted(cam_infos_unsorted.copy(), key=lambda x: x.image_name)
+
+    # Optional split.json cross-check (list of clean/clutter image names).
+    split_clean = None
+    split_json = os.path.join(path, "split.json")
+    if os.path.exists(split_json):
+        try:
+            with open(split_json) as f:
+                sj = json.load(f)
+            # Be liberal about key naming; collect any list that names clean/extra images.
+            clean = []
+            for k, v in sj.items() if isinstance(sj, dict) else []:
+                if isinstance(v, list) and ("clean" in k.lower() or "extra" in k.lower() or "test" in k.lower() or "eval" in k.lower()):
+                    clean.extend(os.path.basename(str(x)).split(".")[0] for x in v)
+            if clean:
+                split_clean = set(clean)
+        except Exception as e:
+            print(f"DF3DV: could not parse split.json ({e}); falling back to filename prefixes.")
+
+    def is_eval(cam):
+        name = cam.image_name.lower()
+        if split_clean is not None:
+            return cam.image_name in split_clean
+        return name.startswith("extra")
+
+    def is_train(cam):
+        name = cam.image_name.lower()
+        return name.startswith("clutter") or (not is_eval(cam))
+
+    if eval:
+        train_cam_infos = [c for c in cam_infos if c.image_name.lower().startswith("clutter")]
+        test_cam_infos = [c for c in cam_infos if is_eval(c)]
+        # Fallback for scenes that don't use the clutter_ prefix.
+        if not train_cam_infos:
+            train_cam_infos = [c for c in cam_infos if not is_eval(c)]
+    else:
+        # No eval: train on everything available (clutter + extra).
+        train_cam_infos = cam_infos
+        test_cam_infos = []
+
+    print(f"DF3DV scene: {len(train_cam_infos)} train (clutter), {len(test_cam_infos)} eval (extra) cameras")
+
+    nerf_normalization = getNerfppNorm(train_cam_infos)
+
+    ply_path = os.path.join(sparse_dir, "points3D.ply")
+    bin_path = os.path.join(sparse_dir, "points3D.bin")
+    txt_path = os.path.join(sparse_dir, "points3D.txt")
+    if not os.path.exists(ply_path):
+        print("Converting points3D.bin to .ply (first load only)...")
+        try:
+            xyz, rgb, _ = read_points3D_binary(bin_path)
+        except Exception:
+            xyz, rgb, _ = read_points3D_text(txt_path)
+        storePly(ply_path, xyz, rgb)
+    try:
+        pcd = fetchPly(ply_path)
+    except Exception:
+        pcd = None
+
+    return SceneInfo(
+        point_cloud=pcd,
+        train_cameras=train_cam_infos,
+        test_cameras=test_cam_infos,
+        nerf_normalization=nerf_normalization,
+        ply_path=ply_path,
+    )
+
+
 sceneLoadTypeCallbacks = {
     "Colmap": readColmapSceneInfo,
-    "Blender" : readNerfSyntheticInfo
+    "Blender" : readNerfSyntheticInfo,
+    "DF3DV": readDF3DVSceneInfo,
 }
