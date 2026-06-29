@@ -158,7 +158,7 @@ em { font-style: italic; }
 /* affiliation line */
 .hero-affil {
   display: flex; align-items: center; justify-content: center; flex-wrap: wrap;
-  gap: 10px 12px; margin-top: 34px;
+  gap: 10px 12px; margin: 4px 0 26px;
 }
 .affil-org {
   display: inline-flex; align-items: center; gap: 9px;
