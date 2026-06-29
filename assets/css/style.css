@@ -155,20 +155,18 @@ em { font-style: italic; }
 .stat-num { font-size: 1.5rem; font-weight: 700; letter-spacing: -.02em; }
 .stat-label { font-size: .8rem; color: rgba(255,255,255,.62); }
 
-/* affiliation line */
+/* affiliation line — understated, below the description */
 .hero-affil {
-  display: flex; align-items: center; justify-content: center; flex-wrap: wrap;
-  gap: 10px 12px; margin: 4px 0 26px;
+  display: flex; align-items: center; justify-content: center;
+  margin: 22px 0 8px;
 }
 .affil-org {
-  display: inline-flex; align-items: center; gap: 9px;
-  padding: 6px 14px 6px 8px; border-radius: 999px;
-  background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.14);
-  color: #fff; font-weight: 600; font-size: .9rem;
+  display: inline-flex; align-items: center; gap: 8px;
+  color: rgba(255,255,255,.6); font-weight: 500; font-size: .84rem;
 }
 .affil-org img {
-  height: 26px; width: 26px; border-radius: 6px; background: #fff;
-  padding: 3px; object-fit: contain; display: block;
+  height: 17px; width: auto; object-fit: contain; display: block;
+  opacity: .55; filter: brightness(0) invert(1);
 }
 
 .scroll-hint { position: absolute; bottom: 26px; left: 50%; transform: translateX(-50%); z-index: 2; }
