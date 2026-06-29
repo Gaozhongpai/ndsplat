@@ -155,6 +155,26 @@ em { font-style: italic; }
 .stat-num { font-size: 1.5rem; font-weight: 700; letter-spacing: -.02em; }
 .stat-label { font-size: .8rem; color: rgba(255,255,255,.62); }
 
+/* affiliation line */
+.hero-affil {
+  display: flex; align-items: center; justify-content: center; flex-wrap: wrap;
+  gap: 10px 12px; margin-top: 34px;
+}
+.affil-from, .affil-note { font-size: .82rem; color: rgba(255,255,255,.6); font-weight: 400; }
+.affil-note { width: 100%; text-align: center; margin-top: -2px; }
+.affil-org {
+  display: inline-flex; align-items: center; gap: 9px;
+  padding: 6px 14px 6px 8px; border-radius: 999px;
+  background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.14);
+  color: #fff; font-weight: 600; font-size: .9rem;
+  transition: background .15s, border-color .15s, transform .15s;
+}
+.affil-org:hover { text-decoration: none; background: rgba(255,255,255,.12); border-color: rgba(255,255,255,.28); transform: translateY(-2px); }
+.affil-org img {
+  height: 26px; width: 26px; border-radius: 6px; background: #fff;
+  padding: 3px; object-fit: contain; display: block;
+}
+
 .scroll-hint { position: absolute; bottom: 26px; left: 50%; transform: translateX(-50%); z-index: 2; }
 .scroll-hint span {
   display: block; width: 24px; height: 40px; border: 2px solid rgba(255,255,255,.4); border-radius: 14px; position: relative;
