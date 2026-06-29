@@ -158,15 +158,15 @@ em { font-style: italic; }
 /* affiliation line — understated, below the description */
 .hero-affil {
   display: flex; align-items: center; justify-content: center;
-  margin: 22px 0 8px;
+  margin: 8px 0 4px;
 }
 .affil-org {
   display: inline-flex; align-items: center; gap: 8px;
-  color: rgba(255,255,255,.6); font-weight: 500; font-size: .84rem;
+  color: rgba(255,255,255,.62); font-weight: 500; font-size: .84rem;
 }
 .affil-org img {
-  height: 17px; width: auto; object-fit: contain; display: block;
-  opacity: .55; filter: brightness(0) invert(1);
+  height: 20px; width: 20px; border-radius: 4px; background: #fff;
+  padding: 2px; object-fit: contain; display: block;
 }
 
 .scroll-hint { position: absolute; bottom: 26px; left: 50%; transform: translateX(-50%); z-index: 2; }
