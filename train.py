@@ -220,6 +220,17 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
     n_patient = 0
     is_set_patient = False
 
+    # Mip-Splatting: initialize the 3D smoothing filter from the training
+    # cameras (a derived per-Gaussian buffer, not a learnable parameter) and
+    # enable the antialiased render path. Refreshed periodically below.
+    if dataset.mip3dgs:
+        if dataset.use_gsplat:
+            raise ValueError("--mip3dgs is implemented on the TCGS render path; remove --use_gsplat")
+        if not hasattr(gaussians, "update_3d_filter"):
+            raise ValueError(f"--mip3dgs is not supported for mode '{mode}' "
+                             "(Gaussian-kernel TCGS modes only: dgs, ndgs)")
+        gaussians.update_3d_filter(scene.getTrainCameras())
+
     # Set up training dataloader with InfiniteSampler for uniform epoch-based sampling
     training_dataset = CameraDataset(scene.getTrainCameras().copy())
     sampler = InfiniteSampler(len(training_dataset), shuffle=True)
@@ -246,6 +257,10 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
         iter_start.record()
 
         xyz_lr = gaussians.update_learning_rate(iteration)
+
+        # Mip-Splatting: the 3D filter depends on positions, refresh periodically
+        if dataset.mip3dgs and iteration % opt.mip_filter_interval == 0:
+            gaussians.update_3d_filter(scene.getTrainCameras())
 
         # Every 1000 its we increase the levels of SH up to a maximum degree
         if iteration % 1000 == 0:
@@ -427,6 +442,13 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
 
                 else:
                     raise ValueError(f"Unknown densification_strategy: {opt.densification_strategy}. Choose 'standard' or 'mcmc'.")
+
+            # Mip-Splatting: densification changed the primitive count (or MCMC
+            # moved points); the 3D filter buffer must be recomputed before the
+            # next render or its length check fails.
+            if dataset.mip3dgs and gaussians.filter_3D is not None \
+                    and gaussians.filter_3D.shape[0] != gaussians.get_xyz.shape[0]:
+                gaussians.update_3d_filter(scene.getTrainCameras())
 
             # Optimizer step
             if iteration < opt.iterations:

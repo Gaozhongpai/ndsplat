@@ -36,6 +36,7 @@ from plyfile import PlyData, PlyElement
 from utils.sh_utils import RGB2SH
 from utils.graphics_utils import BasicPointCloud
 from utils.general_utils import strip_symmetric, build_scaling_rotation
+from utils.mip_utils import MipFilterMixin
 
 # Import CUDA-accelerated slice functions
 # from gsplat import slice_gaussian_full
@@ -118,7 +119,7 @@ def quaternion_slerp(q0, q1, t):
     return F.normalize(result, dim=1)
 
 
-class GaussianModel:
+class GaussianModel(MipFilterMixin):
     """
     Full DGS with view-dependent position, time-dependent rotation, and opacity.
 
@@ -731,6 +732,8 @@ class GaussianModel:
         # label tensor (most public datasets) keep their existing schema.
         if self._label.numel() == self._xyz.shape[0]:
             l.append('label')
+        # Mip-Splatting 3D filter variance (derived buffer, only when enabled)
+        l.extend(self.mip_ply_attributes())
         return l
 
     def save_ply(self, path):
@@ -770,6 +773,7 @@ class GaussianModel:
             if label.ndim == 1:
                 label = label[:, np.newaxis]
             attrs_list.append(label)
+        attrs_list.extend(self.mip_ply_columns())
         attributes = np.concatenate(attrs_list, axis=1)
         elements[:] = list(map(tuple, attributes))
         el = PlyElement.describe(elements, 'vertex')
@@ -782,6 +786,7 @@ class GaussianModel:
 
     def load_ply(self, path):
         plydata = PlyData.read(path)
+        self.mip_load_from_ply(plydata)
 
         xyz = np.stack((np.asarray(plydata.elements[0]["x"]),
                         np.asarray(plydata.elements[0]["y"]),
@@ -1526,6 +1531,9 @@ class GaussianModel:
         # Get opacity scaled by view-dependent factor
         opacity = self.get_opacity * opacity_scale
 
+        # Mip-Splatting 3D smoothing filter (no-op when filter_3D is None)
+        scales, opacity, antialiasing = self.mip_filtered(opacity, scales=self.get_scaling)
+
         # Set up rasterization
         tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)
         tanfovy = math.tan(viewpoint_camera.FoVy * 0.5)
@@ -1550,6 +1558,7 @@ class GaussianModel:
             tight_snugbox=tight_snugbox,
             compact_box_mult=compact_box_mult,
             debug=False,
+            antialiasing=antialiasing,
         )
 
         rasterizer = TCGSRasterizer(raster_settings=raster_settings)
@@ -1562,7 +1571,7 @@ class GaussianModel:
             colors_precomp=None,
             opacities=opacity,
             scores=None,
-            scales=self.get_scaling,    # Scale is NOT view-dependent
+            scales=scales,    # Scale is NOT view-dependent (Mip-filtered if enabled)
             rotations=self.get_rotation,    # Rotation is NOT view-dependent
             cov3D_precomp=None,
             betas=None,
@@ -1685,6 +1694,9 @@ class GaussianModel:
         orig_L_22_inv, self._L_22_inv = self._L_22_inv, _L_22_inv_masked
         if self.use_view_dependent_pos:
             orig_v_12_direction, self._v_12_direction = self._v_12_direction, _v_12_direction_masked
+        orig_filter_3D = self.filter_3D
+        if self.filter_3D is not None:
+            self.filter_3D = self.filter_3D[mask]
 
         try:
             render_output = self.render_tcgs(
@@ -1718,6 +1730,7 @@ class GaussianModel:
             self._L_22_inv = orig_L_22_inv
             if self.use_view_dependent_pos:
                 self._v_12_direction = orig_v_12_direction
+            self.filter_3D = orig_filter_3D
 
         render_colors = render_colors.permute(1, 2, 0)
 

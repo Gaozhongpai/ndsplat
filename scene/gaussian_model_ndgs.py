@@ -43,6 +43,8 @@ if os.environ.get("GSPLAT_TORCH_SLICE", "0") == "1":
 else:
     from gsplat import slice_gaussian_ndgs
 
+from utils.mip_utils import MipFilterMixin
+
 # Import TCGS rasterizer
 from tcgs_speedy_rasterizer import (
     GaussianRasterizationSettings as TCGSRasterizationSettings,
@@ -63,7 +65,7 @@ def randomly_sample_point_cloud(point_cloud, num_samples=15000):
 
     return sampled_points
 
-class GaussianModel:
+class GaussianModel(MipFilterMixin):
 
     def setup_functions(self):
         def build_covariance_from_scaling_rotation(scaling, scaling_modifier, rotation):
@@ -748,6 +750,8 @@ class GaussianModel:
         for i in range(self._l_triangle.shape[1]):
             l.append('l_triangle_{}'.format(i))
 
+        # Mip-Splatting 3D filter variance (derived buffer, only when enabled)
+        l.extend(self.mip_ply_attributes())
         return l
 
     def save_ply(self, path):
@@ -777,6 +781,7 @@ class GaussianModel:
         scales = self._scale.detach().cpu().numpy()
         l_triangles = self._l_triangle.detach().cpu().numpy()
         attr_list.extend([scales, l_triangles])
+        attr_list.extend(self.mip_ply_columns())
 
         attributes = np.concatenate(attr_list, axis=1)
         elements[:] = list(map(tuple, attributes))
@@ -790,6 +795,7 @@ class GaussianModel:
 
     def load_ply(self, path):
         plydata = PlyData.read(path)
+        self.mip_load_from_ply(plydata)
 
         xyz = np.stack((np.asarray(plydata.elements[0]["x"]),
                         np.asarray(plydata.elements[0]["y"]),
@@ -1591,6 +1597,10 @@ class GaussianModel:
         # Compute opacity with conditional probability
         opacity = self.get_opacity * pdf_cond
 
+        # Mip-Splatting 3D smoothing filter on the sliced 3D covariance
+        # (no-op when filter_3D is None)
+        cov3D_precomp, opacity, antialiasing = self.mip_filtered(opacity, cov6=cov3D_precomp)
+
         # Set up rasterization
         tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)
         tanfovy = math.tan(viewpoint_camera.FoVy * 0.5)
@@ -1618,6 +1628,7 @@ class GaussianModel:
             tight_snugbox=tight_snugbox,
             compact_box_mult=compact_box_mult,
             debug=False,
+            antialiasing=antialiasing,
         )
 
         rasterizer = TCGSRasterizer(raster_settings=raster_settings)
@@ -1790,6 +1801,9 @@ class GaussianModel:
         orig_lambda_opc, self._lambda_opc = self._lambda_opc, _lambda_opc_masked
         orig_scale, self._scale = self._scale, _scale_masked
         orig_l_triangle, self._l_triangle = self._l_triangle, _l_triangle_masked
+        orig_filter_3D = self.filter_3D
+        if self.filter_3D is not None:
+            self.filter_3D = self.filter_3D[mask]
 
         try:
             # Call render_tcgs with masked Gaussians
@@ -1824,6 +1838,7 @@ class GaussianModel:
             self._lambda_opc = orig_lambda_opc
             self._scale = orig_scale
             self._l_triangle = orig_l_triangle
+            self.filter_3D = orig_filter_3D
 
         # Convert from [C, H, W] to [H, W, C] for viewer
         render_colors = render_colors.permute(1, 2, 0)

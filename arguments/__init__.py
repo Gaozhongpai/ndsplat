@@ -89,6 +89,7 @@ class ModelParams(ParamGroup):
         self.beta_init_view = -3.0  # dBS-only: raw init for view beta dims (7D); activated beta = 4*exp(beta_init_view)
         self.lambda_opc = 0.35  # Default lambda_opc for opacity scaling (0.35 standard, 0.01 for dnerf, 0.2 for PBR)
         self.use_gsplat = False  # If True: use gsplat rasterizer instead of TCGS for UBS/DGS modes
+        self.mip3dgs = False  # Mip-Splatting: 3D smoothing filter + 2D antialiasing (Gaussian-kernel TCGS modes: dgs/ndgs)
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
@@ -138,6 +139,11 @@ class OptimizationParams(ParamGroup):
 
         # Densification strategy: "standard" or "mcmc"
         self.densification_strategy = "standard"
+
+        # Mip-Splatting: refresh cadence of the 3D smoothing filter (iterations).
+        # The filter depends on Gaussian positions, so it is also refreshed
+        # whenever densification changes the primitive count.
+        self.mip_filter_interval = 100
 
         # MCMC-specific parameters (only used when densification_strategy="mcmc")
         self.mcmc_cap_max = 300_000  # Maximum number of Gaussians
