@@ -42,7 +42,8 @@ def loadCam(args, id, cam_info, resolution_scale, *, resolution=None, image_tens
                   FoVx=cam_info.FovX, FoVy=cam_info.FovY,
                   image=gt_image, gt_alpha_mask=loaded_mask,
                   image_name=cam_info.image_name, uid=id,
-                  x_threshold=cam_info.x_threshold, color_idx=cam_info.color_idx, label=cam_info.label,
+                  x_threshold=cam_info.x_threshold, clip_plane=cam_info.clip_plane,
+                  color_idx=cam_info.color_idx, label=cam_info.label,
                   data_device=args.data_device, timestamp=cam_info.timestamp,
                   compressed_data=compressed_data)
 
