@@ -17,6 +17,7 @@ from utils.graphics_utils import getWorld2View2, getProjectionMatrix
 class Camera(nn.Module):
     def __init__(self, colmap_id, R, T, FoVx, FoVy, image, gt_alpha_mask,
                  image_name, uid, x_threshold=None, color_idx=None, label=None,
+                 clip_plane=None,
                  trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda",
                  timestamp=0.0, compressed_data=None
                  ):
@@ -30,6 +31,7 @@ class Camera(nn.Module):
         self.FoVy = FoVy
         self.image_name = image_name
         self.x_threshold = x_threshold
+        self.clip_plane = clip_plane  # general (nx, ny, nz, tau) half-space, or None
         self.label = torch.tensor(label).cuda() if label is not None else None
         self.color_idx = color_idx
         self.timestamp = timestamp  # Time dimension for 7DGS

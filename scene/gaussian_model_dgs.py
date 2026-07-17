@@ -1541,6 +1541,26 @@ class GaussianModel(MipFilterMixin):
         bg_color = self.background if hasattr(self, 'background') and self.background.numel() > 0 else torch.tensor([0, 0, 0], dtype=torch.float32, device="cuda")
         x_threshold = viewpoint_camera.x_threshold if hasattr(viewpoint_camera, 'x_threshold') and viewpoint_camera.x_threshold is not None else float('inf')
 
+        # General (n, tau) clipping plane (nx, ny, nz, tau); keeps n.x <= tau.
+        # Takes precedence over x_threshold; None => no plane / legacy x path.
+        clip_plane = getattr(viewpoint_camera, 'clip_plane', None)
+        clip_plane_tensor = (
+            torch.tensor(clip_plane, dtype=torch.float32, device="cuda")
+            if clip_plane is not None else None
+        )
+
+        # XClipGS clip operator: 'analytic' (Ours, exact half-space; default),
+        # 'moment' (MM, moment-matched truncation → analytic_clip=False), or
+        # 'hardcull' (HC, per-primitive keep/drop applied by zeroing the opacity of
+        # wrong-side primitives — full-size arrays so densification is unaffected).
+        clip_operator = getattr(self, "clip_operator", "analytic")
+        analytic_clip = (clip_operator != "moment")
+        if clip_operator == "hardcull" and clip_plane_tensor is not None:
+            from tcgs_speedy_rasterizer import hard_clip_mask
+            keep = hard_clip_mask(m_cond, clip_plane=clip_plane_tensor)
+            opacity = opacity * keep.to(opacity.dtype).view(-1, 1)
+            clip_plane_tensor = None
+
         raster_settings = TCGSRasterizationSettings(
             image_height=int(viewpoint_camera.image_height),
             image_width=int(viewpoint_camera.image_width),
@@ -1553,6 +1573,8 @@ class GaussianModel(MipFilterMixin):
             sh_degree=self.active_sh_degree,
             campos=viewpoint_camera.camera_center,
             x_threshold=x_threshold,
+            clip_plane=clip_plane_tensor,
+            analytic_clip=analytic_clip,
             prefiltered=False,
             use_tcgs=use_tcgs,
             tight_snugbox=tight_snugbox,

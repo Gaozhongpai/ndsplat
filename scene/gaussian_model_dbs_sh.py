@@ -1065,6 +1065,10 @@ class GaussianModel:
             projmatrix=projmatrix,
             sh_degree=self.active_sh_degree,
             campos=campos,
+            x_threshold=(viewpoint_camera.x_threshold
+                         if getattr(viewpoint_camera, 'x_threshold', None) is not None else float('inf')),
+            clip_plane=(torch.tensor(viewpoint_camera.clip_plane, dtype=torch.float32, device="cuda")
+                        if getattr(viewpoint_camera, 'clip_plane', None) is not None else None),
             prefiltered=False,
             use_tcgs=use_tcgs,
             tight_snugbox=use_tcgs,

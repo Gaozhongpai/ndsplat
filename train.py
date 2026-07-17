@@ -111,6 +111,9 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
     else:
         raise ValueError(f"Unknown mode: {mode}")
 
+    # XClipGS: select the clip operator (dgs mode); default 'analytic' (Ours).
+    gaussians.clip_operator = getattr(dataset, "clip_operator", "analytic")
+
     scene = Scene(dataset, gaussians, opt_params=opt)
     gaussians.training_setup(opt)
 

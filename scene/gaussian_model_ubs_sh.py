@@ -1240,6 +1240,8 @@ class GaussianModel:
             campos=campos,
             prefiltered=False,
             x_threshold=viewpoint_camera.x_threshold if viewpoint_camera.x_threshold is not None else float('inf'),
+            clip_plane=(torch.tensor(viewpoint_camera.clip_plane, dtype=torch.float32, device="cuda")
+                        if getattr(viewpoint_camera, 'clip_plane', None) is not None else None),
             use_tcgs=use_tcgs,
             tight_snugbox=tight_snugbox,
             debug=False,

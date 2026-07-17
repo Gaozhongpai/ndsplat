@@ -90,6 +90,7 @@ class ModelParams(ParamGroup):
         self.lambda_opc = 0.35  # Default lambda_opc for opacity scaling (0.35 standard, 0.01 for dnerf, 0.2 for PBR)
         self.use_gsplat = False  # If True: use gsplat rasterizer instead of TCGS for UBS/DGS modes
         self.mip3dgs = False  # Mip-Splatting: 3D smoothing filter + 2D antialiasing (Gaussian-kernel TCGS modes: dgs/ndgs)
+        self.clip_operator = "analytic"  # XClipGS clip operator: "analytic" (Ours, exact half-space), "moment" (MM, moment-matched truncation), "hardcull" (HC, per-primitive keep/drop). dgs mode.
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):

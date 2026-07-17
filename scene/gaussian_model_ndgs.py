@@ -1611,6 +1611,15 @@ class GaussianModel(MipFilterMixin):
         # Get x_threshold from viewpoint_camera if it exists, otherwise use infinity
         x_threshold = viewpoint_camera.x_threshold if hasattr(viewpoint_camera, 'x_threshold') and viewpoint_camera.x_threshold is not None else float('inf')
 
+        # General (n, tau) clipping plane (nx, ny, nz, tau); keeps n.x <= tau.
+        # Takes precedence over x_threshold in the rasterizer; None => no plane
+        # (or the legacy x_threshold path for axis-aligned x cuts).
+        clip_plane = getattr(viewpoint_camera, 'clip_plane', None)
+        clip_plane_tensor = (
+            torch.tensor(clip_plane, dtype=torch.float32, device="cuda")
+            if clip_plane is not None else None
+        )
+
         raster_settings = TCGSRasterizationSettings(
             image_height=int(viewpoint_camera.image_height),
             image_width=int(viewpoint_camera.image_width),
@@ -1623,6 +1632,7 @@ class GaussianModel(MipFilterMixin):
             sh_degree=self.active_sh_degree,
             campos=viewpoint_camera.camera_center,
             x_threshold=x_threshold,
+            clip_plane=clip_plane_tensor,
             prefiltered=False,
             use_tcgs=use_tcgs,
             tight_snugbox=tight_snugbox,

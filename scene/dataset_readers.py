@@ -35,6 +35,7 @@ class CameraInfo(NamedTuple):
     width: int
     height: int
     x_threshold: float = None
+    clip_plane: list = None  # general (nx, ny, nz, tau) half-space; keeps n.x <= tau
     label: list = None
     color_idx: float = None
     timestamp: float = 0.0  # Time dimension for 7DGS
@@ -108,6 +109,7 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
                 width=width,
                 height=height,
                 x_threshold=None,
+                clip_plane=None,
                 label=None,
                 color_idx=None,
                 timestamp=0.0,
@@ -118,9 +120,26 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
 def fetchPly(path):
     plydata = PlyData.read(path)
     vertices = plydata['vertex']
+    names = {p.name for p in vertices.properties}
     positions = np.vstack([vertices['x'], vertices['y'], vertices['z']]).T
-    colors = np.vstack([vertices['red'], vertices['green'], vertices['blue']]).T / 255.0
-    normals = np.vstack([vertices['nx'], vertices['ny'], vertices['nz']]).T
+
+    # Plain colored point cloud (COLMAP / storePly): red/green/blue in [0,255].
+    if {'red', 'green', 'blue'}.issubset(names):
+        colors = np.vstack([vertices['red'], vertices['green'], vertices['blue']]).T / 255.0
+    # Full Gaussian / dGS checkpoint PLY (e.g. a RenderFM init used as
+    # points3d.ply): no RGB channels, but the SH DC term f_dc_{0,1,2} encodes
+    # the base color. Convert SH0 -> RGB so the scene still gets a valid point
+    # cloud (geometry is overridden by --start_checkpoint anyway).
+    elif {'f_dc_0', 'f_dc_1', 'f_dc_2'}.issubset(names):
+        f_dc = np.vstack([vertices['f_dc_0'], vertices['f_dc_1'], vertices['f_dc_2']]).T
+        colors = np.clip(SH2RGB(f_dc), 0.0, 1.0)
+    else:
+        colors = np.ones_like(positions) * 0.5
+
+    if {'nx', 'ny', 'nz'}.issubset(names):
+        normals = np.vstack([vertices['nx'], vertices['ny'], vertices['nz']]).T
+    else:
+        normals = np.zeros_like(positions)
     return BasicPointCloud(points=positions, colors=colors, normals=normals)
 
 def storePly(path, xyz, rgb):
@@ -202,8 +221,19 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
         for idx, frame in enumerate(tqdm(frames, desc="Reading frame metadata")):
             cam_name = os.path.join(path, frame["file_path"] + extension)
 
-            # Read cutting plane parameters if they exist in the JSON
+            # Read cutting plane parameters if they exist in the JSON.
+            # General (n, tau) plane takes precedence; fall back to the legacy
+            # axis-aligned x_threshold t == plane (1, 0, 0, t).
             x_threshold = frame.get("x_threshold", None)
+            plane_normal = frame.get("plane_normal", None)
+            clip_offset = frame.get("clip_offset", None)
+            if plane_normal is not None and clip_offset is not None:
+                clip_plane = [float(plane_normal[0]), float(plane_normal[1]),
+                              float(plane_normal[2]), float(clip_offset)]
+            elif x_threshold is not None:
+                clip_plane = [1.0, 0.0, 0.0, float(x_threshold)]
+            else:
+                clip_plane = None
             color_idx = frame.get("color_idx", None)
             label = frame.get("label", None)
 
@@ -248,6 +278,7 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
                     width=width,
                     height=height,
                     x_threshold=x_threshold,
+                    clip_plane=clip_plane,
                     color_idx=color_idx,
                     label=label,
                     timestamp=timestamp,
