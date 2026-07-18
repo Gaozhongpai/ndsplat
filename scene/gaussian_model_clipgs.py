@@ -55,23 +55,28 @@ class ClipDeformMLP(nn.Module):
     scale offset (3). Kept tiny (2 hidden layers, width 64) as in the ClipGS
     spirit of a lightweight corrector, not a heavy renderer."""
 
-    def __init__(self, width=64, deform_scale=False):
+    def __init__(self, width=64, deform_scale=False, out_scale=1e-3):
         super().__init__()
         self.deform_scale = deform_scale
+        self.out_scale = out_scale     # near-identity at init WITHOUT killing gradients
         out = 6 if deform_scale else 3
         self.net = nn.Sequential(
             nn.Linear(4, width), nn.ReLU(inplace=True),
             nn.Linear(width, width), nn.ReLU(inplace=True),
             nn.Linear(width, out),
         )
-        # start as ~identity: zero the last layer so the deform is a no-op at init
-        nn.init.zeros_(self.net[-1].weight)
+        # Near-identity at init, but KEEP the last-layer weights nonzero so
+        # gradients flow to the earlier layers. (Zeroing the last-layer WEIGHT
+        # would make d(out)/d(prev) = 0, freezing the MLP at zero forever -- the
+        # dead-network trap.) Small random weights + zero bias + out_scale gives a
+        # tiny initial deformation while remaining trainable.
+        nn.init.normal_(self.net[-1].weight, std=1e-3)
         nn.init.zeros_(self.net[-1].bias)
 
     def forward(self, xyz, signed_dist):
         # xyz: [N,3] centers; signed_dist: [N,1] n.x - tau (plane-relative)
         inp = torch.cat([xyz, signed_dist], dim=1)
-        out = self.net(inp)
+        out = self.net(inp) * self.out_scale
         d_xyz = out[:, :3]
         d_logscale = out[:, 3:6] if self.deform_scale else None
         return d_xyz, d_logscale
@@ -186,6 +191,14 @@ class GaussianModel(GaussianModel3DGS):
             clip_plane=None,            # <- no analytic clip; ClipGS is binary
             analytic_clip=False,
             prefiltered=False,
+            # use_tcgs=False -> the standard DIFFERENTIABLE backward. The tcgs
+            # "speedy" path (use_tcgs=True, the default) does not backprop to the
+            # primitive params, so training silently gets zero gradients. This is
+            # the same setting the working dGS sweep uses.
+            use_tcgs=False,
+            tight_snugbox=False,
+            compact_box_mult=1.0,
+            antialiasing=False,
             debug=getattr(pipe, "debug", False),
         )
         rasterizer = TCGSRasterizer(raster_settings=raster_settings)
