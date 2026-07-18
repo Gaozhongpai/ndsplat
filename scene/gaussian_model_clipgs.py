@@ -124,6 +124,30 @@ class GaussianModel(GaussianModel3DGS):
         self.optimizer.param_groups += deform
         return out
 
+    # --- MLP persistence: save_ply/load_ply write/read a sibling deform_mlp.pt --
+    # The base save_ply/load_ply only handle the Gaussians; the trained ClipGS
+    # deformation MLP must be persisted alongside or the rendered/eval'd cut uses
+    # an untrained (near-identity) MLP -> not a faithful ClipGS.
+    def _mlp_path(self, ply_path):
+        return os.path.join(os.path.dirname(ply_path), "deform_mlp.pt")
+
+    def save_ply(self, path):
+        super().save_ply(path)
+        if self.deform_mlp is not None:
+            torch.save({"state_dict": self.deform_mlp.state_dict(),
+                        "deform_scale": self._clipgs_deform_scale},
+                       self._mlp_path(path))
+
+    def load_ply(self, path):
+        super().load_ply(path)
+        mp = self._mlp_path(path)
+        if os.path.isfile(mp):
+            ckpt = torch.load(mp, map_location="cuda")
+            self._clipgs_deform_scale = ckpt.get("deform_scale", self._clipgs_deform_scale)
+            if self.deform_mlp is None:
+                self.deform_mlp = ClipDeformMLP(deform_scale=self._clipgs_deform_scale).cuda()
+            self.deform_mlp.load_state_dict(ckpt["state_dict"])
+
     def _apply_deform(self, xyz, scales, clip_plane_tensor):
         """Apply the ClipGS deformation MLP. Returns (xyz', scales'). No-op if the
         MLP is absent (e.g. at inference before training_setup) or no plane."""

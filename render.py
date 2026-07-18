@@ -40,7 +40,8 @@ def render_wrapper(view, gaussians, pipeline, background, mode, is_test=False, t
     Returns:
         Dictionary containing render outputs
     """
-    if mode == "3dgs":
+    if mode == "3dgs" or mode == "clipgs":
+        # clipgs (ClipGS baseline reimpl) shares the 3dgs render_tcgs signature.
         return gaussians.render_tcgs(view, pipeline, background, is_test=is_test)
     elif "ubs" in mode or "ndgs" in mode or "dgs" in mode or "dbs" in mode:
         gaussians.background = background
@@ -145,6 +146,10 @@ def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_
         GaussianModel = get_gaussian_model(mode)
         if mode == "3dgs":
             gaussians = GaussianModel(dataset.sh_degree)
+        elif mode == "clipgs":
+            # ClipGS baseline reimpl; check before the "dgs" in mode branch.
+            gaussians = GaussianModel(dataset.sh_degree,
+                                      deform_scale=getattr(dataset, "clipgs_deform_scale", False))
         elif "ubs" in mode or "dbs" in mode:
             gaussians = GaussianModel(sh_degree=dataset.sh_degree, input_dim=dataset.input_dim)
         elif "ndgs" in mode:
