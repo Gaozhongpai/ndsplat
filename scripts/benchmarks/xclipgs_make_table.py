@@ -18,7 +18,11 @@ import json
 import os
 from pathlib import Path
 
+# Ours (exact analytic clip) + the real prior-art BASELINE (ClipGS, our reimpl),
+# then the ABLATIONS: MM (moment surrogate), HC (hard cull = ClipGS's operator
+# class in isolation), Ours no-Mip (Mip ablation).
 OPERATORS = [("ours", "Ours (analytic)"),
+             ("clipgs", "ClipGS (reimpl)"),
              ("mm", "MM (moment)"),
              ("hc", "HC (hard cull)"),
              ("ours_nomip", "Ours no-Mip")]

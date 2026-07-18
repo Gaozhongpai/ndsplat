@@ -5,17 +5,22 @@
 # vengine_data XClipGS nerf datasets. Trains every nerf_dataset/<scene>_900 with
 # each operator and saves to vengine_data/output/xclipgs/<operator>/<scene>/.
 #
-# Variants (label -> clip operator + Mip):
-#   ours       = analytic half-space (exact; our contribution) [analytic], Mip ON
-#   mm         = moment-matched truncation (Gaussian surrogate) [moment],  Mip ON
-#   hc         = hard cull (per-primitive keep/drop; prior-art) [hardcull],Mip ON
+# Variants (label -> mode + clip operator + Mip):
+#   ours       = analytic half-space (exact; our contribution) [dgs/analytic], Mip ON
+#   mm         = moment-matched truncation (Gaussian surrogate) [dgs/moment],  Mip ON
+#   hc         = hard cull (per-primitive keep/drop; prior-art) [dgs/hardcull],Mip ON
 #   ours_nomip = analytic (Ours) with Mip-Splatting OFF -- ablation isolating
 #                whether Ours' gain depends on Mip
+#   clipgs     = ClipGS BASELINE, our reimpl: 3DGS backbone + STE trainable
+#                hard-cull + deformation MLP [--mode clipgs]. Its own model, so it
+#                uses --mode clipgs (not dgs) and no Mip. Labeled a baseline, not
+#                their released code. See scene/gaussian_model_clipgs.py.
 #
-# Fixed for all runs:
+# Fixed for the dGS variants (ours/mm/hc/ours_nomip):
 #   1. dGS OPACITY-ONLY : --mode dgs --use_view_dependent_pos False --l_22_inv_init_scale 2.0
-#   2. clip modes       : the loop over {ours, mm, hc, ours_nomip}
+#   2. clip modes       : the loop's --clip_operator
 #   3. MIP              : ON for ours/mm/hc, OFF for ours_nomip (per-label, see MIP[])
+# clipgs uses its own --mode; MODE[] selects per-label.
 #
 # Init: each dataset ships a full dGS RenderFM checkpoint as points3d.ply
 # (xyz + SH + opacity + scale + rot + L_22_inv). We warm-start from it via
@@ -45,15 +50,21 @@ BASE_DIR="${XCLIPGS_DATA:-/data/nerf_dataset}"        # vengine_data/nerf_datase
 OUT_ROOT="${XCLIPGS_OUT:-/data/output/xclipgs}"        # vengine_data/output/xclipgs
 ITERS="${XCLIPGS_ITERS:-30000}"
 
-# opacity-conditioned dGS (shared by all runs). Mip is per-label (see MIP below)
-# so we can ablate it: ours/mm/hc use Mip ON; ours_nomip is Ours with Mip OFF.
-COMMON="--mode dgs --use_view_dependent_pos False --l_22_inv_init_scale 2.0 \
-        --iterations ${ITERS} --eval --disable_viewer"
+# Shared eval flags. The MODEL flags (mode + dGS opacity-only knobs) are per-label
+# via COMMON[] so the clipgs baseline (its own --mode) coexists with the dGS ops.
+EVAL_COMMON="--iterations ${ITERS} --eval --disable_viewer"
+DGS_MODEL="--mode dgs --use_view_dependent_pos False --l_22_inv_init_scale 2.0"
 
-# operator label -> --clip_operator value
-declare -A OPS=( ["ours"]="analytic" ["mm"]="moment" ["hc"]="hardcull" ["ours_nomip"]="analytic" )
-# per-label Mip-Splatting flag: ON for the main 3, OFF for the ours_nomip ablation.
-declare -A MIP=( ["ours"]="--mip3dgs" ["mm"]="--mip3dgs" ["hc"]="--mip3dgs" ["ours_nomip"]="" )
+# per-label MODEL flags (mode + model-specific knobs)
+declare -A COMMON=(
+  ["ours"]="${DGS_MODEL}" ["mm"]="${DGS_MODEL}" ["hc"]="${DGS_MODEL}" ["ours_nomip"]="${DGS_MODEL}"
+  ["clipgs"]="--mode clipgs" )
+# operator label -> --clip_operator value (ignored by clipgs, which uses its own model)
+declare -A OPS=( ["ours"]="analytic" ["mm"]="moment" ["hc"]="hardcull" ["ours_nomip"]="analytic" ["clipgs"]="clipgs" )
+# per-label Mip-Splatting flag: ON for the main dGS 3, OFF for ours_nomip and clipgs.
+declare -A MIP=( ["ours"]="--mip3dgs" ["mm"]="--mip3dgs" ["hc"]="--mip3dgs" ["ours_nomip"]="" ["clipgs"]="" )
+# labels to sweep (override with XCLIPGS_LABELS="clipgs" to run just the baseline)
+LABELS="${XCLIPGS_LABELS:-ours mm hc ours_nomip clipgs}"
 
 # Preflight: the installed tcgs rasterizer MUST expose the clip API, otherwise a
 # stale in-tree _C.so silently ignores the clip planes and all three operators
@@ -79,8 +90,11 @@ run_one() {
     if [ -f "${scene_dir}/points3d.ply" ]; then
         ckpt_arg="--start_checkpoint ${scene_dir}/points3d.ply"
     fi
-    echo "  train: ${scene} [${label} / --clip_operator ${op} / mip=${MIP[${label}]:-off}] -> ${out}"
-    python train.py -s "${scene_dir}" --model_path "${out}" ${COMMON} ${MIP[${label}]} ${ckpt_arg} --clip_operator "${op}"
+    # dGS ops take --clip_operator; clipgs is its own model and ignores it.
+    local clipop_arg="--clip_operator ${op}"
+    [ "${label}" = "clipgs" ] && clipop_arg=""
+    echo "  train: ${scene} [${label} / mode=${COMMON[${label}]} / op=${op} / mip=${MIP[${label}]:-off}] -> ${out}"
+    python train.py -s "${scene_dir}" --model_path "${out}" ${COMMON[${label}]} ${EVAL_COMMON} ${MIP[${label}]} ${ckpt_arg} ${clipop_arg}
     # Render held-out test views at a few iterations (incl. best) + metrics
     for it in 7000 "${ITERS}" best; do
         python render.py -m "${out}" --skip_train --iteration "${it}" || true
@@ -92,7 +106,7 @@ echo "XClipGS training: data=${BASE_DIR}  out=${OUT_ROOT}  iters=${ITERS}"
 for scene_dir in "${BASE_DIR}"/*_900/; do
     [ -d "${scene_dir}" ] || continue
     scene=$(basename "${scene_dir%/}")
-    for label in ours mm hc ours_nomip; do
+    for label in ${LABELS}; do
         echo "==================== ${scene} : ${label} ===================="
         run_one "${scene_dir}" "${scene}" "${label}" "${OPS[${label}]}"
     done
