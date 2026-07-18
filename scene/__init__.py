@@ -33,6 +33,8 @@ def get_gaussian_model(mode: str):
     """
     if mode == "3dgs":  ## original 3DGS
         from scene.gaussian_model import GaussianModel
+    elif mode == "clipgs":  ## ClipGS baseline reimpl: 3DGS + STE hard-cull + deform MLP
+        from scene.gaussian_model_clipgs import GaussianModel
     elif mode == "ubs":  ## UBS (ICLR 2026)
         from scene.gaussian_model_ubs import GaussianModel
     elif mode == "ndgs":  ## N-DGS (supports both 6DGS and 7DGS with time, with merged parametrization)

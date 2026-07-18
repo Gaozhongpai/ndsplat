@@ -64,7 +64,8 @@ def render_wrapper(viewpoint_cam, gaussians, pipe, bg, mode, scaling_modifier=1.
         scaling_modifier: Scaling modifier for rendering
         use_gsplat: If True, use gsplat rasterizer instead of TCGS for UBS/DGS modes
     """
-    if mode == "3dgs":
+    if mode == "3dgs" or mode == "clipgs":
+        # clipgs (ClipGS baseline reimpl) shares the 3dgs render_tcgs signature.
         return gaussians.render_tcgs(viewpoint_cam, pipe, bg, scaling_modifier)
     elif "ubs" in mode or "ndgs" in mode or "dgs" in mode or "dbs" in mode:
         gaussians.background = bg
@@ -89,6 +90,11 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
     # For NDGS mode, pass the use_rot_scale_l_triangle flag
     if mode == "3dgs":
         gaussians = GaussianModel(dataset.sh_degree)
+    elif mode == "clipgs":
+        # ClipGS baseline reimpl (3DGS + STE hard-cull + deform MLP). Must be
+        # checked BEFORE the "dgs" in mode branch ("clipgs" contains "dgs").
+        gaussians = GaussianModel(dataset.sh_degree,
+                                  deform_scale=getattr(dataset, "clipgs_deform_scale", False))
     elif "ubs" in mode:
         gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim)
     elif "dbs" in mode:
