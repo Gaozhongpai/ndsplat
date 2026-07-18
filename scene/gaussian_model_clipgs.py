@@ -21,6 +21,8 @@
 # and no auxiliary network. This file exists only to benchmark ClipGS's approach
 # under our controlled setup.
 
+import os
+
 import torch
 from torch import nn
 
