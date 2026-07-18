@@ -20,7 +20,8 @@ from pathlib import Path
 
 OPERATORS = [("ours", "Ours (analytic)"),
              ("mm", "MM (moment)"),
-             ("hc", "HC (hard cull)")]
+             ("hc", "HC (hard cull)"),
+             ("ours_nomip", "Ours no-Mip")]
 METRICS = ["PSNR", "SSIM", "LPIPS"]
 # higher-is-better for arrow direction / best-bolding
 HIGHER_BETTER = {"PSNR": True, "SSIM": True, "LPIPS": False}
