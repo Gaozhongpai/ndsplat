@@ -481,6 +481,19 @@
   }
   window.addEventListener('resize', drawProfile);
 
+  // On phones, dock the cross-section strip directly UNDER the 3D view (before the
+  // control/operator panels); on wide screens keep it in its original spot at the
+  // bottom, between <main> and the footer.
+  const mqNarrow = window.matchMedia('(max-width: 760px)');
+  const mainEl = document.querySelector('main'), footEl = document.querySelector('footer');
+  function placeProfile() {
+    if (mqNarrow.matches) mainEl.insertBefore(profSec, controls);
+    else document.body.insertBefore(profSec, footEl);
+    drawProfile();
+  }
+  if (mqNarrow.addEventListener) mqNarrow.addEventListener('change', placeProfile);
+  placeProfile();
+
   const tauEl = document.getElementById('tau'), tauVal = document.getElementById('tauval');
   const fill = () => { const p = (+tauEl.value - (+tauEl.min)) / ((+tauEl.max) - (+tauEl.min)) * 100; tauEl.style.setProperty('--fill', p + '%'); };
   function setTau(v) { state.tau = v; tauVal.textContent = v.toFixed(2); updatePlane(); drawProfile(); }
