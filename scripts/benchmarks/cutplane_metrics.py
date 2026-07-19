@@ -8,7 +8,7 @@ metrics that concentrate on the clip plane, over the fixed cut-eval camera set
 
 For every (scene, method) it reports, per camera family:
 
-  REFERENCE (vs vengine GT, restricted to a band straddling the projected plane):
+  REFERENCE (vs vengine GT, restricted to a band around a near-edge line proxy):
     band_psnr / band_ssim / band_lpips  -- surface quality ON the cut face.
 
   NO-REFERENCE (need no GT; expose the operator's failure mode directly):
@@ -16,8 +16,8 @@ For every (scene, method) it reports, per camera family:
                   orbit (consecutive frames within one axis). Ours (exact cut) is
                   stable; hard-cull/ClipGS pop as primitives cross the threshold.
     leak       -- fraction of rendered foreground energy that falls on the CULLED
-                  side of the projected plane line (should be ~0 for a hard
-                  truncation). Grazing views only (plane is a line in-frame).
+                  side of the near-edge line proxy (should be ~0 for a hard
+                  truncation). Grazing views only.
     edge_w     -- 10-90% rise width (px) of the intensity step across the plane
                   line; a sharp exact cut is a step, a fuzzy operator smears it.
 
@@ -108,45 +108,21 @@ def plane_signed_distance_image(frame, W, H, fx, fy, cx, cy):
     n_dot_o = float(o @ n)
     valid = np.abs(n_dot_d) > 1e-8
     t = np.where(valid, (tau - n_dot_o) / np.where(valid, n_dot_d, 1.0), np.nan)
-    # signed distance of the RAY-PLANE intersection is 0 by construction; instead
-    # we want, for the band, the pixels whose *plane line* passes through. Use the
-    # plane's image-space signed distance: evaluate n.x_c-tau at unit depth along
-    # the ray -> proportional to how far the pixel's ray direction tilts off the
-    # plane. Simpler + robust: signed value = (n_dot_o - tau) + depth*n_dot_d at a
-    # reference depth. But for a BAND we want distance to the projected plane LINE.
-    # We compute that separately (plane_line_distance). Here return t (intersection
-    # depth) and validity, plus the constant-side sign of the camera centre.
+    # A ray-plane intersection has zero plane residual by construction. The caller
+    # therefore uses a separate least-squares image-line proxy to define a stable
+    # near-edge coordinate for the deliberately near-grazing cameras.
     side = np.sign(n_dot_o - tau)                      # which half-space the cam is in
     return t, valid, side, (n, tau, o, R)
 
 
 def plane_line_distance(frame, W, H, fx, fy, cx, cy, geom):
-    """Per-pixel SIGNED pixel distance to the PROJECTED clip-plane line, and the
-    line coefficients (a,b,c). This is the projection of the ACTUAL plane
-    {X : n.X = tau} at scene depth -- NOT its vanishing line.
+    """Signed pixel distance to a deterministic near-edge line proxy.
 
-    Derivation. A world point X projects to pixel p ~ P [X;1] with the world->pixel
-    matrix P = K [R_wc | t_wc] (K = diag(fx,fy,1) with principal point cx,cy). A
-    world plane is the homogeneous 4-vector pi = [n; -tau] (so pi.[X;1]=0 iff
-    n.X=tau). Under a projective camera a plane maps to the image line
-        l = P_pinv^T pi ,   P_pinv = pseudo-inverse of P (4x3),
-    equivalently, since points on the plane satisfy pi.[X;1]=0 and X = P_pinv p (+
-    null-space, which lies ON the plane through the camera centre), the line is
-        l ∝ (P M)^{-T} ... -> in practice we form l directly from the 3x4 P and pi
-    using the adjugate. Cleanest closed form: express the plane in CAMERA coords
-    (n_c = R_wc n, d_c = tau - n.o with o the camera centre; a camera-space point
-    Xc satisfies n_c.Xc = d_c). A camera-space plane n_c.Xc = d_c projects (pinhole
-    Xc=(x,y,z), u=fx x/z+cx, v=fy y/z+cy) to
-        n_c[0]*(u-cx)/fx + n_c[1]*(v-cy)/fy + n_c[2] = d_c / z_plane ...
-    but z cancels along the plane's image line exactly when we use the plane's
-    own depth. Substituting Xc = z*((u-cx)/fx,(v-cy)/fy,1) into n_c.Xc=d_c gives
-        z * [ n_c[0](u-cx)/fx + n_c[1](v-cy)/fy + n_c[2] ] = d_c
-    The projected line is where this holds for the plane, i.e. the image locus is
-        n_c[0]*(u-cx)/fx + n_c[1]*(v-cy)/fy + n_c[2] = d_c / z
-    and along the true line z takes the plane depth. The z-INDEPENDENT line is the
-    set where the bracket equals d_c/z for the pixel's own plane-intersection z --
-    which reduces to the linear equation a*u+b*v+c=0 with the d_c term folded in
-    via the homogeneous form below (a,b,c derived from the full 3x4 P·pi adjugate).
+    A general 3D plane projects to a two-dimensional image region, not a unique
+    perspective image line.  For the cut-eval cameras placed 1.5 degrees from
+    edge-on, we define l = pinv(P).T @ pi.  This is the least-squares image line
+    whose back-projected camera plane P.T @ l approximates the clip plane pi.
+    It is used only to construct the grazing-view band and half-image labels.
     """
     n, tau, o, R = geom            # R = c2w rot (camera axes in world, COLMAP)
     R_wc = R.T                     # camera-from-world
@@ -154,9 +130,8 @@ def plane_line_distance(frame, W, H, fx, fy, cx, cy, geom):
     K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1.0]])
     P = K @ np.hstack([R_wc, t_wc.reshape(3, 1)])          # 3x4 world->pixel
 
-    # A world plane pi=[n;-tau] projects to the image line l = P_pinv^T pi (standard
-    # projective result; robust for ALL incidences incl. grazing, unlike projecting
-    # finite plane points which blow up as their depth -> 0). l=(a,b,c): a u+b v+c=0.
+    # Least-squares proxy: l=(a,b,c), with a*u+b*v+c=0. By the pseudoinverse
+    # identity, it minimizes ||P.T@l - pi||_2.
     pi = np.array([n[0], n[1], n[2], -tau], dtype=np.float64)
     l = np.linalg.pinv(P).T @ pi
     a, b, c = float(l[0]), float(l[1]), float(l[2])
@@ -379,7 +354,7 @@ def main():
             # interest -> band = GT foreground (the exposed interior fills the frame).
             band = gt_fg
         else:
-            # Grazing: a strip straddling the projected plane line, restricted to
+            # Grazing: a strip around the near-edge line proxy, restricted to
             # foreground so we score the cut edge, not empty background.
             band = (np.abs(signed_px) <= args.band_px) & gt_fg
 
@@ -467,9 +442,9 @@ def main():
         # show the wrong band/line for the current GT (this bit us with the 8-deg
         # vs 1.5-deg grazing re-render).
         #
-        # Green band = the region the metrics score. Red line = the projected cut
-        # EDGE, drawn ONLY for grazing views: there the plane genuinely projects to
-        # the cut edge and the band straddles it. For perp views the band is the
+        # Green band = the region the metrics score. Red line = the near-edge line
+        # proxy, drawn ONLY for grazing views, where the band straddles it. For
+        # perp views the band is the
         # whole cut face (the plane is face-on) and there is NO meaningful cut line
         # -- a tilted perp view's "line" is just the plane grazing off-frame, which
         # is misleading, so we never draw it.

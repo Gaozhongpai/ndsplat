@@ -41,8 +41,8 @@ GPUs 2–5 only; pin `--cpuset-cpus` to the GPU's CPU block (e.g. gpu2→24-35).
 ### 1a. Cut-eval cameras + clipped GT → `<scene>_cuteval`
 
 Per scene, 3 fixed clip planes (one per voxel axis, at the volume-core midpoint) ×
-2 camera families (5 **perp** = head-on cut face, 5 **graze** = edge-on so the plane
-projects to a line), = 30 views. Ground truth is rendered by vengine with the plane
+2 camera families (5 **perp** = head-on cut face, 5 **graze** = 1.5° from edge-on
+to expose the cut edge), = 30 views. Ground truth is rendered by vengine with the plane
 applied, then converted to a NeRF `transforms_test.json` carrying `plane_normal` +
 `clip_offset` per frame.
 
@@ -154,9 +154,12 @@ the released init-0 silently suppresses near-plane ray-misses).
 
 ### 3a. Band fidelity + leak + edge → `cutplane_results.json`
 
-`cutplane_metrics.py` projects the clip plane into each view
+`cutplane_metrics.py` constructs a deterministic near-edge line proxy
 (`l = pinv(P)ᵀ·[n;−τ]`, oriented off the camera so kept = s<0), restricts to a
-±`band-px` strip (graze) or the GT foreground (perp), and reports per family:
+±`band-px` strip (graze) or the GT foreground (perp), and reports per family.
+The proxy is least-squares (`l` minimizes `||Pᵀl−[n;−τ]||₂`) and is used only
+for cameras placed 1.5° from edge-on; a general perspective plane does not
+project to a unique image line. Reported metrics are:
 band **PSNR/SSIM/LPIPS** (perp, vs GT), **leak** (culled-side method energy where GT
 is background / near-plane fg), **edge spread** (gradient-weighted std of the
 cross-plane luminance change), and **hole/overshoot/cut_error** (pooled energies).
@@ -192,14 +195,22 @@ python scripts/benchmarks/cutplane_cde.py \
 
 ### 3c. CErr3D — geometric mass error (no rendering) → `cerr3d.json`
 
-Closed-form from the trained `.ply`: per Gaussian, kept mass `a·Φ(t)`; HC = whole
-keep/drop by center, MM = moment-matched tail, Ours = 0 by construction. Camera- and
-interior-independent (property of the operator).
+Closed-form on the fixed Ours interior: per Gaussian, kept mass `a·Φ(t)` with
+`t=(τ−n·μ)/sqrt(nᵀΣn)`; HC = whole keep/drop by center, MM = moment-matched tail,
+and Ours = 0 by construction. The script reads the exact planes from each
+`transforms_test.json`, reconstructs full quaternion covariance, and applies the
+persisted Mip-Splatting 3D filter. It is camera-independent but intentionally
+interior-controlled.
 
 ```bash
-python scripts/benchmarks/cutplane_cuterror_3d.py        # ours/mm/hc ladder
-python scripts/benchmarks/cutplane_cuterror_3d_clipgs.py # ClipGS MLP+cull on the ours cloud
+python scripts/benchmarks/cutplane_cuterror_3d.py \
+  --data-root /data --out-root /data/output/xclipgs \
+  --output /data/output/xclipgs/cuteval/cerr3d.json
 ```
+
+ClipGS is excluded from this controlled diagnostic because its learned
+deformation and vanilla-3DGS cloud form a separate system, not an operator on
+the fixed dGS interior.
 
 ### 3d. Sweep-flicker (optional) → `sweep_flicker.json`
 
@@ -235,13 +246,16 @@ renders + metrics), `_swap_interior.sh` (operator swap). `_fix_t2.sh` /
    `gaussians.clip_operator = getattr(dataset, "clip_operator", "analytic")` after
    scene load. **Always confirm the render used the intended operator** (e.g. HC leak
    should be large, not ~0). ClipGS is unaffected (own render path); `cutevalfull`
-   (uncut) and CErr3D (primitive-based) are operator-independent.
+   (uncut) and CErr3D (computed directly from primitives) are unaffected by this
+   render-path bug.
 2. **Stale in-tree `_C.so`** for tcgs/gsplat silently ignores clip planes → all
    operators render identically. `render_cuteval.sh`/`render_cutx.sh` preflight-check
    `analytic_clip` + `clip_plane` in `GaussianRasterizationSettings`; rebuild the
    submodule if it fails.
-3. **plane→line** must use `l = pinv(P)ᵀ·[n;−τ]` (the projected plane, not the
-   vanishing line); orient the sign off the camera (grazing cam sits on the kept side).
+3. **Near-edge proxy** uses `l = pinv(P)ᵀ·[n;−τ]` as a least-squares coordinate
+   only for the 1.5° near-grazing cameras. Do not describe it as the exact
+   perspective projection of a general plane. Orient its sign from the camera,
+   which sits on the kept side.
 4. **perp is face-on** → no meaningful cut line; band = GT foreground, and never draw
    the red debug line on perp overlays.
 5. **overlays must always overwrite** — a stale overlay from a different-geometry
