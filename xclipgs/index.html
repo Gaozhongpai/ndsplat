@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>XClipGS — Real Gaussian-Splatting Clip Demo</title>
+<style>
+  :root{
+    --bg:#0a0d13; --panel:rgba(17,21,30,.72); --panel-solid:#11151e;
+    --stroke:rgba(255,255,255,.09); --stroke-strong:rgba(255,255,255,.16);
+    --ink:#eaeef7; --muted:#93a0b6; --faint:#5f6c82;
+    --accent:#34e2d1; --accent-ink:#0a0d13; --warn:#ffb347; --bad:#ff5d6c;
+    --fsans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --fmono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box} html,body{height:100%;margin:0}
+  body{background:radial-gradient(120% 90% at 50% -10%,#0d1119,var(--bg) 60%);
+    color:var(--ink);font-family:var(--fsans);-webkit-font-smoothing:antialiased;
+    display:flex;flex-direction:column;overflow:hidden}
+  .eyebrow{font-family:var(--fmono);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint);font-weight:600}
+  .eyebrow b{color:var(--accent);font-variant-numeric:tabular-nums;font-weight:700}
+  header{display:flex;align-items:center;justify-content:space-between;gap:16px;
+    padding:14px clamp(14px,3vw,26px);border-bottom:1px solid var(--stroke)}
+  header h1{margin:0;font-size:15px;font-weight:650;letter-spacing:-.01em}
+  header p{margin:2px 0 0;font-size:12.5px;color:var(--muted);max-width:70ch}
+  .badge{font-family:var(--fmono);font-size:10px;letter-spacing:.05em;text-transform:uppercase;
+    color:var(--accent);border:1px solid color-mix(in srgb,var(--accent) 40%,transparent);
+    padding:4px 9px;border-radius:99px;white-space:nowrap}
+  main{position:relative;flex:1 1 auto;min-height:0}
+  canvas{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none}
+  .glass{background:var(--panel);-webkit-backdrop-filter:blur(16px) saturate(1.4);backdrop-filter:blur(16px) saturate(1.4);
+    border:1px solid var(--stroke);border-radius:14px;box-shadow:0 18px 48px -18px rgba(0,0,0,.7)}
+  .controls{position:absolute;left:clamp(12px,2.4vw,22px);bottom:clamp(12px,2.4vw,22px);
+    width:min(340px,86vw);padding:15px;display:flex;flex-direction:column;gap:13px;z-index:4}
+  .ops{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+  .op{cursor:pointer;font-family:var(--fsans);display:flex;flex-direction:column;align-items:center;gap:2px;
+    padding:8px 4px 7px;border-radius:10px;border:1px solid var(--stroke);
+    background:color-mix(in srgb,var(--panel-solid) 60%,transparent);color:var(--muted);
+    font-size:12.5px;font-weight:650;transition:.16s}
+  .op small{font-family:var(--fmono);font-size:8.5px;letter-spacing:.04em;color:var(--faint);text-transform:uppercase}
+  .op:hover{color:var(--ink);border-color:var(--stroke-strong)}
+  .op[aria-selected="true"]{background:var(--accent);color:var(--accent-ink);border-color:transparent}
+  .op[aria-selected="true"] small{color:color-mix(in srgb,var(--accent-ink) 70%,transparent)}
+  label.ctl{display:flex;flex-direction:column;gap:7px}
+  .ctl .eyebrow{display:flex;justify-content:space-between}
+  input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:4px;border-radius:99px;
+    background:linear-gradient(90deg,var(--accent),var(--accent)) no-repeat, color-mix(in srgb,var(--ink) 14%,transparent);
+    background-size:var(--fill,50%) 100%,100% 100%;outline:none;cursor:pointer}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:var(--ink);border:3px solid var(--accent)}
+  input[type=range]::-moz-range-thumb{width:16px;height:16px;border:3px solid var(--accent);border-radius:50%;background:var(--ink)}
+  .row{display:flex;gap:8px}
+  .toggle{flex:1;cursor:pointer;font-size:12.5px;font-weight:600;padding:9px 10px;border-radius:10px;
+    border:1px solid var(--stroke-strong);background:color-mix(in srgb,var(--panel-solid) 55%,transparent);color:var(--ink);transition:.16s}
+  .toggle:hover{border-color:var(--accent);color:var(--accent)}
+  .toggle[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink);border-color:transparent}
+  .info{position:absolute;right:clamp(12px,2.4vw,22px);top:clamp(12px,2.4vw,22px);width:min(320px,86vw);
+    padding:15px 16px;display:flex;flex-direction:column;gap:8px;z-index:4}
+  .info h2{margin:0;font-size:16px;font-weight:650;letter-spacing:-.015em}
+  .info p{margin:0;font-size:12.5px;line-height:1.5;color:var(--muted)}
+  .info b{color:var(--ink);font-weight:600}
+  .bars{display:flex;flex-direction:column;gap:7px;margin-top:3px;padding-top:11px;border-top:1px solid var(--stroke)}
+  .bar{display:grid;grid-template-columns:98px 1fr;align-items:center;gap:10px}
+  .bar span{font-family:var(--fmono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+  .track{height:7px;border-radius:99px;background:color-mix(in srgb,var(--ink) 12%,transparent);overflow:hidden}
+  .track i{display:block;height:100%;width:0;border-radius:99px;transition:width .5s cubic-bezier(.2,.7,.2,1),background .3s}
+  .barnote{margin:3px 0 0;font-size:10px;color:var(--faint);line-height:1.3}
+  @media (prefers-reduced-motion:reduce){.track i{transition:none}}
+  .profile{flex:0 0 auto;border-top:1px solid var(--stroke);padding:11px clamp(14px,3vw,26px) 12px;background:color-mix(in srgb,var(--panel-solid) 55%,transparent)}
+  .prof-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:8px}
+  .prof-sub{margin:3px 0 0;font-size:11.5px;color:var(--muted);line-height:1.4;max-width:64ch}
+  .prof-sub b{color:var(--ink);font-weight:600}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-family:var(--fmono);font-size:10px;letter-spacing:.03em;text-transform:uppercase;color:var(--muted)}
+  .lg{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+  .sw{width:14px;height:3px;border-radius:2px;display:inline-block}
+  .sw-op{background:var(--accent)} .sw-ex{background:var(--faint);height:0;border-top:2px dashed var(--faint)}
+  .sw-leak{background:var(--bad);height:8px;border-radius:2px;opacity:.55}
+  #prof{position:static;display:block;width:100%;height:130px}
+  .status{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;z-index:6;text-align:center;padding:24px}
+  .status .spin{width:34px;height:34px;border-radius:50%;border:3px solid var(--stroke-strong);border-top-color:var(--accent);animation:spin 1s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .status code{font-family:var(--fmono);font-size:11px;color:var(--faint);background:color-mix(in srgb,var(--ink) 8%,transparent);padding:2px 6px;border-radius:5px}
+  .status .drop{cursor:pointer;border:1px dashed var(--stroke-strong);border-radius:12px;padding:16px 22px;color:var(--muted);font-size:13px}
+  .status .drop:hover{border-color:var(--accent);color:var(--ink)}
+  footer{padding:9px clamp(14px,3vw,26px);border-top:1px solid var(--stroke);font-size:11.5px;color:var(--muted)}
+  footer b{font-weight:650}
+  a{color:var(--accent)}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>XClipGS · Real splatting pipeline</h1>
+    <p>A genuine 3D Gaussian-Splatting scene (PlayCanvas engine) clipped by a plane — compare the exact analytic cut against hard-cull and moment surrogates, per pixel.</p>
+  </div>
+  <span class="badge">PlayCanvas · WebGL2</span>
+</header>
+
+<main>
+  <canvas id="app"></canvas>
+
+  <div class="status" id="status">
+    <div class="spin"></div>
+    <div>Loading the Gaussian-Splatting engine…</div>
+    <div class="drop" id="drop">or drop a <code>.ply</code> / <code>.compressed.ply</code> Gaussian scene here</div>
+  </div>
+
+  <section class="glass controls" aria-label="Controls" hidden>
+    <div class="eyebrow">Clip operator</div>
+    <div class="ops" role="tablist">
+      <button class="op" data-mode="0" role="tab" aria-selected="true">Ours<small>analytic</small></button>
+      <button class="op" data-mode="1" role="tab" aria-selected="false">MM<small>moment</small></button>
+      <button class="op" data-mode="2" role="tab" aria-selected="false">HC<small>hard cull</small></button>
+    </div>
+    <label class="ctl">
+      <span class="eyebrow">Plane position <b id="tauval">0.00</b></span>
+      <input id="tau" type="range" min="-1" max="1" step="0.001" value="0" />
+    </label>
+    <div class="row">
+      <button class="toggle" id="axis">Axis: X</button>
+      <button class="toggle" id="sweep" aria-pressed="false">Sweep</button>
+    </div>
+  </section>
+
+  <aside class="glass info" aria-live="polite" hidden>
+    <div class="eyebrow">Operator</div>
+    <h2 id="opname">Ours — analytic half-space</h2>
+    <p id="opdesc"></p>
+    <div class="bars">
+      <div class="bar"><span>Edge error</span><div class="track"><i id="b-edge"></i></div></div>
+      <div class="bar"><span>Leak past plane</span><div class="track"><i id="b-leak"></i></div></div>
+      <div class="bar"><span>Popping</span><div class="track"><i id="b-pop"></i></div></div>
+      <p class="barnote">lower is better · qualitative, from the paper's cut-face evaluation</p>
+    </div>
+  </aside>
+</main>
+
+<section class="profile" aria-label="1-D density profile across the plane" hidden>
+  <div class="prof-head">
+    <div>
+      <div class="eyebrow">Cross-section · one Gaussian along the plane normal</div>
+      <p class="prof-sub" id="prof-sub">Density kept by the operator vs. the exact truncation. Red area is material on the <b>culled</b> side — leak or overshoot.</p>
+    </div>
+    <div class="legend">
+      <span class="lg"><i class="sw sw-op"></i>this operator</span>
+      <span class="lg"><i class="sw sw-ex"></i>exact (ours)</span>
+      <span class="lg"><i class="sw sw-leak"></i>past plane</span>
+    </div>
+  </div>
+  <canvas id="prof" height="130" aria-label="Density cross-section chart"></canvas>
+</section>
+
+<footer>
+  Real per-pixel splat rasterization · the clip is injected into the gsplat fragment shader.
+  <b>Ours</b> multiplies each splat's opacity by the exact Gaussian-CDF factor of its distance to the plane; <b>HC</b> keeps/drops by centre; <b>MM</b> shifts + fades. Provide your own <code>.ply</code> for your own scene.
+</footer>
+
+<!-- PlayCanvas engine (CDN — fine for a hosted page, unlike a CSP-sandboxed artifact).
+     Pinned to 2.7.4: the clip is injected into the global pc.shaderChunks
+     gsplatVS/gsplatPS whose anchors are verified against this exact version. -->
+<script src="https://code.playcanvas.com/playcanvas-2.7.4.min.js"></script>
+<script src="assets/demo.js"></script>
+</body>
+</html>

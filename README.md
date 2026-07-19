@@ -19,9 +19,12 @@ and situates it within the broader lineage:
 ```
 ndsplat-web/
 ├── index.html              # single-page site
-└── assets/
-    ├── css/style.css       # styles
-    └── js/main.js          # nav, scroll reveal, copy-to-clipboard
+├── assets/
+│   ├── css/style.css       # styles
+│   └── js/main.js          # nav, scroll reveal, copy-to-clipboard
+└── xclipgs/                # live Gaussian-clipping demo (PlayCanvas, static)
+    ├── index.html          #   → hosted at <pages-url>/xclipgs/
+    └── assets/demo.js      #   exact per-ray CDF clip vs MM / HC, see its README
 ```
 
 The site is fully static with no build step — open `index.html` directly, or serve the
