@@ -259,3 +259,52 @@ class GaussianModel(GaussianModel3DGS):
             "visibility_filter": radii > 0,
             "radii": radii,
         }
+
+    # --- interactive viewer hook (view.py / GaussianViewer) -------------------
+    def view_tcgs(self, camera_state, render_tab_state):
+        """Drive the viser viewer. Mirrors the dgs model's view_tcgs but calls this
+        class's render_tcgs (which applies the ClipGS deformation MLP + STE cull).
+        The viewer's x_threshold slider becomes an x-axis clip plane [1,0,0,tau];
+        tau=inf (slider at max) means no cut."""
+        import math
+        import time
+        import numpy as np
+        from types import SimpleNamespace
+        from scene.cameras import Camera
+        from scene.gaussian_viewer import GaussianRenderTabState
+        assert isinstance(render_tab_state, GaussianRenderTabState)
+        start = time.time()
+
+        W = (render_tab_state.render_width if render_tab_state.preview_render
+             else render_tab_state.viewer_width)
+        H = (render_tab_state.render_height if render_tab_state.preview_render
+             else render_tab_state.viewer_height)
+
+        c2w = torch.from_numpy(camera_state.c2w).float().cuda()
+        K = torch.from_numpy(camera_state.get_K((W, H))).float().cuda()
+        fx, fy = K[0, 0], K[1, 1]
+        FoVx = 2 * math.atan(W / (2 * fx))
+        FoVy = 2 * math.atan(H / (2 * fy))
+        w2c = torch.linalg.inv(c2w)
+        R = w2c[:3, :3].cpu().numpy().T
+        T = w2c[:3, 3].cpu().numpy()
+
+        xt = render_tab_state.x_threshold
+        cam = Camera(colmap_id=0, R=R, T=T, FoVx=FoVx, FoVy=FoVy,
+                     image=torch.zeros((3, H, W)), gt_alpha_mask=None,
+                     image_name="viewer", uid=0, x_threshold=xt, data_device="cuda")
+        # x_threshold -> general clip plane; inf/None = no cut.
+        cam.clip_plane = None if (xt is None or not math.isfinite(xt)) else [1.0, 0.0, 0.0, float(xt)]
+
+        self.background = torch.tensor(render_tab_state.backgrounds, device="cuda") / 255.0
+        pipe = SimpleNamespace(debug=False, convert_SHs_python=False)
+        out = self.render_tcgs(cam, pipe, self.background, is_test=True)
+
+        img = out["render"]
+        if img.shape[0] == 1:
+            img = img.repeat(3, 1, 1)
+        render_tab_state.total_count_number = int(self.get_xyz.shape[0])
+        render_tab_state.rendered_count_number = int(out["visibility_filter"].sum().item())
+        dt = time.time() - start
+        render_tab_state.fps = (1.0 / dt) if dt > 0 else 0.0
+        return img.permute(1, 2, 0).detach().cpu().numpy()

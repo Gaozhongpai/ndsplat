@@ -176,6 +176,14 @@ def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_
             load_test_cameras=not skip_test,
         )
 
+        # Operator-swap protocol: the render-time clip operator is independent of
+        # the trained checkpoint (only train.py used clip_operator before). Setting
+        # it here lets a single trained interior be rendered through any clip rule
+        # ("analytic"/"moment"/"hardcull"/"rara"), isolating the operator. Default
+        # "analytic" reproduces the original render behavior. dgs/ndgs render_tcgs
+        # reads self.clip_operator; 3dgs/clipgs ignore it (own paths).
+        gaussians.clip_operator = getattr(dataset, "clip_operator", "analytic")
+
         # Set background color
         bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")

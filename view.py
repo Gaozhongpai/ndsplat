@@ -24,18 +24,35 @@ def viewing(model_params, viewer_params, ply_path, input_dim=6, auto_camera=True
     # Get the appropriate GaussianModel class based on mode
     GaussianModel = get_gaussian_model(model_params.mode)
 
+    # Construct the model from the TRAINED config (model_params), mirroring
+    # render.py::render_sets so the viewer matches the checkpoint exactly. Reading
+    # these from model_params (not viewer defaults) is essential: a 7DGS model, an
+    # ndgs model with learnable_lambda_opc, or a clipgs model with deform_scale must
+    # be built the way it was trained or load_ply mismatches / renders wrong.
+    # input_dim: prefer the trained value; fall back to the --input_dim arg only if
+    # model_params.input_dim is unset (e.g. viewing a raw ply with no cfg_args).
+    dim = getattr(model_params, "input_dim", None) or input_dim
+
     # Initialize model
     if model_params.mode == "3dgs":
         gaussian_model = GaussianModel(model_params.sh_degree)
+    elif model_params.mode == "clipgs":
+        # ClipGS baseline (STE hard-cull + deformation MLP); its own view_tcgs.
+        gaussian_model = GaussianModel(
+            model_params.sh_degree,
+            deform_scale=getattr(model_params, "clipgs_deform_scale", False))
     elif "ubs" in model_params.mode or "dbs" in model_params.mode:
-        gaussian_model = GaussianModel(model_params.sh_degree, input_dim=input_dim)
+        gaussian_model = GaussianModel(model_params.sh_degree, input_dim=dim)
     elif "ndgs" in model_params.mode:
-        gaussian_model = GaussianModel(model_params.sh_degree, input_dim=input_dim,
-                                       use_rot_scale_l_triangle=model_params.use_rot_scale_l_triangle)
+        gaussian_model = GaussianModel(
+            model_params.sh_degree, input_dim=dim,
+            use_rot_scale_l_triangle=model_params.use_rot_scale_l_triangle,
+            learnable_lambda_opc=model_params.learnable_lambda_opc,
+            lambda_opc=model_params.lambda_opc)
     elif "dgs" in model_params.mode:
         gaussian_model = GaussianModel(
             model_params.sh_degree,
-            input_dim=input_dim,
+            input_dim=dim,
             use_view_dependent_pos=model_params.use_view_dependent_pos,
             use_opacity_pos_decouple=model_params.use_opacity_pos_decouple,
             l_22_inv_init_scale=model_params.l_22_inv_init_scale,
@@ -48,6 +65,14 @@ def viewing(model_params, viewer_params, ply_path, input_dim=6, auto_camera=True
     # Load model from file
     print(f"Loading model from {ply_path}")
     gaussian_model.load_ply(ply_path)
+
+    # XClipGS clip operator for dgs models (analytic=Ours, moment=MM, hardcull=HC).
+    # render_tcgs / view_tcgs read self.clip_operator; without this the viewer would
+    # always use the default 'analytic', so HC/MM would look identical to Ours.
+    # NB: "clipgs" contains "dgs" but is its OWN model (STE+MLP), not an operator.
+    if "dgs" in model_params.mode and model_params.mode != "clipgs":
+        gaussian_model.clip_operator = getattr(model_params, "clip_operator", "analytic")
+        print(f"  clip_operator = {gaussian_model.clip_operator}")
 
     # Set background color
     bg_color = [1, 1, 1] if model_params.white_background else [0, 0, 0]
@@ -93,7 +118,7 @@ def viewing(model_params, viewer_params, ply_path, input_dim=6, auto_camera=True
         render_fn=lambda camera_state, render_tab_state: gaussian_model.view_tcgs(
             camera_state, render_tab_state
         ),
-        input_dim=input_dim,
+        input_dim=dim,
         mode="rendering",
         share_url=share_url,
         scene_bounds=scene_bounds,

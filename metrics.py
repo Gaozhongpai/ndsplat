@@ -11,6 +11,8 @@
 
 import json
 import os
+import sys
+import traceback
 from argparse import ArgumentParser
 from pathlib import Path
 
@@ -26,15 +28,25 @@ from fused_ssim import fused_ssim
 
 
 def readImages(renders_dir, gt_dir):
-    """Read rendered and ground truth images from directories."""
+    """Read rendered and ground truth images from directories.
+
+    Renders and GT are paired by identical filename (render.py writes both as
+    {idx:05d}.png). Files are sorted so per-view results are in a stable, frame
+    order across runs; a missing GT for a render is a hard error (rather than a
+    silent skip) so a truncated GT set cannot quietly bias the averages."""
     renders = []
     gts = []
     image_names = []
-    png_files = [f for f in os.listdir(renders_dir) if f.endswith('.png')]
+    png_files = sorted(f for f in os.listdir(renders_dir) if f.endswith('.png'))
 
     for fname in tqdm(png_files, desc="Loading images"):
+        gt_file = gt_dir / fname
+        if not gt_file.exists():
+            raise FileNotFoundError(
+                f"render '{fname}' has no matching GT in {gt_dir}; "
+                f"renders and GT must be name-aligned ({{idx:05d}}.png)")
         render = Image.open(renders_dir / fname)
-        gt = Image.open(gt_dir / fname)
+        gt = Image.open(gt_file)
         renders.append(tf.to_tensor(render).unsqueeze(0)[:, :3, :, :].cuda())
         gts.append(tf.to_tensor(gt).unsqueeze(0)[:, :3, :, :].cuda())
         image_names.append(fname)
@@ -53,6 +65,7 @@ def evaluate(model_paths):
     """
     full_dict = {}
     per_view_dict = {}
+    failed = []  # scenes whose metrics could not be computed (surfaced at the end)
 
     print("")
 
@@ -92,17 +105,23 @@ def evaluate(model_paths):
                 # Load images
                 renders, gts, image_names = readImages(renders_dir, gt_dir)
 
-                # Load point cloud to count Gaussians
-                # Replace only the final path components to avoid replacing text in scene names
-                method_name = method_dir.name  # e.g., "ours_7000"
-                iteration_name = method_name.replace("ours_", "iteration_")
-                ply_path = method_dir.parent.parent / "point_cloud" / iteration_name / "point_cloud.ply"
-                ply_path = str(ply_path)
-                mesh = trimesh.load(ply_path)
-                num_gaussians = mesh.vertices.shape[0]
-
-                full_dict[scene_dir][method].update({"Number": num_gaussians})
-                print(f"  Number: {num_gaussians}")
+                # Load point cloud to count Gaussians (auxiliary info, not a metric).
+                # The method dir is "<label>_<iteration>" (e.g. "ours_7000",
+                # "ours_best"); the ply lives at point_cloud/iteration_<iteration>/.
+                # Derive the iteration from the last "_" segment rather than assuming
+                # an "ours_" prefix, and make a missing/unreadable ply a warning, not
+                # a scene-killing error (the image metrics below do not need it).
+                method_name = method_dir.name
+                iteration_tag = method_name.rsplit("_", 1)[-1]  # 7000 / best / 30000
+                ply_path = str(method_dir.parent.parent / "point_cloud"
+                               / f"iteration_{iteration_tag}" / "point_cloud.ply")
+                try:
+                    mesh = trimesh.load(ply_path)
+                    num_gaussians = mesh.vertices.shape[0]
+                    full_dict[scene_dir][method].update({"Number": num_gaussians})
+                    print(f"  Number: {num_gaussians}")
+                except Exception as e:
+                    print(f"  [warn] Gaussian count unavailable ({ply_path}): {e}")
 
                 # Add training time if available
                 if training_time is not None:
@@ -165,7 +184,19 @@ def evaluate(model_paths):
                 json.dump(per_view_dict[scene_dir], fp, indent=True)
 
         except Exception as e:
+            # Keep going so one broken scene does not abort the rest, but make the
+            # failure LOUD: print the full traceback and record it, then report all
+            # failures at the end with a nonzero exit. A silently skipped scene must
+            # never disappear from the results unnoticed.
             print(f"Unable to compute metrics for model {scene_dir}: {e}")
+            traceback.print_exc()
+            failed.append((scene_dir, repr(e)))
+
+    if failed:
+        print("\n==== metrics FAILED for %d scene(s) ====" % len(failed))
+        for sd, err in failed:
+            print(f"  {sd}: {err}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
