@@ -75,6 +75,21 @@
   .sw-op{background:var(--accent)} .sw-ex{background:var(--faint);height:0;border-top:2px dashed var(--faint)}
   .sw-leak{background:var(--bad);height:8px;border-radius:2px;opacity:.55}
   #prof{position:static;display:block;width:100%;height:130px}
+  /* ---- mobile: no overlays — canvas gets a fixed band, panels stack below ---- */
+  @media (max-width:760px){
+    html,body{height:auto;min-height:100%}
+    body{overflow-y:auto;overflow-x:hidden}
+    header{padding:10px 14px}
+    header p{display:none}
+    .badge{display:none}
+    main{flex:none;height:auto}
+    main canvas{position:static;height:46vh}
+    .status{bottom:auto;height:46vh}
+    .controls,.info{position:static;width:auto;margin:10px 12px 0}
+    .info{margin-bottom:4px}
+    #prof{height:105px}
+    footer{font-size:10.5px}
+  }
   .status{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;z-index:6;text-align:center;padding:24px}
   .status .spin{width:34px;height:34px;border-radius:50%;border:3px solid var(--stroke-strong);border-top-color:var(--accent);animation:spin 1s linear infinite}
   @keyframes spin{to{transform:rotate(360deg)}}

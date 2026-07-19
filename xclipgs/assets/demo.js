@@ -254,9 +254,27 @@
     cam.setPosition(target.x + x, target.y + y, target.z + z);
     cam.lookAt(target);
   }
-  canvas.addEventListener('pointerdown', e => { dragging = true; autoOrbit = false; lx = e.clientX; ly = e.clientY; canvas.setPointerCapture(e.pointerId); });
-  canvas.addEventListener('pointermove', e => { if (!dragging) return; az -= (e.clientX - lx) * 0.006; el += (e.clientY - ly) * 0.006; el = Math.max(-1.4, Math.min(1.4, el)); lx = e.clientX; ly = e.clientY; applyCam(); });
-  canvas.addEventListener('pointerup', () => dragging = false);
+  // one pointer = orbit, two pointers = pinch zoom (mobile)
+  const pts = new Map(); let pinchD = 0;
+  canvas.addEventListener('pointerdown', e => {
+    canvas.setPointerCapture(e.pointerId); pts.set(e.pointerId, [e.clientX, e.clientY]); autoOrbit = false;
+    if (pts.size === 1) { dragging = true; lx = e.clientX; ly = e.clientY; } else { dragging = false; pinchD = 0; }
+  });
+  canvas.addEventListener('pointermove', e => {
+    if (!pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, [e.clientX, e.clientY]);
+    if (pts.size === 2) {
+      const [a, b] = [...pts.values()], d = Math.hypot(a[0] - b[0], a[1] - b[1]);
+      if (pinchD > 0) rad = Math.max(1.2, Math.min(8, rad * pinchD / d));
+      pinchD = d; applyCam(); return;
+    }
+    if (!dragging) return;
+    az -= (e.clientX - lx) * 0.006; el += (e.clientY - ly) * 0.006; el = Math.max(-1.4, Math.min(1.4, el));
+    lx = e.clientX; ly = e.clientY; applyCam();
+  });
+  const endPointer = e => { pts.delete(e.pointerId); dragging = false; pinchD = 0; };
+  canvas.addEventListener('pointerup', endPointer);
+  canvas.addEventListener('pointercancel', endPointer);
   canvas.addEventListener('wheel', e => { e.preventDefault(); rad = Math.max(1.2, Math.min(8, rad * (1 + Math.sign(e.deltaY) * 0.08))); applyCam(); }, { passive: false });
 
   /* ---------- clip state ---------- */
