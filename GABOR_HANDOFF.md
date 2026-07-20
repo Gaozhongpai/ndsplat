@@ -318,6 +318,52 @@ the topology-growth path only if the branch will be reused beyond the verified
 fixed-topology, unclipped ablation; derive the complex-CDF clip only if exact
 Gabor clipping becomes a research requirement.
 
+## v3: EXACT half-space clipping of the Gabor band (2026-07-20)
+
+The one remaining approximation — the unclipped cosine when a plane crosses an
+active atom — is now closed in closed form (tcgs `bbd2054`, ndsplat `5a67631`,
+`0d0deb2`-series fix): the clipped, Gabor-modulated ray integral is
+
+    alpha = op * G(d) * [ Phi(l) + amp_eff * Re{ e^{i m} * Phi_c(l, b) } ],
+    Phi_c(l, b) = 0.5 * erfc(-(l - i b)/sqrt(2)),
+
+the complex-erf (Faddeeva) generalisation of the paper's Phi(l), with ONE new
+per-splat scalar b = Cov(clip coord, wave phase | pixel)/s, computed
+differentiably in the Python projection. CUDA evaluates Phi_c with a Humlicek
+w4 approximation (4.5e-5 vs scipy wofz); backward derivatives are the analytic
+complex Gaussian (no Faddeeva needed). Verification: closed form vs numerical
+line integration ~1e-10 (`gabor_projection_check.py` check 3); CUDA vs a
+wofz-backed float64 autograd reference ~3e-6 incl. d/db; amp=0 parity
+bit-exact on intact AND clipped heart views; FD-verified amp grads on a real
+clipped view (ratio ~1.0). Exact path: Gaussian kernel + active plane +
+gabor_b buffer; beta kernel and planeless views keep the approximate path
+bit-for-bit.
+
+**War story (first v3 run died at PSNR 12.6):** b is a ratio of two fp32
+Schur-complement DIFFERENCES; for splats whose plane nearly contains the ray,
+cancellation noise blew |b| to 7.6e3 (Cauchy-Schwarz bounds it by sigma_xi
+<= 3) -> e^{b^2/2} overflow -> one NaN -> every splat killed via
+fmaxf(NaN,0)=0 -> black renders with finite flat loss. No synthetic test
+could catch it (none computed b from real degenerate geometry). Fix: clamp
+|b| <= sigma_xi (a mathematical no-op) + a CUDA-side guard.
+
+**Result — the exact operator changes NOTHING on heart (hypothesis refuted):**
+
+   | model            | all     | intact  | clipped |
+   |------------------|---------|---------|---------|
+   | v2 approx (7k)   | 29.3423 | 31.2350 | 27.4496 |
+   | v3 exact  (7k)   | 29.3418 | 31.2341 | 27.4496 |
+
+   v3 - v2 = -0.0005 / -0.0009 / **-0.0000** dB. The intact-vs-clipped gain
+   gap (+0.198 vs +0.081) is therefore NOT the clip approximation's fault:
+   cut-face error is dominated by terms a footprint modulation cannot fix,
+   exact or not, and each fit optimizes its own parameters self-consistently
+   around its operator. The exact operator's value is (a) correctness — the
+   closed form exists, is implemented, and removes the asterisk from the
+   method; (b) potential XClipGS supplement material (exact clipping extends
+   to Gabor-modulated Gaussians via the complex error function); NOT quality
+   on this content. Output: `/data/output/xclipgs/gabor/heart_900_resonly_v3/`.
+
 ## Beta-kernel comparison: dBS-SH and dbs-gabor (2026-07-20)
 
 Question: is the Beta kernel (envelope-shape control) a better capacity lever
