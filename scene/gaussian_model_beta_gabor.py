@@ -308,6 +308,13 @@ class GaussianModel(DBSGaussianModel):
             self._gabor_omega[dead_indices] = self._whitened_omega(dead_indices)
             self._gabor_phase[dead_indices] = 0.0
             self._gabor_amp[dead_indices] = 0.0
+            # Also reset the gabor Adam moments at the relocated slots.
+            for group in self.optimizer.param_groups:
+                if group.get("name") in {"gabor_omega", "gabor_phase", "gabor_amp"}:
+                    state = self.optimizer.state.get(group["params"][0])
+                    if state:
+                        state["exp_avg"][dead_indices] = 0
+                        state["exp_avg_sq"][dead_indices] = 0
 
     def add_new_gs(self, cap_max):
         current_num_points = self._opacity.shape[0]
@@ -330,10 +337,65 @@ class GaussianModel(DBSGaussianModel):
         return num_gs
 
     def replace_tensors_to_optimizer(self, inds=None):
-        optimizable_tensors = super().replace_tensors_to_optimizer(inds)
+        # The dbs base builds its tensors_dict from a fixed attribute list and
+        # then indexes tensors_dict[group.name] for EVERY optimizer group with
+        # no membership guard — with the gabor groups registered that is a
+        # KeyError: 'gabor_omega'. Reimplemented here with the gabor entries
+        # included (found by external review, 2026-07-20).
+        tensors_dict = {
+            "xyz": self._xyz,
+            "mean": self._mean,
+            "f_dc": self._features_dc,
+            "f_rest": self._features_rest,
+            "opacity": self._opacity,
+            "beta": self._beta,
+            "scale": self._scale,
+            "l_triangle": self._l_triangle,
+            "L_22_inv": self._L_22_inv,
+            "v_12": self._v_12,
+            "gabor_omega": self._gabor_omega,
+            "gabor_phase": self._gabor_phase,
+            "gabor_amp": self._gabor_amp,
+        }
+        optimizable_tensors = {}
+        for group in self.optimizer.param_groups:
+            assert len(group["params"]) == 1
+            if group["name"] not in tensors_dict:
+                continue
+            tensor = tensors_dict[group["name"]]
+            if tensor.numel() == 0:
+                optimizable_tensors[group["name"]] = group["params"][0]
+                continue
+            stored_state = self.optimizer.state.get(group["params"][0], None)
+            if stored_state is not None:
+                if inds is not None:
+                    stored_state["exp_avg"][inds] = 0
+                    stored_state["exp_avg_sq"][inds] = 0
+                else:
+                    stored_state["exp_avg"] = torch.zeros_like(tensor)
+                    stored_state["exp_avg_sq"] = torch.zeros_like(tensor)
+                del self.optimizer.state[group["params"][0]]
+                group["params"][0] = nn.Parameter(tensor.requires_grad_(True))
+                self.optimizer.state[group["params"][0]] = stored_state
+            else:
+                group["params"][0] = nn.Parameter(tensor.requires_grad_(True))
+            optimizable_tensors[group["name"]] = group["params"][0]
+
+        self._xyz = optimizable_tensors["xyz"]
+        self._mean = optimizable_tensors["mean"]
+        self._features_dc = optimizable_tensors["f_dc"]
+        self._features_rest = optimizable_tensors["f_rest"]
+        self._opacity = optimizable_tensors["opacity"]
+        self._beta = optimizable_tensors["beta"]
+        self._scale = optimizable_tensors["scale"]
+        self._l_triangle = optimizable_tensors["l_triangle"]
+        self._L_22_inv = optimizable_tensors["L_22_inv"]
+        if "v_12" in optimizable_tensors:
+            self._v_12 = optimizable_tensors["v_12"]
         for attr, name, _ in self._GABOR_SPECS:
             if name in optimizable_tensors:
                 setattr(self, attr, optimizable_tensors[name])
+        torch.cuda.empty_cache()
         return optimizable_tensors
 
     # ---- rendering -------------------------------------------------------

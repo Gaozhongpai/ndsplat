@@ -216,3 +216,109 @@ matched 270,627 primitives):
 **Conclusion unchanged:** the improved parameterization is real (+56% more gain,
 faster convergence) but the absolute ceiling on smooth CT is too low to justify
 adopting Gabor for RenderFM.
+
+## Independent implementation review (2026-07-20)
+
+Reviewed `ndsplat` at `149631d`, `tcgs_speedy_rasterizer` at `7137219`, and
+the upstream Gabor Fields repository at `009816f`.
+
+**Verdict:** the fixed-topology, unclipped heart experiment is technically
+sound, and its reported quality result is credible. The branch is not yet a
+general densifying Gabor model, an exact clipped-Gabor implementation, or a
+faithful port of the complete Gabor Fields system.
+
+### Verified behavior
+
+- `scripts/tests/gabor_projection_check.py` passed all trials. The affine-EWA
+  world-to-screen Jacobian matched finite differences, and the projected Gabor
+  matched numerical line integration with maximum error about `6.5e-10`.
+- The four CUDA Gabor configurations in `test_cutting_plane.py` passed against
+  the float64 reference, including amplitude bootstrap, oblique clipping under
+  the implemented approximation, and the beta-kernel path.
+- `scripts/tests/gabor_gradflow_check.py` passed on the 270,627-primitive heart
+  checkpoint: amplitude gradients bootstrap at zero, world-frequency and phase
+  gradients become active for nonzero amplitude, the packed band changes with
+  view, and the whitened-frequency clamp behaves as implemented.
+- `scripts/tests/gabor_heart_parity.py` confirmed bitwise-identical rendering
+  between dGS and dGS-Gabor at zero amplitude on a real 1600x1600 view.
+
+These checks support the `+0.14 dB` result for the exact protocol used here:
+warm-started residual-only fitting, fixed topology, and no active clip plane.
+
+### Known correctness boundaries
+
+1. **Densification and MCMC growth are broken.** `densify_and_clone`,
+   `densify_and_split`, and `add_new_gs` place extension rows in
+   `_pending_new_gabor`, but the dynamically dispatched
+   `densification_postfix()` replaces that value with `None`. The base optimizer
+   then requests a missing `gabor_omega` extension. This was reproduced on the
+   heart checkpoint by selecting one primitive for cloning:
+
+   ```text
+   KeyError: 'gabor_omega'
+   ```
+
+   The reported heart fits are unaffected because they use
+   `--densify_until_iter 0`. Before using ordinary or MCMC densification, pass
+   the new Gabor rows explicitly through `densification_postfix()` and add
+   clone, split, add, relocate, prune, and optimizer-state lifecycle tests.
+
+2. **Half-space clipping is approximate for an active Gabor.** The projected
+   cosine is exact for the unclipped affine-EWA footprint. When a plane crosses
+   an oscillatory atom, the code multiplies that footprint by the Gaussian
+   `clipPhi`; the true clipped-Gabor integral requires a complex error function
+   (Faddeeva). The oblique CUDA test proves agreement with the implemented
+   approximation, not with that exact integral. This is harmless for the
+   no-clip heart experiment but is insufficient for claiming exact XClipGS
+   clipping of Gabor atoms.
+
+3. **This is a constrained, Gabor-inspired residual rather than a Gabor Fields
+   port.** Upstream uses independent Gaussian-base and Gabor-residual
+   primitives with separate centers, scales, orientations, signed opacities,
+   frequencies, primitive budgets, and staged pyramid training. This branch
+   instead attaches one co-located, nonnegative modulation to each existing dGS
+   primitive and shares its envelope, opacity, color, and center. It therefore
+   answers the narrower question: "Does one projected oscillatory residual per
+   dGS primitive improve this medical volume?"
+
+4. **The frequency bounds are adapted, not identical to upstream.** Upstream
+   bounds a scalar whitened frequency with `BoundedAdam`; this branch bounds the
+   norm of an arbitrary 3D whitened wave vector by post-step rescaling without
+   resetting Adam moments. The `[0.5, 3.0]` interval is reasonable for this
+   experiment, but documentation should not imply an identical parameterization
+   or optimizer rule.
+
+### Review conclusion
+
+Keep the experimental result and the decision not to adopt Gabor for RenderFM.
+Describe the branch as a **projected Gabor residual** or **Gabor-inspired
+residual modulation**, not as a complete implementation of Gabor Fields. Fix
+the topology-growth path only if the branch will be reused beyond the verified
+fixed-topology, unclipped ablation; derive the complex-CDF clip only if exact
+Gabor clipping becomes a research requirement.
+
+### Response to review (2026-07-20, same day)
+
+Point 1 (growth paths broken) — **confirmed and FIXED**:
+- `dgs-gabor`: `densification_postfix` popped `new_gabor` with a `None`
+  default, clobbering the `_pending_new_gabor` stash that the overridden
+  clone/split/add paths set before the base dynamically dispatched back into
+  the override → `KeyError: 'gabor_omega'` on every growth op. Now only
+  touches the stash when the kwarg is explicitly present. Also resets the
+  gabor Adam moments at relocated slots (the dgs base `replace` skips groups
+  it does not know).
+- `dbs-gabor` had a sibling bug: the dbs base `replace_tensors_to_optimizer`
+  indexes every optimizer group with no membership guard → same KeyError on
+  the MCMC paths. Reimplemented in the subclass with the gabor entries.
+- New `scripts/tests/gabor_lifecycle_check.py` exercises
+  clone → split → prune → relocate → add_new_gs → post-growth optimizer step
+  with row-count/aliasing/Adam-state invariants after every op, for BOTH
+  model families: **ALL PASS**. (The prior fits were unaffected —
+  `--densify_until_iter 0` never exercised growth.)
+
+Points 2-4 (approximate clip for active atoms; Gabor-inspired residual, not a
+port; bounds adapted via post-step norm rescaling, not upstream's scalar
+BoundedAdam) — **agreed**; terminology adjusted here and in the model header:
+this branch is a **projected Gabor residual**. The clip statement stands as
+documented: exact Gaussian-envelope clip, unclipped cosine, approximate when a
+plane crosses an active atom.

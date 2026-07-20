@@ -1,8 +1,11 @@
 #
 # Residual Gabor extension of the Full DGS model (dgs base + additive Gabor band).
 #
-# Design (mirrors the Gabor Fields paper: low-pass Gaussian base + residual
-# Gabor kernels):
+# Design (a PROJECTED GABOR RESIDUAL, inspired by the Gabor Fields paper's
+# low-pass Gaussian base + residual Gabor kernels — NOT a port: upstream uses
+# independent residual primitives with their own centers/envelopes/signed
+# opacities and staged pyramid training; here one co-located modulation rides
+# each existing dGS primitive and shares its envelope, opacity, color, center):
 #   - The dGS base (scene/gaussian_model_dgs.py) is the Gaussian base. Its
 #     parameters, save/load and forward behaviour are UNCHANGED.
 #   - On top of the base each Gaussian carries a residual Gabor band: a cosine
@@ -425,12 +428,17 @@ class GaussianModel(DGSGaussianModel):
         )
 
     def densification_postfix(self, *args, **kwargs):
-        # Base builds the cat dict from its own param names. We need to feed the
-        # gabor extension tensors too. The base signature does not know about
-        # gabor, so we pop them from kwargs and add after.
-        new_gabor = kwargs.pop("new_gabor", None)
-        # Temporarily stash so cat_tensors_to_optimizer picks them up.
-        self._pending_new_gabor = new_gabor
+        # Base builds the cat dict from its own param names; the gabor rows
+        # reach cat_tensors_to_optimizer via _pending_new_gabor. Callers stash
+        # them either through the new_gabor kwarg or by pre-setting
+        # _pending_new_gabor: the overridden densify_and_clone/split/add_new_gs
+        # do the latter BEFORE the base method dynamically dispatches back into
+        # this override, so only touch the stash when the kwarg is explicitly
+        # present — unconditionally popping with a None default clobbered the
+        # pre-set stash and every growth path crashed with
+        # KeyError: 'gabor_omega' (found by external review, 2026-07-20).
+        if "new_gabor" in kwargs:
+            self._pending_new_gabor = kwargs.pop("new_gabor")
         super().densification_postfix(*args, **kwargs)
         self._pending_new_gabor = None
 
@@ -506,6 +514,14 @@ class GaussianModel(DGSGaussianModel):
             self._gabor_omega[dead_indices] = self._whitened_omega(dead_indices)
             self._gabor_phase[dead_indices] = 0.0
             self._gabor_amp[dead_indices] = 0.0
+            # The base replace_tensors_to_optimizer skips groups it does not
+            # know, so reset the gabor Adam moments at the relocated slots here.
+            for group in self.optimizer.param_groups:
+                if group.get("name") in {"gabor_omega", "gabor_phase", "gabor_amp"}:
+                    state = self.optimizer.state.get(group["params"][0])
+                    if state:
+                        state["exp_avg"][dead_indices] = 0
+                        state["exp_avg_sq"][dead_indices] = 0
 
     def replace_tensors_to_optimizer(self, inds=None):
         optimizable_tensors = super().replace_tensors_to_optimizer(inds)
