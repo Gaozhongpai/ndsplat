@@ -26,17 +26,30 @@ W = H = 128
 
 
 def make_settings():
-    # Minimal identity-ish camera; values only need to be self-consistent.
+    # Proper 3DGS-convention camera (tcgs expects TRANSPOSED row-major
+    # world_view / full_proj matrices, like ndsplat's Camera class).
+    import math
     fov = 1.0
-    tanx = tany = torch.tan(torch.tensor(fov / 2)).item()
-    view = torch.eye(4, device=dev)
-    view[2, 3] = 5.0  # push scene in front of camera
-    proj = view.clone()
+    tanx = tany = math.tan(fov / 2)
+    znear, zfar = 0.01, 100.0
+    # camera at world z=-5 looking down +z: world2view translation tz=+5
+    w2v = torch.eye(4, device=dev)
+    w2v[2, 3] = 5.0
+    view = w2v.transpose(0, 1)  # 3DGS stores the transpose
+    top = tany * znear; right = tanx * znear
+    P = torch.zeros(4, 4, device=dev)
+    P[0, 0] = znear / right
+    P[1, 1] = znear / top
+    P[2, 2] = zfar / (zfar - znear)
+    P[2, 3] = -(zfar * znear) / (zfar - znear)
+    P[3, 2] = 1.0
+    full_proj = (P @ w2v).transpose(0, 1)
+    campos = torch.tensor([0.0, 0.0, -5.0], device=dev)
     return tg.GaussianRasterizationSettings(
         image_height=H, image_width=W, tanfovx=tanx, tanfovy=tany,
         bg=torch.zeros(3, device=dev), scale_modifier=1.0,
-        viewmatrix=view, projmatrix=view @ proj, sh_degree=0,
-        campos=torch.zeros(3, device=dev), prefiltered=False, debug=False,
+        viewmatrix=view, projmatrix=full_proj, sh_degree=0,
+        campos=campos, prefiltered=False, debug=False,
         # use_tcgs=False so ALL renders share the standard forward: the gabor
         # path forces it anyway, and the parity check must compare like paths.
         use_tcgs=False,
