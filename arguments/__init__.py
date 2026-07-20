@@ -144,6 +144,12 @@ class OptimizationParams(ParamGroup):
         # Densification strategy: "standard" or "mcmc"
         self.densification_strategy = "standard"
 
+        # Residual-Gabor fit (--mode dgs-gabor): freeze every dGS base
+        # parameter and train ONLY the gabor omega/phase/amp groups. Use with
+        # a warm-start --start_checkpoint and --densify_until_iter 0 so the
+        # base model and topology stay exactly the loaded checkpoint.
+        self.gabor_residual_only = False
+
         # Mip-Splatting: refresh cadence of the 3D smoothing filter (iterations).
         # The filter depends on Gaussian positions, so it is also refreshed
         # whenever densification changes the primitive count.

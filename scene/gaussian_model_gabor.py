@@ -113,6 +113,23 @@ class GaussianModel(DGSGaussianModel):
         self.optimizer.add_param_group({'params': [self._gabor_omega], 'lr': lr_omega, "name": "gabor_omega"})
         self.optimizer.add_param_group({'params': [self._gabor_phase], 'lr': lr_phase, "name": "gabor_phase"})
         self.optimizer.add_param_group({'params': [self._gabor_amp], 'lr': lr_amp, "name": "gabor_amp"})
+        # Residual-only fit: freeze the entire dGS base (zero LR + no grads) so
+        # ONLY the gabor band trains. The base stays byte-identical to the
+        # warm-start checkpoint (pair with --densify_until_iter 0).
+        self._gabor_residual_only = bool(getattr(training_args, "gabor_residual_only", False))
+        if self._gabor_residual_only:
+            gabor_groups = {"gabor_omega", "gabor_phase", "gabor_amp"}
+            for group in self.optimizer.param_groups:
+                if group.get("name") not in gabor_groups:
+                    group["lr"] = 0.0
+                    for p in group["params"]:
+                        p.requires_grad_(False)
+
+    def update_learning_rate(self, iteration):
+        # The base scheduler would re-raise the frozen xyz LR every iteration.
+        if getattr(self, "_gabor_residual_only", False):
+            return 0.0
+        return super().update_learning_rate(iteration)
 
     # ---- capture/restore -------------------------------------------------
     def capture(self):
