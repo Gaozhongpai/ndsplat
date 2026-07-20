@@ -48,8 +48,16 @@ class GaussianModel(DGSGaussianModel):
         ("_gabor_amp", "gabor_amp", 1),
     )
 
-    def __init__(self, *args, gabor_omega_init: float = 0.0, **kwargs):
+    def __init__(self, *args, gabor_omega_init: float = 0.4, **kwargs):
         super().__init__(*args, **kwargs)
+        # Screen-space frequency magnitude (rad/pixel) each residual atom is
+        # seeded with. amp is ALWAYS zero-init (so the forward stays byte-
+        # identical to dGS), but omega must start NONZERO so that once amp
+        # bootstraps off zero the cosine already carries a real spatial
+        # frequency and can become oscillatory. With omega == 0 the residual
+        # degenerates to a uniform footprint rescale and never learns any
+        # Gabor structure (its omega/phase gradients stay ~0). ~0.4 rad/px
+        # gives roughly one oscillation across a ~15 px footprint.
         self.gabor_omega_init = gabor_omega_init
         self._gabor_omega = torch.empty(0)
         self._gabor_phase = torch.empty(0)
@@ -71,8 +79,15 @@ class GaussianModel(DGSGaussianModel):
         return self._gabor_amp
 
     def _init_gabor_params(self, num_gaussians, device="cuda"):
-        """Zero-init the residual Gabor band (== dGS at init)."""
-        omega = torch.full((num_gaussians, 3), float(self.gabor_omega_init), device=device)
+        """Init the residual Gabor band. amp is ZERO (=> forward == dGS), omega
+        is a random screen-space direction of magnitude gabor_omega_init so the
+        cosine carries a real frequency once amp bootstraps off zero."""
+        # random 2D screen direction * magnitude, third component unused
+        theta = torch.rand(num_gaussians, 1, device=device) * (2 * 3.14159265)
+        mag = float(self.gabor_omega_init)
+        omega = torch.zeros((num_gaussians, 3), device=device)
+        omega[:, 0:1] = mag * torch.cos(theta)
+        omega[:, 1:2] = mag * torch.sin(theta)
         phase = torch.zeros((num_gaussians, 1), device=device)
         amp = torch.zeros((num_gaussians, 1), device=device)
         self._gabor_omega = nn.Parameter(omega.requires_grad_(True))
@@ -179,6 +194,28 @@ class GaussianModel(DGSGaussianModel):
         names = {p.name for p in plydata.elements[0].properties}
         n = self._xyz.shape[0]
         device = self._xyz.device
+
+        # A plain-dGS checkpoint trained with use_view_dependent_pos=False has no
+        # v_12_direction / lambda columns, so the base load_ply leaves them at
+        # width 0. When we then fit with use_view_dependent_pos=True the dGS
+        # slice backward returns a [N, 3*C] v_12 gradient into a [N, 0] leaf and
+        # crashes. Re-initialise the view-dependent params to zeros of the right
+        # shape here (zero shift == identical initial render), so warm-starting a
+        # non-view-dependent checkpoint into the gabor fit is well-formed. This
+        # only touches the gabor subclass, never the base dGS load path.
+        if self.use_view_dependent_pos:
+            C = self.input_dim - 3
+            if self._v_12_direction.numel() == 0 or self._v_12_direction.shape[1] != 3 * C:
+                self._v_12_direction = nn.Parameter(
+                    torch.zeros(n, 3 * C, device=device).requires_grad_(True))
+            if self._lambda_view.numel() != n:
+                self._lambda_view = nn.Parameter(
+                    torch.full((n,), float(self.lambda_init), device=device).requires_grad_(
+                        not self.use_opacity_pos_decouple))
+            if self.input_dim == 7 and self._lambda_time.numel() != n:
+                self._lambda_time = nn.Parameter(
+                    torch.full((n,), float(self.lambda_init), device=device).requires_grad_(
+                        not self.use_opacity_pos_decouple))
 
         def _read(prefix, dim, fill):
             cols = [p for p in names if p.startswith(prefix + "_")]
@@ -332,8 +369,8 @@ class GaussianModel(DGSGaussianModel):
 
     # ---- rendering -------------------------------------------------------
     def _gabor_tensors_for_raster(self):
-        """Pack the gabor band into the [N, 5] tensor the CUDA forward expects:
-        columns = (omega_x_screen, omega_y_screen, phase, amp, unused).
+        """Pack the gabor band into the [N, 4] tensor the CUDA forward expects:
+        columns = (omega_x_screen, omega_y_screen, phase, amp).
         Returns None when the residual is globally disabled so the CUDA path is
         byte-identical to dGS.
         """
