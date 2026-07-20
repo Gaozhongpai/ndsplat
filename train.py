@@ -106,6 +106,16 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
                                     use_rot_scale_l_triangle=dataset.use_rot_scale_l_triangle,
                                     learnable_lambda_opc=dataset.learnable_lambda_opc,
                                     lambda_opc=dataset.lambda_opc)
+    elif "gabor" in mode:
+        # dGS base + additive residual Gabor band. Must be checked BEFORE the
+        # "dgs" in mode branch ("dgs-gabor" contains "dgs"). Same dGS init args
+        # so the base is functionally identical; the residual is zero at init.
+        gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim,
+                                  use_view_dependent_pos=dataset.use_view_dependent_pos,
+                                  use_opacity_pos_decouple=dataset.use_opacity_pos_decouple,
+                                  l_22_inv_init_scale=dataset.l_22_inv_init_scale,
+                                  lambda_init=dataset.lambda_init,
+                                  lambda_opc=dataset.lambda_opc)
     elif "dgs" in mode:
         # DGS mode: Full DGS with configurable view-dependent position
         gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim,
