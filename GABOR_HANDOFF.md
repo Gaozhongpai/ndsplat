@@ -364,6 +364,13 @@ could catch it (none computed b from real degenerate geometry). Fix: clamp
    to Gabor-modulated Gaussians via the complex error function); NOT quality
    on this content. Output: `/data/output/xclipgs/gabor/heart_900_resonly_v3/`.
 
+   **Cost** (A100, clipped 1600x1600 heart view, v3 ckpt, median of 20):
+   exact vs approximate = 14.9 vs 12.9 ms forward (+15.5%), 53.7 vs 49.7 ms
+   fwd+bwd (+8%); ZERO overhead on intact views (no plane -> identical code
+   path). Context: the gabor band itself is the expensive part — plain dGS
+   standard forward is 5.1 ms (gabor disables the TCGS fast path and adds the
+   per-view projection + per-sample modulation).
+
 ## Beta-kernel comparison: dBS-SH and dbs-gabor (2026-07-20)
 
 Question: is the Beta kernel (envelope-shape control) a better capacity lever
