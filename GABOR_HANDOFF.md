@@ -51,8 +51,13 @@ Files implemented (all committed):
   non-view-dependent dGS checkpoint into a view-dependent gabor fit.
 - `submodules/tcgs_speedy_rasterizer/cuda_rasterizer/forward.cu` (~L555-593):
   gabor_mult modulation in the blend loop. The half-space clip of the Gabor
-  (complex-erf generalization of `clipPhi`) is NOT applied — approximate only
-  when a clip plane crosses a high-freq atom; fine for the no-clip heart fit.
+  (complex-erf generalization of `clipPhi`) is NOT applied — approximate when
+  a clip plane crosses an active atom. CORRECTION (2026-07-20, user-caught):
+  heart_900 is HALF clipped views in BOTH train and test (see supplement
+  Table S2: heart iP 31.04 / cP 27.37 / aP 29.20), so this approximation IS
+  exercised by the fits and included in every reported metric — the earlier
+  "fine for the no-clip heart fit" note here was wrong. Per-half split of the
+  v2 result: +0.199 dB intact, +0.081 dB clipped (see v2 section).
 - `submodules/tcgs_speedy_rasterizer/cuda_rasterizer/backward.cu` (~L780-945):
   gabor gradient block. Runs whenever a gabor buffer is bound (NOT gated on
   amp!=0) so dL/d(amp) is alive at amp==0 and the residual can bootstrap.
@@ -203,6 +208,22 @@ matched 270,627 primitives):
    training-loop eval: 29.203 -> 29.381 (+0.18 dB); v2 passed the ENTIRE old
    fit's final quality by iteration 2000, so the parameterization both
    converges faster and lands higher.
+
+   **Per-half split (user-caught correction: heart_900 test is 45 intact + 45
+   clipped views; all "PSNR" above are the mixed average).** From the saved
+   PNG renders, view-classified by the dataset `clip` flag (reproduces
+   supplement Table S2's heart row for the base):
+
+   | model                      | all     | intact  | clipped |
+   |----------------------------|---------|---------|---------|
+   | dGS base (30k)             | 29.2025 | 31.0363 | 27.3687 |
+   | + Gabor projected v2 (7k)  | 29.3423 | 31.2350 | 27.4496 |
+   | v2 gain                    | +0.140  | +0.199  | +0.081  |
+
+   The residual helps the intact half ~2.5x more than the clipped half —
+   consistent with the unclipped-cosine clip approximation blunting the band
+   where planes cross active atoms (and with cut-face error being dominated by
+   terms the footprint modulation cannot fix).
 
    Capacity stats at 7k (answers "do we need multiple bands per atom?" — no):
    97.3% atoms active, median |amp| 0.150, p90 0.514, only 0.05% near tanh

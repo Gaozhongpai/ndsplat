@@ -36,8 +36,10 @@
 # footprint. The half-space clip of a Gabor atom is the complex-error-function
 # (Faddeeva) generalisation of the real-erf clipPhi; here we reuse the base's
 # real-erf clip on the Gaussian envelope and leave the cosine unclipped. That
-# is APPROXIMATE when a clip plane crosses a high-frequency atom. For the heart
-# fit no clip plane is active, so the residual is exact there.
+# is APPROXIMATE when a clip plane crosses an active atom. NOTE the heart_900
+# set is HALF clipped views (train and test), so this approximation IS active
+# in the fits and the metrics: the v2 residual gains +0.199 dB on the intact
+# test half but only +0.081 dB on the clipped half.
 
 import torch
 import numpy as np
