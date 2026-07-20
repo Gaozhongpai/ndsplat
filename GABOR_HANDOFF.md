@@ -1,5 +1,17 @@
 # Gabor Residual Integration — Handoff
 
+> **OUTCOME (2026-07-20): COMPLETE. Decision — do NOT adopt Gabor for RenderFM.**
+> The residual works and is verified correct, but the heart gain is only
+> **+0.09 dB PSNR** (see results below). This matches representation theory:
+> Gabor's advantage scales with high-frequency oscillatory content, and cinematic
+> CT is spectrally smooth, so the residual has little to bite on. Not worth the
+> primitive swap (would complicate the exact clip / browser renderer / feed-forward
+> prediction). RenderFM C5 stays on **LoD-Gaussians** (importance-ordered,
+> anatomy-aware via the mask). This branch is kept as a working reference
+> implementation + a documented result. kneejoint (high-freq bone) was NOT run —
+> even a favorable gain there would not change the decision.
+
+
 **Goal:** Add a **residual Gabor band** on top of the existing **dGS** base in the
 tcgs rasterizer + ndsplat, per-scan optimize it on the **heart** scene, and report
 whether it improves render quality over plain dGS. Architecture constraint (from
