@@ -46,8 +46,21 @@ def frame_labels(transforms_test):
 def per_view_split(per_view_json, labels):
     """Mean PSNR/SSIM over intact vs clipped test frames from a per_view.json."""
     payload = json.loads(Path(per_view_json).read_text())
-    # per_view.json = {method: {"PSNR": {name: v}, "SSIM": {...}, ...}}
-    method = next(iter(payload))
+    # per_view.json = {method: {"PSNR": {name: v}, "SSIM": {...}, ...}}, where a
+    # method key is "<label>_<iteration>" and a model can carry several (e.g.
+    # ours_7000, ours_best, ours_30000). Select the *best* checkpoint -- the one
+    # the paper's Tables 1-2 report -- not whatever happens to be first (which was
+    # ours_7000 and silently mixed a 7k-step PSNR with best-checkpoint cut-face).
+    keys = list(payload)
+    best = [k for k in keys if k.endswith("_best")]
+    if best:
+        method = best[0]
+    elif len(keys) == 1:
+        method = keys[0]
+    else:
+        raise ValueError(
+            f"{per_view_json}: no *_best checkpoint and multiple keys {keys}; "
+            "refusing to guess (this is the bug being fixed)")
     psnr = payload[method]["PSNR"]
     ssim = payload[method]["SSIM"]
     out = {}
