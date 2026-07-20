@@ -65,16 +65,18 @@ def packed_buffer(m, cam):
         cond = dir_pp / dir_pp.norm(dim=1, keepdim=True)
         m_cond, _ = m.slice_gaussian_full_method(cond)
         scales, _, antialiasing = m.mip_filtered(m.get_opacity, scales=m.get_scaling)
-        return m._gabor_tensors_for_raster(
+        gabor, _ = m._gabor_tensors_for_raster(
             cam, means3D=m_cond, scales=scales, rotations=m.get_rotation,
             antialiasing=antialiasing, tanfovx=tanfovx, tanfovy=tanfovy)
+        return gabor
     dir_pp = m._xyz - cam.camera_center.unsqueeze(0)
     query = dir_pp / dir_pp.norm(dim=-1, keepdim=True)
     means, _ = m.get_cond_mean_opacity(query)
-    return project_gabor_band(
+    gabor, _ = project_gabor_band(
         m._gabor_omega, m._gabor_phase, m._gabor_amp, cam,
         means[..., :3].contiguous(), m.get_covariance, antialiasing=False,
         tanfovx=tanfovx, tanfovy=tanfovy)
+    return gabor
 
 
 def main():

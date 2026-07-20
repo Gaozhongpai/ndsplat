@@ -50,8 +50,20 @@ from utils.general_utils import build_rotation, build_scaling_rotation
 
 
 def project_gabor_band(k, phase, raw_amp, viewpoint_camera, means3D, Sigma,
-                       antialiasing, tanfovx, tanfovy):
+                       antialiasing, tanfovx, tanfovy, clip_plane=None):
     """World-space wave vector -> per-view screen float4 for the CUDA forward.
+
+    When `clip_plane` = (nx, ny, nz, tau) is given (analytic half-space clip
+    n.x <= tau active this view), additionally returns the per-splat scalar
+        b = Cov(clip coordinate, wave phase | pixel) / s
+          = (n^T Sigma k - q_n^T Sigma2d^-1 q_g) / sqrt(n^T Sigma n - q_n^T Sigma2d^-1 q_n)
+    that the CUDA kernel needs for the EXACT clipped-Gabor factor
+        Phi(l) + amp_eff * Re{ e^{i m} * 0.5 erfc(-(l - i b)/sqrt(2)) }
+    (complex-erf generalisation of clipPhi; validated against numerical line
+    integration in scripts/tests/gabor_projection_check.py, check 3). By
+    Cauchy-Schwarz |b| <= sigma_xi <= the whitened frequency bound (3.0), which
+    keeps the CUDA evaluation numerically safe. Returns (gabor4, gabor_b) —
+    gabor_b is None when no plane is active.
 
     The 3D atom is G_3d(x) * (1 + amp * cos(k . (x - mu) + phase)); conditioning
     the world offset delta on the screen offset Delta = P delta (P = the same
@@ -120,12 +132,26 @@ def project_gabor_band(k, phase, raw_amp, viewpoint_camera, means3D, Sigma,
     atten = torch.exp(-0.5 * var_ray).unsqueeze(-1)           # [N,1]
 
     amp_eff = torch.tanh(raw_amp) * atten
-    return torch.cat([
+    gabor4 = torch.cat([
         wx.unsqueeze(-1),
         wy.unsqueeze(-1),
         phase,
         amp_eff,
     ], dim=1).contiguous()
+
+    gabor_b = None
+    if clip_plane is not None:
+        nrm = clip_plane[:3].to(dtype=k.dtype, device=k.device)
+        Sn = Sigma @ nrm                                      # [N,3]
+        q_n = torch.einsum('nij,ni->nj', T, Sn)               # [N,2] = T^T Sigma n
+        # Sigma2d^-1 q_n via the same closed-form 2x2 inverse
+        inx = (c * q_n[:, 0] - b * q_n[:, 1]) / det
+        iny = (a * q_n[:, 1] - b * q_n[:, 0]) / det
+        s2 = (Sn @ nrm - (q_n[:, 0] * inx + q_n[:, 1] * iny)).clamp_min(1e-12)
+        cov = torch.einsum('ni,ni->n', Sn, k) \
+            - (q[:, 0] * inx + q[:, 1] * iny)
+        gabor_b = (cov / torch.sqrt(s2)).unsqueeze(-1).contiguous()
+    return gabor4, gabor_b
 
 
 class GaussianModel(DGSGaussianModel):
@@ -558,21 +584,23 @@ class GaussianModel(DGSGaussianModel):
     # ---- rendering -------------------------------------------------------
     def _gabor_tensors_for_raster(self, viewpoint_camera, means3D, scales,
                                   rotations, antialiasing, tanfovx, tanfovy,
-                                  scaling_modifier=1.0):
+                                  scaling_modifier=1.0, clip_plane=None):
         """Pack the gabor band into the [N, 4] tensor the CUDA forward expects
-        (projection math and conventions: see project_gabor_band above).
-        Returns None when the residual is globally disabled so the CUDA path is
-        byte-identical to dGS."""
+        plus the per-splat exact-clip scalar b (projection math and
+        conventions: see project_gabor_band above). Returns (None, None) when
+        the residual is globally disabled so the CUDA path is byte-identical
+        to dGS."""
         if not getattr(self, "use_gabor", True):
-            return None
+            return None, None
         if self._gabor_amp.numel() == 0:
-            return None
+            return None, None
         # 3D world covariance of the base (same construction as the renderer).
         L = build_scaling_rotation(scaling_modifier * scales, rotations)
         Sigma = L @ L.transpose(1, 2)                             # [N,3,3]
         return project_gabor_band(
             self._gabor_omega, self._gabor_phase, self._gabor_amp,
-            viewpoint_camera, means3D, Sigma, antialiasing, tanfovx, tanfovy)
+            viewpoint_camera, means3D, Sigma, antialiasing, tanfovx, tanfovy,
+            clip_plane=clip_plane)
 
     def render_tcgs(self, viewpoint_camera, render_mode="RGB", scaling_modifier=1.0,
                     use_tcgs=False, tight_snugbox=False, compact_box_mult=1.0):
@@ -624,10 +652,21 @@ class GaussianModel(DGSGaussianModel):
             opacity = opacity * keep.to(opacity.dtype).view(-1, 1)
             clip_plane_tensor = None
 
-        gabor = self._gabor_tensors_for_raster(
+        # Effective analytic-clip plane this view (mirrors the wrapper's
+        # _extract_clip_plane: an explicit plane wins, else legacy x_threshold
+        # maps to (1,0,0,tau)). Drives the exact clipped-Gabor scalar b.
+        gabor_plane = None
+        if analytic_clip:
+            if clip_plane_tensor is not None:
+                gabor_plane = clip_plane_tensor
+            elif math.isfinite(x_threshold):
+                gabor_plane = torch.tensor([1.0, 0.0, 0.0, x_threshold],
+                                           dtype=torch.float32, device="cuda")
+        gabor, gabor_b = self._gabor_tensors_for_raster(
             viewpoint_camera, means3D=m_cond, scales=scales,
             rotations=self.get_rotation, antialiasing=antialiasing,
-            tanfovx=tanfovx, tanfovy=tanfovy, scaling_modifier=scaling_modifier)
+            tanfovx=tanfovx, tanfovy=tanfovy, scaling_modifier=scaling_modifier,
+            clip_plane=gabor_plane)
 
         raster_settings = TCGSRasterizationSettings(
             image_height=int(viewpoint_camera.image_height),
@@ -649,7 +688,7 @@ class GaussianModel(DGSGaussianModel):
             means3D=m_cond, means2D=screenspace_points, shs=shs,
             colors_precomp=None, opacities=opacity, scores=None,
             scales=scales, rotations=self.get_rotation,
-            cov3D_precomp=None, betas=None, gabor=gabor,
+            cov3D_precomp=None, betas=None, gabor=gabor, gabor_b=gabor_b,
         )
         return {
             "render": rendered_image,

@@ -17,6 +17,17 @@ neither reusing the closed form under test:
    {delta : P delta = Delta} (P from finite differences, independent of the
    closed form). Run in float64.
 
+3. EXACT CLIPPED GABOR (complex-erf operator): with a half-space clip
+   n.x <= tau active, the exact per-pixel factor is
+       E[(1 + a cos xi) 1[omega <= tau] | Delta]
+         = Phi(l) + a * exp(-sigma_xi^2/2) * Re{ e^{i m} * Phi_c(l, b) },
+   Phi_c(l, b) = 0.5 * erfc(-(l - i b)/sqrt(2)),
+   b = Cov(omega, xi | Delta)/s   (one new per-splat scalar),
+   which must match numerical line integration of the modulated Gaussian with
+   the indicator (integrated piecewise up to the exact plane crossing). The
+   b = 0 special case reduces to the currently-shipped approximation
+   Phi(l) * (1 + a_eff cos m).
+
 CPU-only, no rasterizer needed:
     python scripts/tests/gabor_projection_check.py
 """
@@ -169,10 +180,86 @@ def main():
             max_err = max(max_err, float((e_cos_num - e_cos_cf).abs()))
         ok_E = max_err < 5e-9  # trapezoid quadrature floor at 60001 samples
 
+        # ---- check 3: exact clipped Gabor factor (complex-erf operator) ----
+        # Random plane meaningfully crossing the splat.
+        from scipy.special import wofz, erfc as r_erfc
+        nrm = torch.tensor(rng.normal(0, 1, 3)); nrm /= nrm.norm()
+        sig_n = float(torch.sqrt(nrm @ Sigma @ nrm))
+        tau = float(nrm @ mu) + float(rng.uniform(-1.0, 1.0)) * sig_n
+        a_res = 0.5                                   # residual amplitude
+        # Per-splat scalars (dilation ks=0 to match the FD/quadrature setup)
+        S2 = P @ Sigma.numpy() @ P.T if False else None  # (kept torch below)
+        T2 = T_fd                                     # [3,2], independent of closed form
+        S2d = T2.transpose(0, 1) @ Sigma @ T2
+        S2inv = torch.linalg.inv(S2d)
+        q_g = T2.transpose(0, 1) @ (Sigma @ k)
+        q_n = T2.transpose(0, 1) @ (Sigma @ nrm)
+        sig_xi2 = float(k @ Sigma @ k - q_g @ S2inv @ q_g)
+        s2 = float(nrm @ Sigma @ nrm - q_n @ S2inv @ q_n)
+        s_c = math.sqrt(max(s2, 1e-30))
+        c_ov = float(nrm @ Sigma @ k - q_n @ S2inv @ q_g)
+        b_c = c_ov / s_c
+
+        def phi_c(l, b):
+            # 0.5*erfc(-(l-ib)/sqrt2), stable via Faddeeva w in the upper half
+            zeta = -(l - 1j * b) / math.sqrt(2.0)
+            if l <= 0:
+                return 0.5 * np.exp(-zeta * zeta) * wofz(1j * zeta)
+            return 1.0 - 0.5 * np.exp(-zeta * zeta) * wofz(-1j * zeta)
+
+        max_err_c = 0.0
+        for _ in range(12):
+            d_pix = torch.tensor(rng.uniform(-4, 4, 2))
+            Delta = -d_pix
+            delta0 = Pinv @ Delta
+            # closed form
+            m_ph = float(omega2d @ d_pix + phase)
+            e_omega = float(nrm @ mu + q_n @ S2inv @ Delta)
+            l_c = (tau - e_omega) / s_c
+            F_cf = 0.5 * r_erfc(-l_c / math.sqrt(2.0)) \
+                + a_res * math.exp(-0.5 * sig_xi2) \
+                * float(np.real(np.exp(1j * m_ph) * phi_c(l_c, b_c)))
+            # numerical: adaptive line integral, with the plane crossing and
+            # the Gaussian peak as explicit breakpoints (plain trapezoid loses
+            # its spectral accuracy at the clipped endpoint).
+            from scipy.integrate import quad
+            Sinv_np = Sinv.numpy()
+            d0_np = delta0.numpy(); v_np = nvec.numpy()
+            k_np = k.numpy(); n_np = nrm.numpy(); mu_np = mu.numpy()
+
+            def g_np(s):
+                p = d0_np + s * v_np
+                return np.exp(-0.5 * p @ Sinv_np @ p)
+
+            def f_np(s):
+                p = d0_np + s * v_np
+                return g_np(s) * (1.0 + a_res * np.cos(p @ k_np + phase))
+
+            vSv = v_np @ Sinv_np @ v_np
+            s_peak = -(v_np @ Sinv_np @ d0_np) / vSv
+            sig_line = 1.0 / math.sqrt(vSv)
+            lo, hi = s_peak - 45 * sig_line, s_peak + 45 * sig_line
+            n_dot_dir = float(n_np @ v_np)
+            if abs(n_dot_dir) < 1e-12:
+                segs = [(lo, hi)] if float(n_np @ (mu_np + d0_np)) <= tau else []
+            else:
+                s_star = (tau - float(n_np @ mu_np) - float(n_np @ d0_np)) / n_dot_dir
+                s_star = min(max(s_star, lo), hi)
+                segs = [(lo, s_star)] if n_dot_dir > 0 else [(s_star, hi)]
+            num = sum(quad(f_np, aa, bb, points=[min(max(s_peak, aa), bb)],
+                           epsabs=1e-14, epsrel=1e-12, limit=300)[0]
+                      for aa, bb in segs if bb - aa > 1e-14)
+            den = quad(g_np, lo, hi, points=[s_peak],
+                       epsabs=1e-14, epsrel=1e-12, limit=300)[0]
+            F_num = num / den
+            max_err_c = max(max_err_c, abs(F_num - F_cf))
+        ok_C = max_err_c < 5e-8
+
         print(f"[trial {trial}] |T-T_fd|rel={err_T:.2e} {'PASS' if ok_T else 'FAIL'}   "
               f"max|E_num-E_closed|={max_err:.2e} {'PASS' if ok_E else 'FAIL'}   "
-              f"(|omega2d|={float(omega2d.norm()):.3f} rad/px, atten={float(atten):.3f})")
-        n_fail += (not ok_T) + (not ok_E)
+              f"clipgabor|F_num-F_cf|={max_err_c:.2e} {'PASS' if ok_C else 'FAIL'}   "
+              f"(b={b_c:+.3f}, atten={float(atten):.3f})")
+        n_fail += (not ok_T) + (not ok_E) + (not ok_C)
 
     print("ALL PASS" if n_fail == 0 else f"{n_fail} FAILURES")
     sys.exit(1 if n_fail else 0)

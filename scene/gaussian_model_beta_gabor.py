@@ -456,13 +456,16 @@ class GaussianModel(DBSGaussianModel):
         # view. Sigma is EXACTLY the cov3D_precomp the renderer consumes. The
         # dBS path does not use mip antialiasing => the renderer dilates the 2D
         # covariance by 0.3, so antialiasing=False here matches it.
+        # clip_plane=None: the exact clipped-Gabor factor is derived for a
+        # Gaussian envelope; under the beta kernel we keep the approximate
+        # (envelope-clip x unclipped-cosine) path.
         gabor = None
         if getattr(self, "use_gabor", True) and self._gabor_amp.numel() > 0:
-            gabor = project_gabor_band(
+            gabor, _ = project_gabor_band(
                 self._gabor_omega[mask], self._gabor_phase[mask],
                 self._gabor_amp[mask], viewpoint_camera, means3d,
                 convs[mask], antialiasing=False,
-                tanfovx=tanfovx, tanfovy=tanfovy)
+                tanfovx=tanfovx, tanfovy=tanfovy, clip_plane=None)
 
         bg_color = (self.background.to(device=means3d.device, dtype=means3d.dtype)
                     if self.background.numel()

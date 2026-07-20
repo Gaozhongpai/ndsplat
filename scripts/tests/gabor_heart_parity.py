@@ -40,12 +40,14 @@ else:
 SH_DEGREE = 3
 
 
-def load_camera(idx=0):
+def load_camera(idx=None):
     from scene.dataset_readers import readCamerasFromTransforms
     from utils.camera_utils import loadCam
     args = SimpleNamespace(resolution=-1, data_device="cuda",
                            white_background=False, use_jpeg_compression=False)
     cam_infos = readCamerasFromTransforms(DATA, "transforms_test.json", False)
+    if idx is None:
+        idx = int(os.environ.get("PARITY_VIEW", "0"))
     return loadCam(args, idx, cam_infos[idx], 1.0), len(cam_infos)
 
 
@@ -60,8 +62,8 @@ def make_model(mode):
 
 
 def main():
-    cam, n_cams = load_camera(0)
-    print(f"[cam] test view 0 of {n_cams}: {cam.image_name} "
+    cam, n_cams = load_camera()
+    print(f"[cam] test view {os.environ.get('PARITY_VIEW', '0')} of {n_cams}: {cam.image_name} "
           f"{cam.image_width}x{cam.image_height} clip={getattr(cam, 'clip_plane', None)}")
 
     dgs = make_model(BASE_MODE)
