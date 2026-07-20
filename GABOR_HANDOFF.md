@@ -103,14 +103,34 @@ in-tree `.so` silently shadows installed builds (fake OOMs, "no kernel image").
   - dataset: `/mnt/uNeon/zhongpai/vengine_data/nerf_dataset/heart_900/`
   - Mount vengine_data at `/data` inside the container.
 
-## Definition of done
+## Definition of done — ALL DONE (2026-07-20)
 
-1. `gabor_bootstrap_test.py` PARITY + BOOTSTRAP: **DONE (PASS)**.
-2. Gradient check vs reference: **DONE** (max elementwise rel err 2.45e-4).
-3. Remaining: end-to-end parity render of the heart dGS checkpoint through the
-   model path (`dgs` vs `dgs-gabor`, same tcgs settings) — must be numerically
-   identical; then warm-start the heart checkpoint into `dgs-gabor`, fit a few k
-   iters (residual-focused; base frozen or tiny LRs), render, and report heart
-   PSNR/SSIM of (dGS base) vs (dGS + gabor residual) at matched primitive count.
-   **Report honestly** — a no-improvement result is valid and informative (it
-   answers whether Gabor helps on smooth CT anatomy).
+1. `gabor_bootstrap_test.py` PARITY + BOOTSTRAP: **PASS**.
+2. Gradient check vs float64 reference: **PASS** (max elementwise rel err 2.45e-4).
+3. Heart end-to-end parity (`scripts/tests/gabor_heart_parity.py`): dgs vs
+   dgs-gabor(amp=0) **bitwise-equal** on a real 1600x1600 test view (270,627
+   gaussians), both with the buffer bound and with `use_gabor=False`.
+4. Heart residual fit: warm-start `ours/heart_900` iteration_30000 into
+   `dgs-gabor` with `--gabor_residual_only --densify_until_iter 0` (base
+   FROZEN — verified bit-identical in the saved PLY), 7000 iters, 5.8 min:
+   ```
+   python train.py -s /data/nerf_dataset/heart_900 \
+     -m /data/output/xclipgs/gabor/heart_900_resonly \
+     --mode dgs-gabor --input_dim 6 --use_view_dependent_pos False \
+     --l_22_inv_init_scale 2.0 --mip3dgs --eval --disable_viewer \
+     --iterations 7000 --gabor_residual_only --densify_until_iter 0 \
+     --start_checkpoint /data/output/xclipgs/ours/heart_900/point_cloud/iteration_30000/point_cloud.ply
+   ```
+   Test-set metrics (render.py + metrics.py, matched 270,627 primitives):
+
+   | model                    | PSNR    | SSIM    | LPIPS   |
+   |--------------------------|---------|---------|---------|
+   | dGS base (30k)           | 29.2025 | 0.94038 | 0.09508 |
+   | + Gabor residual (7k)    | 29.2900 | 0.94094 | 0.09387 |
+
+   **+0.09 dB PSNR / +0.0006 SSIM / −0.0012 LPIPS** — a real but modest gain
+   on smooth CT anatomy (94% of atoms activate, median |amp| 0.13, omega
+   drifts from the 0.4 rad/px seed to mean 0.51, max 1.73). Output:
+   `/data/output/xclipgs/gabor/heart_900_resonly/` (results.json, renders,
+   training.log). The training-loop eval (float renders, no PNG quantization)
+   read 29.203 -> 29.331 (+0.13 dB) over the same fit.
