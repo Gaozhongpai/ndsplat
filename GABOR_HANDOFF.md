@@ -1,270 +1,217 @@
-# Gabor Residual Integration — Handoff
+# Projected Gabor Residual — Handoff
 
 > **OUTCOME (2026-07-20): COMPLETE. Decision — do NOT adopt Gabor for RenderFM.**
-> The residual works and is verified correct. Two parameterizations were fit on
-> heart: screen-space omega gave **+0.09 dB PSNR**; the improved view-consistent
-> projected wave vector (v2, see below) gave **+0.14 dB PSNR**. Both match
-> representation theory: Gabor's advantage scales with high-frequency oscillatory
-> content, and cinematic CT is spectrally smooth, so the residual has little to
-> bite on. Not worth the primitive swap (would complicate the exact clip /
-> browser renderer / feed-forward prediction). RenderFM C5 stays on
-> **LoD-Gaussians** (importance-ordered, anatomy-aware via the mask). This branch
-> is kept as a working reference implementation + a documented result. kneejoint
-> (high-freq bone) was NOT run — even a favorable gain there would not change the
-> decision.
+> A view-consistent **projected Gabor residual** on the dGS base gains
+> **+0.14 dB PSNR** on heart (7k residual-only fit, matched primitives);
+> making its half-space clipping **exact** (complex-erf operator) is
+> quality-neutral; putting the same band on the **Beta kernel** base helps
+> less. This matches representation theory: Gabor's advantage scales with
+> high-frequency oscillatory content, and cinematic CT is spectrally smooth.
+> Not worth the complexity for RenderFM (browser renderer, feed-forward
+> prediction). RenderFM C5 stays on **LoD-Gaussians**. The branch is kept as a
+> verified reference implementation + documented results. One experiment still
+> running: 30k from-scratch co-training (base + band + densification), see
+> Open items.
 
+## What this is
 
-**Goal:** Add a **residual Gabor band** on top of the existing **dGS** base in the
-tcgs rasterizer + ndsplat, per-scan optimize it on the **heart** scene, and report
-whether it improves render quality over plain dGS. Architecture constraint (from
-the user, non-negotiable): the dGS base and its training stay **unchanged**; Gabor
-is an **additive residual** (Gaussian base + residual Gabor kernels, per the Gabor
-Fields paper). `amp` is zero-initialized so a fresh model renders **byte-identical
-to dGS**, then trains up.
+A **projected Gabor residual** (Gabor-Fields-inspired; NOT a port — upstream
+uses independent residual primitives and staged pyramid training, here one
+co-located modulation rides each existing base primitive and shares its
+envelope, opacity, color, center). Per primitive: world-space wave vector
+`_gabor_omega` (k, [N,3]), `_gabor_phase` [N,1], `_gabor_amp` [N,1]
+(tanh-activated). amp is zero-init, so a fresh model renders **byte-identical**
+to the base; dL/d(amp) is alive at amp==0 (bootstrap).
 
-A Gabor atom modulates the footprint weight:
-`alpha = opacity * kernel_weight * clip_mult * gabor_mult`, where
-`gabor_mult = 1 + amp * cos(omega·d + phase)`, `d` = pixel offset from projected
-center, `gabor = {omega_x, omega_y, phase, amp}` (a `float4` per Gaussian).
-Since v2 (commit `411fcdf`) that float4 is BUILT PER VIEW in Python: the model
-stores a world-space wave vector `k` [N,3] and `_gabor_tensors_for_raster`
-projects it to `omega_2d` + a Gaussian along-ray amplitude attenuation
-(differentiable, so the CUDA `grad_gabor` chains back into `k`; the CUDA kernels
-are unchanged).
+Per view, the Python projection (`project_gabor_band`,
+`scene/gaussian_model_gabor.py`) conditions the 3D modulated atom on the pixel
+ray and packs a float4 + one scalar per splat:
 
-## Branch / commit state
+    omega_2d = -Sigma2d^-1 T^T Sigma k          (screen frequency; T = W.J)
+    amp_eff  = tanh(amp) * exp(-0.5 Var(k.delta | ray))   (along-ray fade)
+    b        = Cov(clip coord, wave phase | pixel)/s      (clipped views only,
+                clamped to its Cauchy-Schwarz bound |b| <= sigma_xi)
 
-- ndsplat repo: branch **`feat/gabor-residual`** (HEAD `4fb13ae` or later).
-- tcgs submodule (`submodules/tcgs_speedy_rasterizer`): HEAD `7137219` or later.
-- Base branch is `mip`. Do NOT touch `mip`/`master` or the XClipGS paper
-  (`pages/XClipGS/**`).
+The CUDA blend loop multiplies the footprint weight by:
 
-Files implemented (all committed):
-- `scene/gaussian_model_gabor.py` — `dgs-gabor` model: extends the dGS model with
-  `_gabor_omega [N,3]` (world-space wave vector k since v2), `_gabor_phase
-  [N,1]`, `_gabor_amp [N,1]` (tanh-activated since v2). Whitened-frame init
-  ||S Rᵀ k|| ~ U(0.7, 1.5) rad/sigma; amp/phase zero. Per-view projection +
-  attenuation in `_gabor_tensors_for_raster` (closed form documented there);
-  `clamp_gabor_frequency()` keeps ||S Rᵀ k|| in [0.5, 3.0] (called from train.py
-  after each optimizer step). save_ply/load_ply extended. Registered in
-  `scene/__init__.py`. Also has a warm-start fix for loading a
-  non-view-dependent dGS checkpoint into a view-dependent gabor fit.
-- `submodules/tcgs_speedy_rasterizer/cuda_rasterizer/forward.cu` (~L555-593):
-  gabor_mult modulation in the blend loop. The half-space clip of the Gabor
-  (complex-erf generalization of `clipPhi`) is NOT applied — approximate when
-  a clip plane crosses an active atom. CORRECTION (2026-07-20, user-caught):
-  heart_900 is HALF clipped views in BOTH train and test (see supplement
-  Table S2: heart iP 31.04 / cP 27.37 / aP 29.20), so this approximation IS
-  exercised by the fits and included in every reported metric — the earlier
-  "fine for the no-clip heart fit" note here was wrong. Per-half split of the
-  v2 result: +0.199 dB intact, +0.081 dB clipped (see v2 section).
-- `submodules/tcgs_speedy_rasterizer/cuda_rasterizer/backward.cu` (~L780-945):
-  gabor gradient block. Runs whenever a gabor buffer is bound (NOT gated on
-  amp!=0) so dL/d(amp) is alive at amp==0 and the residual can bootstrap.
-- Python wrapper `submodules/tcgs_speedy_rasterizer/tcgs_speedy_rasterizer/__init__.py`:
-  threads `gabor` through forward and returns `grad_gabor` in the backward grads
-  tuple. `gabor_active = gabor.numel() > 0` disables the bucket/tcgs fast paths
-  (which lack the residual).
-- `rasterize_points.cu`: allocates `dL_dgabor = zeros({P,4})` when
-  `gabor.numel()>0`, passes to `BACKWARD::render`.
-- `scripts/tests/gabor_bootstrap_test.py` — raw-rasterizer smoke test.
-- `submodules/tcgs_speedy_rasterizer/test_cutting_plane.py` —
-  `run_gabor_grad_checks`: full float64-reference gradient validation.
+    unclipped / beta kernel:  1 + amp_eff * cos(omega_2d . d + phase)
+    Gaussian + active plane:  Phi(l) + amp_eff * Re{e^{i ph} Phi_c(l, b)},
+                              Phi_c(l, b) = 0.5 erfc(-(l - i b)/sqrt(2))
 
-## STATUS: CUDA forward + backward VERIFIED CORRECT (2026-07-20)
+The second form is the **EXACT half-space clip of a Gabor-modulated Gaussian**
+— the complex-erf (Faddeeva) generalisation of XClipGS's Phi(l); potential
+supplement material. CUDA evaluates Phi_c via Humlicek w4 (4.5e-5 vs scipy
+wofz); backward derivatives are the analytic complex Gaussian. Everything is
+differentiable end-to-end (grad_gabor / grad_gabor_b chain back into k through
+the Python projection).
 
-The earlier "dL_dgabor path unwired" diagnosis was a **test artifact, not a
-kernel bug**: the reproducer's synthetic camera used untransposed matrices, so
-**zero splats were visible** — the render was black and ALL gradients (including
-opacity) were zero. Parity "passed" vacuously (two black images) and the gabor
-grads were zero for the same reason. After fixing the camera to the 3DGS
-transposed convention (and using splats in the active, non-saturated regime):
+Frequency lives in the whitened frame of the base primitive: init
+`||S R^T k|| ~ U(0.7, 1.5)` rad/sigma (~one oscillation per footprint);
+`clamp_gabor_frequency()` keeps it in `[0.5, 3.0]` after each optimizer step
+(adapted from upstream's BoundedAdam bounds — post-step norm rescaling, not
+the identical optimizer rule). The [0.5,3] bound also caps |b|, keeping the
+CUDA exponentials finite by construction.
 
-`scripts/tests/gabor_bootstrap_test.py` (raw rasterizer, standard forward):
+## Modes / files
+
+- `dgs-gabor` — `scene/gaussian_model_gabor.py` (dGS base). Registered in
+  `scene/__init__.py`; train.py/render.py dispatch via existing branches;
+  train.py calls `clamp_gabor_frequency()` after each step for any gabor mode.
+- `dbs-gabor` — `scene/gaussian_model_beta_gabor.py` (dBS-SH beta-kernel
+  base). Whitening/init/clamp via a Cholesky factor of `get_covariance`
+  (= the `cov3D_precomp` the renderer consumes); keeps the approximate clip
+  (the exact form is Gaussian-envelope specific).
+- tcgs rasterizer: `gabor` [N,4] + optional `gabor_b` [N] buffers through
+  forward/backward (`forward.cu`, `backward.cu`, `auxiliary.h::clipPhiGabor`,
+  wrapper `__init__.py`). A bound gabor buffer disables the TCGS/bucket fast
+  paths (they lack the residual); the exact path additionally needs an active
+  plane + gabor_b, else bit-identical approximate path.
+- Both models support full topology growth (clone/split/prune/relocate/
+  add_new_gs) — fixed after external review, see below.
+- Legacy: pre-v2 gabor PLYs (screen-space omega, raw amp; e.g.
+  `heart_900_resonly`) are incompatible — re-fit instead of loading.
+
+## Results on heart_900
+
+**The test set is 45 intact + 45 clipped views** (train is also half clipped);
+headline PSNRs are the mixed average. Splits computed from saved PNG renders
+by the dataset `clip` flag (base row reproduces supplement Table S2's heart
+row). All fits: 7k residual-only warm-start (base frozen, densify off) from
+the respective 30k base checkpoint; matched primitive counts within a base.
+
+   | model             | N       | all     | intact  | clipped | SSIM    | LPIPS   |
+   |-------------------|---------|---------|---------|---------|---------|---------|
+   | dGS base          | 270,627 | 29.2025 | 31.0363 | 27.3687 | 0.94038 | 0.09508 |
+   | + gabor (approx)  | 270,627 | 29.3423 | 31.2350 | 27.4496 | 0.94115 | 0.09444 |
+   | + gabor (exact)   | 270,627 | 29.3418 | 31.2341 | 27.4496 | 0.94115 | 0.09444 |
+   | dBS-SH base       | 195,279 | 28.6280 | 31.0121 | 26.2440 | 0.93059 | 0.10791 |
+   | dBS-SH + gabor    | 195,279 | 28.7183 | 31.1615 | 26.2751 | 0.93107 | 0.10743 |
+
+Findings:
+1. **The band gives a modest, intact-skewed gain on both bases**: dGS
+   +0.199/+0.081 dB (intact/clipped), dBS +0.150/+0.031. Capacity is NOT
+   binding (97% atoms active, median |amp| ~0.12-0.15, <0.1% at tanh
+   saturation, ~1% at the omega hi-clamp) — one band per atom suffices;
+   multi-band in the paper is emergent across primitives, not per-primitive.
+2. **Exact clipping is quality-neutral** (approx vs exact identical to
+   0.001 dB on every slice, clipped half included). The intact-vs-clipped gain
+   gap is content-driven — cut-face error is dominated by terms a footprint
+   modulation cannot fix — not the clip approximation. Value of the exact
+   operator: correctness + the closed form itself.
+3. **The dBS deficit is entirely a clipping story**: it TIES dGS on intact
+   views (31.01 vs 31.04) with 28% fewer primitives and no mip filter, and
+   loses its whole 0.57 dB on the clipped half where the Gaussian-derived
+   `clipPhi` is approximate on a beta envelope. Beta's unlock would be an
+   exact beta half-space integral, not more primitives.
+4. **Cost** (A100, clipped 1600^2 view, median of 20): gabor forward 12.9 ms
+   (approx) / 14.9 ms (exact, +15.5%; zero overhead on intact views);
+   fwd+bwd 49.7 / 53.7 ms. Plain dGS standard forward: 5.1 ms — the band
+   itself is the main cost (disables the TCGS fast path, adds the per-view
+   projection + per-sample modulation).
+
+Outputs under `/data/output/xclipgs/gabor/`: `heart_900_resonly_v2` (approx),
+`heart_900_resonly_v3` (exact), `heart_900_dbs_sh`, `heart_900_dbs_gabor_resonly`.
+dGS base: `/data/output/xclipgs/ours/heart_900`.
+
+## Verification (all PASS, 2026-07-20)
+
+- `scripts/tests/gabor_projection_check.py` — CPU float64, non-circular:
+  analytic screen map vs finite differences (~4e-10); projected band vs
+  numerical line-integral conditional expectation (~2e-10); EXACT clipped band
+  vs piecewise line integration with the half-space indicator (~3e-10,
+  validates the Phi_c formula and the sign of b).
+- `test_cutting_plane.py` (tcgs; run from /opt or via PYTHONPATH) — CUDA vs a
+  float64 autograd reference (wofz-backed Phi_c with analytic backward):
+  configs plane-inactive / amp=0 bootstrap / oblique clip approx / oblique
+  clip EXACT (incl. d/d gabor_b, ~3e-6) / exact amp=0 bootstrap / beta kernel.
+  Base grads stay correct with a residual active. Plus the pre-existing
+  robustness/popping/leak/Adam suite.
+- `scripts/tests/gabor_heart_parity.py` — amp=0 renders bitwise-equal to the
+  base model on real 1600^2 heart views, INTACT and CLIPPED (`PARITY_VIEW`),
+  for both model families (`GABOR_MODE`/`GABOR_PLY`).
+- `scripts/tests/gabor_gradflow_check.py` — on the real checkpoint: amp
+  bootstraps at 0 (k/phase grads exactly 0 there), k/phase grads alive at
+  amp=0.1, packed buffer is view-dependent, whitened init/clamp in bounds.
+- `scripts/tests/gabor_lifecycle_check.py` — clone/split/prune/relocate/
+  add_new_gs/post-growth step invariants, both model families.
+- FD check on a real clipped view: analytic dL/d(amp) vs finite differences,
+  ratio ~1.0 (validates Python-b/CUDA-l consistency end-to-end).
+
+## Numerics lessons (do not relearn these)
+
+- **Clamp b to its Cauchy-Schwarz bound.** b is a ratio of two fp32
+  Schur-complement DIFFERENCES; for splats whose plane nearly contains the
+  ray, cancellation noise blew |b| to 7.6e3 (bound: sigma_xi <= 3) ->
+  e^{b^2/2} overflow -> one NaN -> every splat killed via fmaxf(NaN,0)=0 ->
+  black renders with finite flat loss (first exact-clip fit died at PSNR 12.6
+  in ~80 iters). No synthetic test computed b from real degenerate geometry;
+  an FD check + b-histogram on real data found it. Fixed in the projection
+  (|b| <= sigma_xi, a mathematical no-op) + a CUDA-side guard in clipPhiGabor.
+- fmaxf(NaN, 0) = 0 in CUDA: a NaN parameter silently BLANKS splats rather
+  than crashing — flat loss at the GT mean means "black render", not "stuck".
+- Trapezoid quadrature loses its spectral accuracy at a clipped endpoint
+  (Euler-Maclaurin boundary term); integrate piecewise to the crossing or use
+  adaptive quadrature with breakpoints when validating clipped integrals.
+
+## How to run
+
+Residual-only fit (current recipe; ~6 min train + render/metrics):
+```bash
+python train.py -s /data/nerf_dataset/heart_900 \
+  -m /data/output/xclipgs/gabor/<out> \
+  --mode dgs-gabor --input_dim 6 --use_view_dependent_pos False \
+  --l_22_inv_init_scale 2.0 --mip3dgs --eval --disable_viewer \
+  --iterations 7000 --gabor_residual_only --densify_until_iter 0 \
+  --start_checkpoint /data/output/xclipgs/ours/heart_900/point_cloud/iteration_30000/point_cloud.ply
+python render.py -m <out> --skip_train && python metrics.py -m <out>
 ```
-[parity] max|dGS - gabor(amp=0,omega=0)|   = 0.000e+00    PASS (byte-identical)
-[parity] max|dGS - gabor(amp=0,omega=0.4)| = 0.000e+00    PASS
-[grad@amp=0.0] max|dL/d(amp)| = 7.8e-05 (1645 nonzero entries)  BOOTSTRAP PASS
-[grad@amp=0.1] omega/phase grads appear too (6388 nonzero)      PASS
-```
+dbs-gabor: same but `--mode dbs-gabor`, no `--mip3dgs`/`--use_view_dependent_pos`,
+warm-start from the dbs-sh checkpoint. From scratch: drop the residual-only /
+densify / start_checkpoint flags and use `--iterations 30000`.
 
-`test_cutting_plane.py::run_gabor_grad_checks` (CUDA vs float64 autograd
-reference; run from /opt, 4 configs: plane-inactive, amp=0 bootstrap, oblique
-analytic clip, beta kernel):
-- forward image rel L2 err ≤ 2.1e-4; all base grads (means3D/cov/opacity/shs/
-  betas) still correct with a residual active (≤ 3.9e-4).
-- d/d gabor omega/phase/amp rel L2 err ≤ 1.5e-4; **max elementwise rel err
-  2.45e-4** (fast-math __cosf regime), ≤ 7e-6 in the other configs.
-- amp=0 bootstrap: forward parity bit-exact (0.0), omega/phase grads exactly
-  zero (they carry a factor amp), dL/d(amp) nonzero on 12/12 splats and matches
-  the reference at 1.3e-6 rel L2.
-
-## Rebuild after any `.cu` edit
-
-The root-owned `build/` dir shadows incremental builds — remove it inside the
-container:
+Rebuild after any `.cu` edit (root-owned `build/` shadows incremental builds):
 ```bash
 docker run --rm --gpus '"device=6"' --cpuset-cpus 72-83 \
-  -v /mnt/UIIUSA/zhongpai/code/gaussian/workspace/ndsplat:/workspace/ndsplat \
+  -v .../ndsplat:/workspace/ndsplat \
   -w /workspace/ndsplat/submodules/tcgs_speedy_rasterizer -e TORCH_CUDA_ARCH_LIST=8.0 \
   10.10.0.192:5555/zhongpai/ndgs:latest \
   bash -lc 'rm -rf build *.egg-info tcgs_speedy_rasterizer/_C*.so; pip install -e . 2>&1 | tail -2'
 ```
-After a rebuild confirm the in-tree
-`tcgs_speedy_rasterizer/tcgs_speedy_rasterizer/_C.*.so` mtime is fresh — a stale
-in-tree `.so` silently shadows installed builds (fake OOMs, "no kernel image").
+Confirm the in-tree `_C.*.so` mtime is fresh afterwards (a stale in-tree .so
+silently shadows installs: fake OOMs, "no kernel image").
 
-## Environment / infra
+Environment:
+- Image `10.10.0.192:5555/zhongpai/ndgs:latest`; mount vengine_data at /data.
+- GPU 6 primary (cpuset 72-83). 2026-07-20: GPU 6 was taken by another user's
+  job; user approved GPUs 2/3/4 as fallback (use the matching cpuset block,
+  e.g. GPU 2 -> 24-35). Check nvidia-smi before launching.
+- Run tcgs tests from OUTSIDE the submodule root (copy to /opt) AND with
+  PYTHONPATH to the in-tree package — a stale installed wrapper otherwise
+  shadows the editable install.
+- `use_tcgs=True` is forward-only; gradient work uses `use_tcgs=False` (the
+  wrapper forces this when gabor is active).
+- Branch `feat/gabor-residual` (base `mip`); tcgs submodule branch ditto.
+  Do NOT touch `mip`/`master` or `pages/XClipGS/**`.
 
-- Docker image: `10.10.0.192:5555/zhongpai/ndgs:latest`.
-- **GPU 6 ONLY** (`--gpus '"device=6"'`), cpuset `72-83`. GPU 7 may be others'.
-- Run tests from a cwd OUTSIDE the submodule root (e.g. copy to /opt) or via
-  PYTHONPATH to the in-tree build; `test_cutting_plane.py` refuses to run from
-  the submodule root by design.
-- `use_tcgs=True` is a forward-only inference path; gradient work must use
-  `use_tcgs=False` (the wrapper forces this automatically when gabor is active).
-- Heart data (for the fit):
-  - dGS checkpoint: `/mnt/uNeon/zhongpai/vengine_data/output/xclipgs/ours/heart_900/`
-    (trained with `--mode dgs --input_dim 6 --use_view_dependent_pos False
-    --l_22_inv_init_scale 2.0 --mip3dgs --eval`; warm-start the gabor fit with
-    the SAME base flags plus `--mode dgs-gabor`).
-  - dataset: `/mnt/uNeon/zhongpai/vengine_data/nerf_dataset/heart_900/`
-  - Mount vengine_data at `/data` inside the container.
+## Open items
 
-## Definition of done — ALL DONE (2026-07-20)
-
-1. `gabor_bootstrap_test.py` PARITY + BOOTSTRAP: **PASS**.
-2. Gradient check vs float64 reference: **PASS** (max elementwise rel err 2.45e-4).
-3. Heart end-to-end parity (`scripts/tests/gabor_heart_parity.py`): dgs vs
-   dgs-gabor(amp=0) **bitwise-equal** on a real 1600x1600 test view (270,627
-   gaussians), both with the buffer bound and with `use_gabor=False`.
-4. Heart residual fit: warm-start `ours/heart_900` iteration_30000 into
-   `dgs-gabor` with `--gabor_residual_only --densify_until_iter 0` (base
-   FROZEN — verified bit-identical in the saved PLY), 7000 iters, 5.8 min:
-   ```
-   python train.py -s /data/nerf_dataset/heart_900 \
-     -m /data/output/xclipgs/gabor/heart_900_resonly \
-     --mode dgs-gabor --input_dim 6 --use_view_dependent_pos False \
-     --l_22_inv_init_scale 2.0 --mip3dgs --eval --disable_viewer \
-     --iterations 7000 --gabor_residual_only --densify_until_iter 0 \
-     --start_checkpoint /data/output/xclipgs/ours/heart_900/point_cloud/iteration_30000/point_cloud.ply
-   ```
-   Test-set metrics (render.py + metrics.py, matched 270,627 primitives):
-
-   | model                    | PSNR    | SSIM    | LPIPS   |
-   |--------------------------|---------|---------|---------|
-   | dGS base (30k)           | 29.2025 | 0.94038 | 0.09508 |
-   | + Gabor residual (7k)    | 29.2900 | 0.94094 | 0.09387 |
-
-   **+0.09 dB PSNR / +0.0006 SSIM / −0.0012 LPIPS** — a real but modest gain
-   on smooth CT anatomy (94% of atoms activate, median |amp| 0.13, omega
-   drifts from the 0.4 rad/px seed to mean 0.51, max 1.73). Output:
-   `/data/output/xclipgs/gabor/heart_900_resonly/` (results.json, renders,
-   training.log). The training-loop eval (float renders, no PNG quantization)
-   read 29.203 -> 29.331 (+0.13 dB) over the same fit.
-
-## v2: view-consistent parameterization (2026-07-20, commit `411fcdf`)
-
-After porting design choices from the Gabor Fields reference implementation
-(github.com/Arcanous98/gabor_fields — MIT; NOTE it is a tomographic
-Mitsuba/DrJIT codebase: Gaussians + ONE Gabor level, scalar omega in the
-primitive's whitened frame, no phase parameter, signed amplitudes, BoundedAdam
-omega bounds [0.5, 3], two-stage fit against a blurred pyramid):
-
-1. **Projected wave vector (the big one).** `_gabor_omega` is a world-space k.
-   Per view: `omega_2d = -Sigma2d^-1 T^T Sigma k` (T = the same W·J affine map
-   the covariance projection uses), `amp_eff = tanh(amp) * exp(-0.5·Var(k·delta
-   | ray))` — Gaussian conditioning of the 3D modulated atom on the pixel ray.
-   Stripes now foreshorten correctly with view and waves along the viewing ray
-   wash out instead of painting arbitrary stripes. Python-side and
-   differentiable; CUDA unchanged. Verified against a finite-difference
-   Jacobian of the real projection pipeline and numerical line-integral
-   conditional expectations at float64 (`scripts/tests/gabor_projection_check.py`,
-   ALL PASS ~4e-10); heart amp=0 parity still bit-exact; grad flow to k/phase
-   verified (`scripts/tests/gabor_gradflow_check.py`).
-2. **Whitened init + bounds.** Init ||S Rᵀ k|| ~ U(0.7, 1.5) rad/sigma (about
-   one oscillation per footprint regardless of splat size); clamped to
-   [0.5, 3.0] after each step. This also FIXED A BUG: the warm-start load_ply
-   path used to fill omega with a constant (v,v,v) — the 29.29 fit above
-   started with every atom on the SAME 45-degree screen stripe.
-3. **tanh amp** — the CUDA `gabor_mult < 0` clamp dead zone is unreachable.
-
-**COMPAT:** gabor PLYs written before v2 store screen-space omega and raw amp;
-re-fit rather than load them into v2 code (`heart_900_resonly` is pre-v2).
-
-Same fit recipe (7000 iters, `--gabor_residual_only --densify_until_iter 0`,
-same warm start; ~5.5 min train). Output:
-`/data/output/xclipgs/gabor/heart_900_resonly_v2/`. Test metrics (PNG-quantized,
-matched 270,627 primitives):
-
-   | model                          | PSNR    | SSIM    | LPIPS   |
-   |--------------------------------|---------|---------|---------|
-   | dGS base (30k)                 | 29.2025 | 0.94038 | 0.09508 |
-   | + Gabor, screen-space (7k)     | 29.2900 | 0.94094 | 0.09387 |
-   | + Gabor, projected k v2 (7k)   | 29.3423 | 0.94115 | 0.09444 |
-
-   v2 = **+0.14 dB over base** (vs +0.09 for screen-space), best SSIM; LPIPS
-   better than base but a hair behind the screen-space fit. Float-render
-   training-loop eval: 29.203 -> 29.381 (+0.18 dB); v2 passed the ENTIRE old
-   fit's final quality by iteration 2000, so the parameterization both
-   converges faster and lands higher.
-
-   **Per-half split (user-caught correction: heart_900 test is 45 intact + 45
-   clipped views; all "PSNR" above are the mixed average).** From the saved
-   PNG renders, view-classified by the dataset `clip` flag (reproduces
-   supplement Table S2's heart row for the base):
-
-   | model                      | all     | intact  | clipped |
-   |----------------------------|---------|---------|---------|
-   | dGS base (30k)             | 29.2025 | 31.0363 | 27.3687 |
-   | + Gabor projected v2 (7k)  | 29.3423 | 31.2350 | 27.4496 |
-   | v2 gain                    | +0.140  | +0.199  | +0.081  |
-
-   The residual helps the intact half ~2.5x more than the clipped half —
-   consistent with the unclipped-cosine clip approximation blunting the band
-   where planes cross active atoms (and with cut-face error being dominated by
-   terms the footprint modulation cannot fix).
-
-   Capacity stats at 7k (answers "do we need multiple bands per atom?" — no):
-   97.3% atoms active, median |amp| 0.150, p90 0.514, only 0.05% near tanh
-   saturation; whitened |omega| median 1.08, p90 1.49, only 0.04% at the 3.0
-   clamp (1.3% at the 0.5 floor). Neither amplitude nor frequency capacity is
-   binding — a second/third band per atom would have nothing to bite on. Multi-
-   band in the paper is emergent (many primitives, each with ONE frequency,
-   masked by per-primitive band for LOD), and that per-primitive LOD masking is
-   still possible here on amp.
-
-**Conclusion unchanged:** the improved parameterization is real (+56% more gain,
-faster convergence) but the absolute ceiling on smooth CT is too low to justify
-adopting Gabor for RenderFM.
+- **From-scratch co-training** (running 2026-07-20): 30k `dgs-gabor` with
+  densification, identical flags to the dGS base training — tests whether
+  co-adapting base + band beats the frozen-base residual (+0.14 dB). Output:
+  `/data/output/xclipgs/gabor/heart_900_gabor_scratch/`. Record the result
+  here when done.
 
 ## Independent implementation review (2026-07-20)
 
 Reviewed `ndsplat` at `149631d`, `tcgs_speedy_rasterizer` at `7137219`, and
-the upstream Gabor Fields repository at `009816f`.
+the upstream Gabor Fields repository at `009816f`. (Historical note: this
+reviewed the pre-exact-clip state; points 1-2 are since resolved, see the
+response below.)
 
 **Verdict:** the fixed-topology, unclipped heart experiment is technically
 sound, and its reported quality result is credible. The branch is not yet a
 general densifying Gabor model, an exact clipped-Gabor implementation, or a
 faithful port of the complete Gabor Fields system.
-
-### Verified behavior
-
-- `scripts/tests/gabor_projection_check.py` passed all trials. The affine-EWA
-  world-to-screen Jacobian matched finite differences, and the projected Gabor
-  matched numerical line integration with maximum error about `6.5e-10`.
-- The four CUDA Gabor configurations in `test_cutting_plane.py` passed against
-  the float64 reference, including amplitude bootstrap, oblique clipping under
-  the implemented approximation, and the beta-kernel path.
-- `scripts/tests/gabor_gradflow_check.py` passed on the 270,627-primitive heart
-  checkpoint: amplitude gradients bootstrap at zero, world-frequency and phase
-  gradients become active for nonzero amplitude, the packed band changes with
-  view, and the whitened-frequency clamp behaves as implemented.
-- `scripts/tests/gabor_heart_parity.py` confirmed bitwise-identical rendering
-  between dGS and dGS-Gabor at zero amplitude on a real 1600x1600 view.
-
-These checks support the `+0.14 dB` result for the exact protocol used here:
-warm-started residual-only fitting, fixed topology, and no active clip plane.
 
 ### Known correctness boundaries
 
@@ -272,170 +219,34 @@ warm-started residual-only fitting, fixed topology, and no active clip plane.
    `densify_and_split`, and `add_new_gs` place extension rows in
    `_pending_new_gabor`, but the dynamically dispatched
    `densification_postfix()` replaces that value with `None`. The base optimizer
-   then requests a missing `gabor_omega` extension. This was reproduced on the
-   heart checkpoint by selecting one primitive for cloning:
+   then requests a missing `gabor_omega` extension (`KeyError: 'gabor_omega'`),
+   reproduced on the heart checkpoint. The reported fits are unaffected
+   (`--densify_until_iter 0`).
 
-   ```text
-   KeyError: 'gabor_omega'
-   ```
-
-   The reported heart fits are unaffected because they use
-   `--densify_until_iter 0`. Before using ordinary or MCMC densification, pass
-   the new Gabor rows explicitly through `densification_postfix()` and add
-   clone, split, add, relocate, prune, and optimizer-state lifecycle tests.
-
-2. **Half-space clipping is approximate for an active Gabor.** The projected
-   cosine is exact for the unclipped affine-EWA footprint. When a plane crosses
-   an oscillatory atom, the code multiplies that footprint by the Gaussian
-   `clipPhi`; the true clipped-Gabor integral requires a complex error function
-   (Faddeeva). The oblique CUDA test proves agreement with the implemented
-   approximation, not with that exact integral. This is harmless for the
-   no-clip heart experiment but is insufficient for claiming exact XClipGS
-   clipping of Gabor atoms.
+2. **Half-space clipping is approximate for an active Gabor.** The true
+   clipped-Gabor integral requires a complex error function (Faddeeva); the
+   oblique CUDA test proves agreement with the implemented approximation, not
+   with that exact integral.
 
 3. **This is a constrained, Gabor-inspired residual rather than a Gabor Fields
-   port.** Upstream uses independent Gaussian-base and Gabor-residual
-   primitives with separate centers, scales, orientations, signed opacities,
-   frequencies, primitive budgets, and staged pyramid training. This branch
-   instead attaches one co-located, nonnegative modulation to each existing dGS
-   primitive and shares its envelope, opacity, color, and center. It therefore
-   answers the narrower question: "Does one projected oscillatory residual per
-   dGS primitive improve this medical volume?"
+   port.** Upstream uses independent base and residual primitives with separate
+   centers, scales, orientations, signed opacities, budgets, and staged pyramid
+   training; this branch attaches one co-located, nonnegative modulation to
+   each existing primitive.
 
-4. **The frequency bounds are adapted, not identical to upstream.** Upstream
-   bounds a scalar whitened frequency with `BoundedAdam`; this branch bounds the
-   norm of an arbitrary 3D whitened wave vector by post-step rescaling without
-   resetting Adam moments. The `[0.5, 3.0]` interval is reasonable for this
-   experiment, but documentation should not imply an identical parameterization
-   or optimizer rule.
+4. **The frequency bounds are adapted, not identical to upstream** (post-step
+   norm rescaling of a 3D whitened vector vs upstream's scalar BoundedAdam;
+   documentation should not imply an identical rule).
 
-### Review conclusion
+### Response (same day)
 
-Keep the experimental result and the decision not to adopt Gabor for RenderFM.
-Describe the branch as a **projected Gabor residual** or **Gabor-inspired
-residual modulation**, not as a complete implementation of Gabor Fields. Fix
-the topology-growth path only if the branch will be reused beyond the verified
-fixed-topology, unclipped ablation; derive the complex-CDF clip only if exact
-Gabor clipping becomes a research requirement.
-
-## v3: EXACT half-space clipping of the Gabor band (2026-07-20)
-
-The one remaining approximation — the unclipped cosine when a plane crosses an
-active atom — is now closed in closed form (tcgs `bbd2054`, ndsplat `5a67631`,
-`0d0deb2`-series fix): the clipped, Gabor-modulated ray integral is
-
-    alpha = op * G(d) * [ Phi(l) + amp_eff * Re{ e^{i m} * Phi_c(l, b) } ],
-    Phi_c(l, b) = 0.5 * erfc(-(l - i b)/sqrt(2)),
-
-the complex-erf (Faddeeva) generalisation of the paper's Phi(l), with ONE new
-per-splat scalar b = Cov(clip coord, wave phase | pixel)/s, computed
-differentiably in the Python projection. CUDA evaluates Phi_c with a Humlicek
-w4 approximation (4.5e-5 vs scipy wofz); backward derivatives are the analytic
-complex Gaussian (no Faddeeva needed). Verification: closed form vs numerical
-line integration ~1e-10 (`gabor_projection_check.py` check 3); CUDA vs a
-wofz-backed float64 autograd reference ~3e-6 incl. d/db; amp=0 parity
-bit-exact on intact AND clipped heart views; FD-verified amp grads on a real
-clipped view (ratio ~1.0). Exact path: Gaussian kernel + active plane +
-gabor_b buffer; beta kernel and planeless views keep the approximate path
-bit-for-bit.
-
-**War story (first v3 run died at PSNR 12.6):** b is a ratio of two fp32
-Schur-complement DIFFERENCES; for splats whose plane nearly contains the ray,
-cancellation noise blew |b| to 7.6e3 (Cauchy-Schwarz bounds it by sigma_xi
-<= 3) -> e^{b^2/2} overflow -> one NaN -> every splat killed via
-fmaxf(NaN,0)=0 -> black renders with finite flat loss. No synthetic test
-could catch it (none computed b from real degenerate geometry). Fix: clamp
-|b| <= sigma_xi (a mathematical no-op) + a CUDA-side guard.
-
-**Result — the exact operator changes NOTHING on heart (hypothesis refuted):**
-
-   | model            | all     | intact  | clipped |
-   |------------------|---------|---------|---------|
-   | v2 approx (7k)   | 29.3423 | 31.2350 | 27.4496 |
-   | v3 exact  (7k)   | 29.3418 | 31.2341 | 27.4496 |
-
-   v3 - v2 = -0.0005 / -0.0009 / **-0.0000** dB. The intact-vs-clipped gain
-   gap (+0.198 vs +0.081) is therefore NOT the clip approximation's fault:
-   cut-face error is dominated by terms a footprint modulation cannot fix,
-   exact or not, and each fit optimizes its own parameters self-consistently
-   around its operator. The exact operator's value is (a) correctness — the
-   closed form exists, is implemented, and removes the asterisk from the
-   method; (b) potential XClipGS supplement material (exact clipping extends
-   to Gabor-modulated Gaussians via the complex error function); NOT quality
-   on this content. Output: `/data/output/xclipgs/gabor/heart_900_resonly_v3/`.
-
-   **Cost** (A100, clipped 1600x1600 heart view, v3 ckpt, median of 20):
-   exact vs approximate = 14.9 vs 12.9 ms forward (+15.5%), 53.7 vs 49.7 ms
-   fwd+bwd (+8%); ZERO overhead on intact views (no plane -> identical code
-   path). Context: the gabor band itself is the expensive part — plain dGS
-   standard forward is 5.1 ms (gabor disables the TCGS fast path and adds the
-   per-view projection + per-sample modulation).
-
-## Beta-kernel comparison: dBS-SH and dbs-gabor (2026-07-20)
-
-Question: is the Beta kernel (envelope-shape control) a better capacity lever
-than the Gabor band (interior oscillation) on this content? New mode
-`dbs-gabor` (`scene/gaussian_model_beta_gabor.py`, commit `1916333`) puts the
-same projected residual on the dBS-SH base — the CUDA already composed
-beta+gabor; only the model layer was missing. Whitening/init/clamp go through
-a Cholesky factor of `get_covariance` (dBS rotations are l-triangle, and that
-IS the `cov3D_precomp` the renderer consumes); the projection is approximate
-under a beta envelope (same status as the analytic clip on beta). Verified:
-parity bit-exact vs plain dbs-sh, bootstrap/gradflow/clamp ALL PASS, lifecycle
-ALL PASS.
-
-Protocol: dBS-SH trained from scratch 30k (`--mode dbs-sh --input_dim 6
---l_22_inv_init_scale 2.0 --eval`; NO mip — unsupported by dBS), then the same
-7k residual-only warm-start recipe. dBS densification settled at **195,279**
-primitives (vs 270,627 for dGS — not count-matched; note both caveats when
-comparing across bases). Outputs: `/data/output/xclipgs/gabor/heart_900_dbs_sh/`
-and `.../heart_900_dbs_gabor_resonly/`.
-
-   | model             | N       | all     | intact  | clipped | SSIM    | LPIPS   |
-   |-------------------|---------|---------|---------|---------|---------|---------|
-   | dGS base          | 270,627 | 29.2025 | 31.0363 | 27.3687 | 0.94038 | 0.09508 |
-   | dGS + gabor v2    | 270,627 | 29.3423 | 31.2350 | 27.4496 | 0.94115 | 0.09444 |
-   | dBS-SH base       | 195,279 | 28.6280 | 31.0121 | 26.2440 | 0.93059 | 0.10791 |
-   | dBS-SH + gabor    | 195,279 | 28.7183 | 31.1615 | 26.2751 | 0.93107 | 0.10743 |
-
-Findings:
-1. **The dBS deficit is entirely a clipping story.** On intact views dBS-SH
-   TIES dGS (31.01 vs 31.04) with 28% fewer primitives and no mip filter; it
-   loses its whole 0.57 dB on the clipped half (-1.12 dB), where the
-   Gaussian-derived `clipPhi` is approximate on a beta envelope. The beta
-   kernel itself is competitive (even primitive-efficient) here; what it lacks
-   is an exact clip operator. If beta ever matters strategically, the unlock
-   is deriving the beta half-space integral, not more primitives.
-2. **The gabor band gives the same modest, intact-skewed bump on both bases**:
-   +0.199/+0.081 dB (intact/clipped) on dGS, +0.150/+0.031 dB on dBS-SH.
-   Capacity again not binding (96.6% active, median |amp| 0.118, 0.01% at tanh
-   saturation, 1.1% at the omega hi-clamp).
-3. **Decision unchanged**: dGS + exact clip remains the best configuration
-   overall; neither the beta swap nor the gabor band (nor both) changes the
-   RenderFM picture.
-
-### Response to review (2026-07-20, same day)
-
-Point 1 (growth paths broken) — **confirmed and FIXED**:
-- `dgs-gabor`: `densification_postfix` popped `new_gabor` with a `None`
-  default, clobbering the `_pending_new_gabor` stash that the overridden
-  clone/split/add paths set before the base dynamically dispatched back into
-  the override → `KeyError: 'gabor_omega'` on every growth op. Now only
-  touches the stash when the kwarg is explicitly present. Also resets the
-  gabor Adam moments at relocated slots (the dgs base `replace` skips groups
-  it does not know).
-- `dbs-gabor` had a sibling bug: the dbs base `replace_tensors_to_optimizer`
-  indexes every optimizer group with no membership guard → same KeyError on
-  the MCMC paths. Reimplemented in the subclass with the gabor entries.
-- New `scripts/tests/gabor_lifecycle_check.py` exercises
-  clone → split → prune → relocate → add_new_gs → post-growth optimizer step
-  with row-count/aliasing/Adam-state invariants after every op, for BOTH
-  model families: **ALL PASS**. (The prior fits were unaffected —
-  `--densify_until_iter 0` never exercised growth.)
-
-Points 2-4 (approximate clip for active atoms; Gabor-inspired residual, not a
-port; bounds adapted via post-step norm rescaling, not upstream's scalar
-BoundedAdam) — **agreed**; terminology adjusted here and in the model header:
-this branch is a **projected Gabor residual**. The clip statement stands as
-documented: exact Gaussian-envelope clip, unclipped cosine, approximate when a
-plane crosses an active atom.
+- Point 1 — **confirmed and fixed** (stash clobber in `densification_postfix`;
+  sibling KeyError in the dbs base `replace_tensors_to_optimizer`; gabor Adam
+  moments now reset at relocated slots). `gabor_lifecycle_check.py` covers all
+  growth ops for both families: ALL PASS.
+- Point 2 — **resolved**: the exact complex-erf operator is implemented and
+  verified (see v3 above); measured quality-neutral on heart.
+- Points 3-4 — **agreed**; terminology adjusted (projected Gabor residual),
+  bounds documented as adapted. Point 4 is a documentation nit, not a defect:
+  Adam moments are gradient EMAs, unaffected by parameter projection; the
+  boundary population is ~1% of atoms and training was stable.
