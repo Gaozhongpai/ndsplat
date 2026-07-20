@@ -318,6 +318,49 @@ the topology-growth path only if the branch will be reused beyond the verified
 fixed-topology, unclipped ablation; derive the complex-CDF clip only if exact
 Gabor clipping becomes a research requirement.
 
+## Beta-kernel comparison: dBS-SH and dbs-gabor (2026-07-20)
+
+Question: is the Beta kernel (envelope-shape control) a better capacity lever
+than the Gabor band (interior oscillation) on this content? New mode
+`dbs-gabor` (`scene/gaussian_model_beta_gabor.py`, commit `1916333`) puts the
+same projected residual on the dBS-SH base — the CUDA already composed
+beta+gabor; only the model layer was missing. Whitening/init/clamp go through
+a Cholesky factor of `get_covariance` (dBS rotations are l-triangle, and that
+IS the `cov3D_precomp` the renderer consumes); the projection is approximate
+under a beta envelope (same status as the analytic clip on beta). Verified:
+parity bit-exact vs plain dbs-sh, bootstrap/gradflow/clamp ALL PASS, lifecycle
+ALL PASS.
+
+Protocol: dBS-SH trained from scratch 30k (`--mode dbs-sh --input_dim 6
+--l_22_inv_init_scale 2.0 --eval`; NO mip — unsupported by dBS), then the same
+7k residual-only warm-start recipe. dBS densification settled at **195,279**
+primitives (vs 270,627 for dGS — not count-matched; note both caveats when
+comparing across bases). Outputs: `/data/output/xclipgs/gabor/heart_900_dbs_sh/`
+and `.../heart_900_dbs_gabor_resonly/`.
+
+   | model             | N       | all     | intact  | clipped | SSIM    | LPIPS   |
+   |-------------------|---------|---------|---------|---------|---------|---------|
+   | dGS base          | 270,627 | 29.2025 | 31.0363 | 27.3687 | 0.94038 | 0.09508 |
+   | dGS + gabor v2    | 270,627 | 29.3423 | 31.2350 | 27.4496 | 0.94115 | 0.09444 |
+   | dBS-SH base       | 195,279 | 28.6280 | 31.0121 | 26.2440 | 0.93059 | 0.10791 |
+   | dBS-SH + gabor    | 195,279 | 28.7183 | 31.1615 | 26.2751 | 0.93107 | 0.10743 |
+
+Findings:
+1. **The dBS deficit is entirely a clipping story.** On intact views dBS-SH
+   TIES dGS (31.01 vs 31.04) with 28% fewer primitives and no mip filter; it
+   loses its whole 0.57 dB on the clipped half (-1.12 dB), where the
+   Gaussian-derived `clipPhi` is approximate on a beta envelope. The beta
+   kernel itself is competitive (even primitive-efficient) here; what it lacks
+   is an exact clip operator. If beta ever matters strategically, the unlock
+   is deriving the beta half-space integral, not more primitives.
+2. **The gabor band gives the same modest, intact-skewed bump on both bases**:
+   +0.199/+0.081 dB (intact/clipped) on dGS, +0.150/+0.031 dB on dBS-SH.
+   Capacity again not binding (96.6% active, median |amp| 0.118, 0.01% at tanh
+   saturation, 1.1% at the omega hi-clamp).
+3. **Decision unchanged**: dGS + exact clip remains the best configuration
+   overall; neither the beta swap nor the gabor band (nor both) changes the
+   RenderFM picture.
+
 ### Response to review (2026-07-20, same day)
 
 Point 1 (growth paths broken) — **confirmed and FIXED**:
