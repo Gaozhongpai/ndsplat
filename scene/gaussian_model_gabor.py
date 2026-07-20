@@ -150,7 +150,16 @@ def project_gabor_band(k, phase, raw_amp, viewpoint_camera, means3D, Sigma,
         s2 = (Sn @ nrm - (q_n[:, 0] * inx + q_n[:, 1] * iny)).clamp_min(1e-12)
         cov = torch.einsum('ni,ni->n', Sn, k) \
             - (q[:, 0] * inx + q[:, 1] * iny)
-        gabor_b = (cov / torch.sqrt(s2)).unsqueeze(-1).contiguous()
+        # Cauchy-Schwarz gives |b| <= sigma_xi exactly, but both Schur
+        # complements are DIFFERENCES of near-equal fp32 numbers: for
+        # degenerate splats (plane nearly containing the ray) cancellation
+        # noise dominates and |b| can blow past the bound by orders of
+        # magnitude (observed 7.6e3 on heart -> e^{b^2/2} overflow -> NaN ->
+        # every splat killed via fmaxf(NaN,0)=0 -> black renders). Clamp to
+        # the bound, which is a mathematical no-op in exact arithmetic.
+        sig_xi = torch.sqrt(var_ray).unsqueeze(-1)
+        gabor_b = torch.clamp(
+            (cov / torch.sqrt(s2)).unsqueeze(-1), -sig_xi, sig_xi).contiguous()
     return gabor4, gabor_b
 
 
