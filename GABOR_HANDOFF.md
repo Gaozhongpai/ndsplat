@@ -1,15 +1,17 @@
 # Gabor Residual Integration — Handoff
 
 > **OUTCOME (2026-07-20): COMPLETE. Decision — do NOT adopt Gabor for RenderFM.**
-> The residual works and is verified correct, but the heart gain is only
-> **+0.09 dB PSNR** (see results below). This matches representation theory:
-> Gabor's advantage scales with high-frequency oscillatory content, and cinematic
-> CT is spectrally smooth, so the residual has little to bite on. Not worth the
-> primitive swap (would complicate the exact clip / browser renderer / feed-forward
-> prediction). RenderFM C5 stays on **LoD-Gaussians** (importance-ordered,
-> anatomy-aware via the mask). This branch is kept as a working reference
-> implementation + a documented result. kneejoint (high-freq bone) was NOT run —
-> even a favorable gain there would not change the decision.
+> The residual works and is verified correct. Two parameterizations were fit on
+> heart: screen-space omega gave **+0.09 dB PSNR**; the improved view-consistent
+> projected wave vector (v2, see below) gave **+0.14 dB PSNR**. Both match
+> representation theory: Gabor's advantage scales with high-frequency oscillatory
+> content, and cinematic CT is spectrally smooth, so the residual has little to
+> bite on. Not worth the primitive swap (would complicate the exact clip /
+> browser renderer / feed-forward prediction). RenderFM C5 stays on
+> **LoD-Gaussians** (importance-ordered, anatomy-aware via the mask). This branch
+> is kept as a working reference implementation + a documented result. kneejoint
+> (high-freq bone) was NOT run — even a favorable gain there would not change the
+> decision.
 
 
 **Goal:** Add a **residual Gabor band** on top of the existing **dGS** base in the
@@ -24,6 +26,11 @@ A Gabor atom modulates the footprint weight:
 `alpha = opacity * kernel_weight * clip_mult * gabor_mult`, where
 `gabor_mult = 1 + amp * cos(omega·d + phase)`, `d` = pixel offset from projected
 center, `gabor = {omega_x, omega_y, phase, amp}` (a `float4` per Gaussian).
+Since v2 (commit `411fcdf`) that float4 is BUILT PER VIEW in Python: the model
+stores a world-space wave vector `k` [N,3] and `_gabor_tensors_for_raster`
+projects it to `omega_2d` + a Gaussian along-ray amplitude attenuation
+(differentiable, so the CUDA `grad_gabor` chains back into `k`; the CUDA kernels
+are unchanged).
 
 ## Branch / commit state
 
@@ -34,9 +41,13 @@ center, `gabor = {omega_x, omega_y, phase, amp}` (a `float4` per Gaussian).
 
 Files implemented (all committed):
 - `scene/gaussian_model_gabor.py` — `dgs-gabor` model: extends the dGS model with
-  `_gabor_omega [N,3]`, `_gabor_phase [N,1]`, `_gabor_amp [N,1]`. omega random
-  screen direction × 0.4 rad/px; amp/phase zero. save_ply/load_ply extended.
-  Registered in `scene/__init__.py`. Also has a warm-start fix for loading a
+  `_gabor_omega [N,3]` (world-space wave vector k since v2), `_gabor_phase
+  [N,1]`, `_gabor_amp [N,1]` (tanh-activated since v2). Whitened-frame init
+  ||S Rᵀ k|| ~ U(0.7, 1.5) rad/sigma; amp/phase zero. Per-view projection +
+  attenuation in `_gabor_tensors_for_raster` (closed form documented there);
+  `clamp_gabor_frequency()` keeps ||S Rᵀ k|| in [0.5, 3.0] (called from train.py
+  after each optimizer step). save_ply/load_ply extended. Registered in
+  `scene/__init__.py`. Also has a warm-start fix for loading a
   non-view-dependent dGS checkpoint into a view-dependent gabor fit.
 - `submodules/tcgs_speedy_rasterizer/cuda_rasterizer/forward.cu` (~L555-593):
   gabor_mult modulation in the blend loop. The half-space clip of the Gabor
@@ -146,3 +157,62 @@ in-tree `.so` silently shadows installed builds (fake OOMs, "no kernel image").
    `/data/output/xclipgs/gabor/heart_900_resonly/` (results.json, renders,
    training.log). The training-loop eval (float renders, no PNG quantization)
    read 29.203 -> 29.331 (+0.13 dB) over the same fit.
+
+## v2: view-consistent parameterization (2026-07-20, commit `411fcdf`)
+
+After porting design choices from the Gabor Fields reference implementation
+(github.com/Arcanous98/gabor_fields — MIT; NOTE it is a tomographic
+Mitsuba/DrJIT codebase: Gaussians + ONE Gabor level, scalar omega in the
+primitive's whitened frame, no phase parameter, signed amplitudes, BoundedAdam
+omega bounds [0.5, 3], two-stage fit against a blurred pyramid):
+
+1. **Projected wave vector (the big one).** `_gabor_omega` is a world-space k.
+   Per view: `omega_2d = -Sigma2d^-1 T^T Sigma k` (T = the same W·J affine map
+   the covariance projection uses), `amp_eff = tanh(amp) * exp(-0.5·Var(k·delta
+   | ray))` — Gaussian conditioning of the 3D modulated atom on the pixel ray.
+   Stripes now foreshorten correctly with view and waves along the viewing ray
+   wash out instead of painting arbitrary stripes. Python-side and
+   differentiable; CUDA unchanged. Verified against a finite-difference
+   Jacobian of the real projection pipeline and numerical line-integral
+   conditional expectations at float64 (`scripts/tests/gabor_projection_check.py`,
+   ALL PASS ~4e-10); heart amp=0 parity still bit-exact; grad flow to k/phase
+   verified (`scripts/tests/gabor_gradflow_check.py`).
+2. **Whitened init + bounds.** Init ||S Rᵀ k|| ~ U(0.7, 1.5) rad/sigma (about
+   one oscillation per footprint regardless of splat size); clamped to
+   [0.5, 3.0] after each step. This also FIXED A BUG: the warm-start load_ply
+   path used to fill omega with a constant (v,v,v) — the 29.29 fit above
+   started with every atom on the SAME 45-degree screen stripe.
+3. **tanh amp** — the CUDA `gabor_mult < 0` clamp dead zone is unreachable.
+
+**COMPAT:** gabor PLYs written before v2 store screen-space omega and raw amp;
+re-fit rather than load them into v2 code (`heart_900_resonly` is pre-v2).
+
+Same fit recipe (7000 iters, `--gabor_residual_only --densify_until_iter 0`,
+same warm start; ~5.5 min train). Output:
+`/data/output/xclipgs/gabor/heart_900_resonly_v2/`. Test metrics (PNG-quantized,
+matched 270,627 primitives):
+
+   | model                          | PSNR    | SSIM    | LPIPS   |
+   |--------------------------------|---------|---------|---------|
+   | dGS base (30k)                 | 29.2025 | 0.94038 | 0.09508 |
+   | + Gabor, screen-space (7k)     | 29.2900 | 0.94094 | 0.09387 |
+   | + Gabor, projected k v2 (7k)   | 29.3423 | 0.94115 | 0.09444 |
+
+   v2 = **+0.14 dB over base** (vs +0.09 for screen-space), best SSIM; LPIPS
+   better than base but a hair behind the screen-space fit. Float-render
+   training-loop eval: 29.203 -> 29.381 (+0.18 dB); v2 passed the ENTIRE old
+   fit's final quality by iteration 2000, so the parameterization both
+   converges faster and lands higher.
+
+   Capacity stats at 7k (answers "do we need multiple bands per atom?" — no):
+   97.3% atoms active, median |amp| 0.150, p90 0.514, only 0.05% near tanh
+   saturation; whitened |omega| median 1.08, p90 1.49, only 0.04% at the 3.0
+   clamp (1.3% at the 0.5 floor). Neither amplitude nor frequency capacity is
+   binding — a second/third band per atom would have nothing to bite on. Multi-
+   band in the paper is emergent (many primitives, each with ONE frequency,
+   masked by per-primitive band for LOD), and that per-primitive LOD masking is
+   still possible here on amp.
+
+**Conclusion unchanged:** the improved parameterization is real (+56% more gain,
+faster convergence) but the absolute ceiling on smooth CT is too low to justify
+adopting Gabor for RenderFM.
