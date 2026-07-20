@@ -8,10 +8,12 @@
 > less. This matches representation theory: Gabor's advantage scales with
 > high-frequency oscillatory content, and cinematic CT is spectrally smooth.
 > Not worth the complexity for RenderFM (browser renderer, feed-forward
-> prediction). RenderFM C5 stays on **LoD-Gaussians**. The branch is kept as a
-> verified reference implementation + documented results. One experiment still
-> running: 30k from-scratch co-training (base + band + densification), see
-> Open items.
+> prediction). RenderFM C5 stays on **LoD-Gaussians**. A training-protocol
+> ablation additionally shows **staged fitting is load-bearing**: joint
+> fine-tuning and from-scratch co-training both land BELOW the plain base.
+> The branch is kept as a verified reference implementation + documented
+> results. Experiments closed 2026-07-20; a tempered joint fine-tune (base
+> LRs at the schedule tail) was deliberately NOT run (stopped per user).
 
 ## What this is
 
@@ -108,9 +110,30 @@ Findings:
    fwd+bwd 49.7 / 53.7 ms. Plain dGS standard forward: 5.1 ms — the band
    itself is the main cost (disables the TCGS fast path, adds the per-view
    projection + per-sample modulation).
+5. **Staged fitting is load-bearing** (training-protocol ablation, all-view
+   PSNR, same flags unless noted):
+
+   | protocol                                   | N       | PSNR    |
+   |--------------------------------------------|---------|---------|
+   | dGS base 30k                               | 270,627 | 29.2025 |
+   | + STAGED residual 7k (frozen base)         | 270,627 | 29.3418 |
+   | + joint fine-tune 7k (base+band trainable) | 270,627 | 28.8061 |
+   | plain dGS fine-tune 7k (control)           | 270,627 | 28.7683 |
+   | from-scratch co-train 30k (densify on)     | 253,527 | 28.7894 |
+
+   Warm-starting WITHOUT the freeze restarts the xyz LR schedule hot, which
+   alone costs 0.43 dB (see the control); the band adds only +0.04 on top of
+   that identical schedule. From-scratch co-training tracks BELOW plain dGS
+   at every milestone (23.5 vs 24.9 @ 2k, 27.1 vs 27.7 @ 7k, 28.2 vs 28.7
+   @ 15k) and perturbs densification (253k vs 271k primitives): the random-
+   frequency band competes with the base for error during the formative
+   phase. This mirrors upstream Gabor Fields' own staged/hierarchical level
+   training. A tempered joint fine-tune (base LRs pinned at the 30k schedule
+   tail) was not run — experiments stopped per user.
 
 Outputs under `/data/output/xclipgs/gabor/`: `heart_900_resonly_v2` (approx),
-`heart_900_resonly_v3` (exact), `heart_900_dbs_sh`, `heart_900_dbs_gabor_resonly`.
+`heart_900_resonly_v3` (exact), `heart_900_dbs_sh`, `heart_900_dbs_gabor_resonly`,
+`heart_900_gabor_scratch`, `heart_900_joint7k`, `heart_900_dgs_ft7k`.
 dGS base: `/data/output/xclipgs/ours/heart_900`.
 
 ## Verification (all PASS, 2026-07-20)
@@ -195,11 +218,9 @@ Environment:
 
 ## Open items
 
-- **From-scratch co-training** (running 2026-07-20): 30k `dgs-gabor` with
-  densification, identical flags to the dGS base training — tests whether
-  co-adapting base + band beats the frozen-base residual (+0.14 dB). Output:
-  `/data/output/xclipgs/gabor/heart_900_gabor_scratch/`. Record the result
-  here when done.
+None — experiments closed 2026-07-20 (results above; finding 5 records the
+training-protocol ablation that ended the study). The branch is frozen as a
+reference implementation.
 
 ## Independent implementation review (2026-07-20)
 
