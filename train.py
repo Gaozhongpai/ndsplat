@@ -476,6 +476,11 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
                 else:
                     gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none = True)
+                # Residual Gabor band: keep the whitened frequency magnitude
+                # inside its bounds after every step (the Gabor Fields
+                # reference enforces the same via a bounded optimizer).
+                if "gabor" in mode:
+                    gaussians.clamp_gabor_frequency()
 
             # Update viewer
             if viewer is not None:

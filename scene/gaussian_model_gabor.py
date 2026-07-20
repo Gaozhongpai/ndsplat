@@ -5,16 +5,29 @@
 # Gabor kernels):
 #   - The dGS base (scene/gaussian_model_dgs.py) is the Gaussian base. Its
 #     parameters, save/load and forward behaviour are UNCHANGED.
-#   - On top of the base each Gaussian carries a residual Gabor band: a screen
-#     space cosine modulation of its Gaussian footprint,
-#         weight_gabor = weight * (1 + amp * cos(omega . d_screen + phase))
+#   - On top of the base each Gaussian carries a residual Gabor band: a cosine
+#     modulation of its Gaussian footprint,
+#         weight_gabor = weight * (1 + amp * cos(omega_2d . d_screen + phase))
 #     where d_screen = (splat_center_px - pixel) is the same offset the base
-#     footprint uses, omega is a per-Gaussian screen-space frequency (carried as
-#     a 3-vector _gabor_omega, its first two components used as the screen
-#     frequency), and phase is _gabor_phase.
-#   - amp = _gabor_amp (raw, no activation). It is ZERO-initialised, so a fresh
-#     model renders BYTE-IDENTICALLY to plain dGS (the modulation factor is 1),
-#     and the CUDA forward is gated so a null gabor buffer is the exact dGS path.
+#     footprint uses. _gabor_omega [N,3] is a WORLD-SPACE wave vector k tied to
+#     the primitive; per view it is projected to the screen frequency omega_2d
+#     by conditioning the 3D modulated Gaussian on the pixel ray (see
+#     _gabor_tensors_for_raster). This makes the stripes view-consistent: an
+#     oblique view sees the frequency foreshortened, and a wave vector aligned
+#     with the viewing ray washes out (Gaussian-attenuated amplitude) instead of
+#     painting stripes with a wrong orientation.
+#   - amp = tanh(_gabor_amp) in (-1, 1), so the CUDA-side clamp of the
+#     modulation factor at zero (its zero-gradient dead zone) is unreachable.
+#     _gabor_amp is ZERO-initialised (tanh(0) = 0), so a fresh model renders
+#     BYTE-IDENTICALLY to plain dGS (the modulation factor is 1), and the CUDA
+#     forward is gated so a null gabor buffer is the exact dGS path.
+#   - Frequency lives in the WHITENED frame of the base primitive (the Gabor
+#     Fields convention): magnitude ||S R^T k|| is rad per envelope sigma. Init
+#     draws it ~ U(0.7, 1.5) along a random whitened direction (about one
+#     oscillation across the footprint) and clamp_gabor_frequency() keeps it in
+#     [0.5, 3.0] after each optimizer step — the lower bound keeps the band
+#     genuinely oscillatory (omega -> 0 with amp != 0 is redundant with base
+#     opacity), the upper bound blocks super-Nyquist atoms that alias.
 #
 # Exact vs approximate: the forward Gabor factor is exact for the *unclipped*
 # footprint. The half-space clip of a Gabor atom is the complex-error-function
@@ -28,16 +41,17 @@ import numpy as np
 from torch import nn
 
 from scene.gaussian_model_dgs import GaussianModel as DGSGaussianModel
+from utils.general_utils import build_rotation, build_scaling_rotation
 
 
 class GaussianModel(DGSGaussianModel):
     """dGS base + additive residual Gabor band.
 
     Adds three per-Gaussian tensors on top of the dGS parameter set:
-      _gabor_omega  [N, 3]  screen/world frequency (first 2 comps used on screen)
+      _gabor_omega  [N, 3]  world-space wave vector k (projected per view)
       _gabor_phase  [N, 1]  phase
-      _gabor_amp    [N, 1]  residual amplitude (0 => no residual => == dGS)
-    All are zero-initialised so a fresh model is identical to plain dGS.
+      _gabor_amp    [N, 1]  raw residual amplitude; tanh-activated at render
+    amp is zero-initialised so a fresh model is identical to plain dGS.
     """
 
     # Names of the extra Gabor optimizer groups / PLY attribute prefixes, so the
@@ -48,16 +62,27 @@ class GaussianModel(DGSGaussianModel):
         ("_gabor_amp", "gabor_amp", 1),
     )
 
+    # Whitened-frame frequency bounds (rad per envelope sigma), following the
+    # Gabor Fields reference (BoundedAdam omega bounds [0.5, 3.0]). Init draws
+    # from [WHITENED_OMEGA_INIT_LO, _HI], inside the clamp range.
+    WHITENED_OMEGA_LO = 0.5
+    WHITENED_OMEGA_HI = 3.0
+    WHITENED_OMEGA_INIT_LO = 0.7
+    WHITENED_OMEGA_INIT_HI = 1.5
+
     def __init__(self, *args, gabor_omega_init: float = 0.4, **kwargs):
         super().__init__(*args, **kwargs)
-        # Screen-space frequency magnitude (rad/pixel) each residual atom is
-        # seeded with. amp is ALWAYS zero-init (so the forward stays byte-
-        # identical to dGS), but omega must start NONZERO so that once amp
-        # bootstraps off zero the cosine already carries a real spatial
-        # frequency and can become oscillatory. With omega == 0 the residual
-        # degenerates to a uniform footprint rescale and never learns any
-        # Gabor structure (its omega/phase gradients stay ~0). ~0.4 rad/px
-        # gives roughly one oscillation across a ~15 px footprint.
+        # amp is ALWAYS zero-init (so the forward stays byte-identical to dGS),
+        # but omega must start NONZERO so that once amp bootstraps off zero the
+        # cosine already carries a real spatial frequency and can become
+        # oscillatory. With omega == 0 the residual degenerates to a uniform
+        # footprint rescale and never learns any Gabor structure (its
+        # omega/phase gradients stay ~0). The init lives in the WHITENED frame
+        # of each base primitive: k = R S^-1 u * w_u with u a random unit
+        # direction and w_u ~ U(0.7, 1.5) rad/sigma, i.e. roughly one
+        # oscillation across the footprint regardless of the primitive's size
+        # or anisotropy (gabor_omega_init is kept for CLI compatibility but no
+        # longer used).
         self.gabor_omega_init = gabor_omega_init
         self._gabor_omega = torch.empty(0)
         self._gabor_phase = torch.empty(0)
@@ -78,21 +103,56 @@ class GaussianModel(DGSGaussianModel):
     def get_gabor_amp(self):
         return self._gabor_amp
 
+    @torch.no_grad()
+    def _whitened_omega(self, idx=None, device="cuda"):
+        """Random world-space wave vectors in the whitened frame of the base:
+        k = R S^-1 u * w_u, u ~ uniform on S^2, w_u ~ U(0.7, 1.5) rad/sigma.
+        The whitened wave cos(w_u * u . p), p = S^-1 R^T (x - mu), then has
+        about one oscillation across the footprint for every primitive,
+        independent of its size/anisotropy. Requires the base params to exist.
+        idx selects a subset of primitives (None = all)."""
+        rot = self._rotation if idx is None else self._rotation[idx]
+        s = self.get_scaling if idx is None else self.get_scaling[idx]
+        n = rot.shape[0]
+        R = build_rotation(rot)                                   # [n,3,3]
+        u = torch.randn(n, 3, device=device)
+        u = u / u.norm(dim=1, keepdim=True).clamp_min(1e-8)
+        w_u = torch.rand(n, 1, device=device) \
+            * (self.WHITENED_OMEGA_INIT_HI - self.WHITENED_OMEGA_INIT_LO) \
+            + self.WHITENED_OMEGA_INIT_LO
+        k = torch.einsum('nij,nj->ni', R, u / s.clamp_min(1e-8)) * w_u
+        return k
+
     def _init_gabor_params(self, num_gaussians, device="cuda"):
         """Init the residual Gabor band. amp is ZERO (=> forward == dGS), omega
-        is a random screen-space direction of magnitude gabor_omega_init so the
+        is a whitened-frame random wave vector (see _whitened_omega) so the
         cosine carries a real frequency once amp bootstraps off zero."""
-        # random 2D screen direction * magnitude, third component unused
-        theta = torch.rand(num_gaussians, 1, device=device) * (2 * 3.14159265)
-        mag = float(self.gabor_omega_init)
-        omega = torch.zeros((num_gaussians, 3), device=device)
-        omega[:, 0:1] = mag * torch.cos(theta)
-        omega[:, 1:2] = mag * torch.sin(theta)
+        omega = self._whitened_omega(device=device)
+        assert omega.shape[0] == num_gaussians, \
+            f"gabor init needs base params: {omega.shape[0]} vs {num_gaussians}"
         phase = torch.zeros((num_gaussians, 1), device=device)
         amp = torch.zeros((num_gaussians, 1), device=device)
         self._gabor_omega = nn.Parameter(omega.requires_grad_(True))
         self._gabor_phase = nn.Parameter(phase.requires_grad_(True))
         self._gabor_amp = nn.Parameter(amp.requires_grad_(True))
+
+    @torch.no_grad()
+    def clamp_gabor_frequency(self):
+        """Keep the whitened frequency magnitude ||S R^T k|| inside
+        [WHITENED_OMEGA_LO, WHITENED_OMEGA_HI] by rescaling k. Call after each
+        optimizer step (the Gabor Fields reference enforces the same bounds via
+        BoundedAdam). Lower bound: a near-DC residual is redundant with base
+        opacity. Upper bound: super-Nyquist atoms alias and train poorly."""
+        if self._gabor_omega.numel() == 0:
+            return
+        k = self._gabor_omega
+        R = build_rotation(self._rotation)
+        # S R^T k, per-axis: (R^T k)_i * s_i
+        white = torch.einsum('nji,nj->ni', R, k) * self.get_scaling
+        m = white.norm(dim=1, keepdim=True)
+        factor = m.clamp(self.WHITENED_OMEGA_LO, self.WHITENED_OMEGA_HI) \
+            / m.clamp_min(1e-12)
+        k.mul_(factor)
 
     # ---- creation --------------------------------------------------------
     def create_from_pcd(self, pcd, spatial_lr_scale, mcmc_cap_max=None, densification_strategy="standard"):
@@ -244,10 +304,18 @@ class GaussianModel(DGSGaussianModel):
                 return arr
             return np.full((n, dim), fill, dtype=np.float32)
 
-        omega = _read("gabor_omega", 3, self.gabor_omega_init)
         phase = _read("gabor_phase", 1, 0.0)
         amp = _read("gabor_amp", 1, 0.0)  # absent (plain dGS ckpt) => zero => == dGS
-        self._gabor_omega = nn.Parameter(torch.tensor(omega, dtype=torch.float, device=device).requires_grad_(True))
+        if any(p.startswith("gabor_omega_") for p in names):
+            # Resuming a gabor fit: keep its trained wave vectors.
+            omega_t = torch.tensor(_read("gabor_omega", 3, 0.0),
+                                   dtype=torch.float, device=device)
+        else:
+            # Warm-starting a plain dGS checkpoint: whitened-frame random init.
+            # (The old code filled a CONSTANT (v,v,v) here, which seeded every
+            # atom with the same stripe direction — a genuine init bug.)
+            omega_t = self._whitened_omega(device=device)
+        self._gabor_omega = nn.Parameter(omega_t.requires_grad_(True))
         self._gabor_phase = nn.Parameter(torch.tensor(phase, dtype=torch.float, device=device).requires_grad_(True))
         self._gabor_amp = nn.Parameter(torch.tensor(amp, dtype=torch.float, device=device).requires_grad_(True))
 
@@ -350,7 +418,7 @@ class GaussianModel(DGSGaussianModel):
         # we leave gabor residual at the dead slots reset to zero (safe: zero
         # residual == pure dGS for those, they will re-learn).
         with torch.no_grad():
-            self._gabor_omega[dead_indices] = float(self.gabor_omega_init)
+            self._gabor_omega[dead_indices] = self._whitened_omega(dead_indices)
             self._gabor_phase[dead_indices] = 0.0
             self._gabor_amp[dead_indices] = 0.0
 
@@ -385,25 +453,87 @@ class GaussianModel(DGSGaussianModel):
         return num_gs
 
     # ---- rendering -------------------------------------------------------
-    def _gabor_tensors_for_raster(self):
+    def _gabor_tensors_for_raster(self, viewpoint_camera, means3D, scales,
+                                  rotations, antialiasing, tanfovx, tanfovy,
+                                  scaling_modifier=1.0):
         """Pack the gabor band into the [N, 4] tensor the CUDA forward expects:
-        columns = (omega_x_screen, omega_y_screen, phase, amp).
+        columns = (omega_x_screen, omega_y_screen, phase, amp_effective).
         Returns None when the residual is globally disabled so the CUDA path is
         byte-identical to dGS.
+
+        _gabor_omega is a WORLD-SPACE wave vector k. The 3D atom is
+        G_3d(x) * (1 + amp * cos(k . (x - mu) + phase)); conditioning the world
+        offset delta on the screen offset Delta = P delta (P = the same affine
+        world->pixel map the covariance projection uses, Sigma_2d = P Sigma P^T)
+        gives E[cos(k.delta + phase) | Delta]
+            = exp(-0.5 * Var(k.delta | Delta)) * cos((M^T k) . Delta + phase),
+        M = Sigma P^T Sigma_2d^-1. So per view:
+            omega_2d = -Sigma_2d^-1 P Sigma k      (CUDA d = center - pixel = -Delta)
+            amp_eff  = tanh(raw_amp) * exp(-0.5 * (k^T Sigma k - q^T Sigma_2d^-1 q)),
+                       q = P Sigma k.
+        The attenuation kills atoms whose wave points along the viewing ray
+        (they would otherwise paint stripes with an arbitrary orientation), and
+        the frequency foreshortens correctly with view — this is what makes the
+        band consistent across training views. Everything here is autograd-
+        differentiable, so grad flows from the CUDA grad_gabor back into k.
+        Sigma_2d uses the same dilation as the renderer (0.1 antialiased /
+        0.3 classic), which also guarantees invertibility.
         """
         if not getattr(self, "use_gabor", True):
             return None
         if self._gabor_amp.numel() == 0:
             return None
-        omega = self._gabor_omega
-        # Use the first two components as the screen-space frequency (per-pixel
-        # d is in screen/pixel units). This keeps the residual analytic and
-        # cheap; a full world->screen frequency projection is left as future
-        # work (noted approximate).
+        k = self._gabor_omega                                     # [N,3]
+        W_mat = viewpoint_camera.world_view_transform             # [4,4], row-vector conv
+        width = int(viewpoint_camera.image_width)
+        height = int(viewpoint_camera.image_height)
+        focal_x = width / (2.0 * tanfovx)
+        focal_y = height / (2.0 * tanfovy)
+
+        # View-space centers, with the same frustum clamp computeCov2D applies.
+        t = means3D @ W_mat[:3, :3] + W_mat[3, :3]                # [N,3]
+        tz = t[:, 2].clamp_min(0.2)
+        tx = (t[:, 0] / tz).clamp(-1.3 * tanfovx, 1.3 * tanfovx) * tz
+        ty = (t[:, 1] / tz).clamp(-1.3 * tanfovy, 1.3 * tanfovy) * tz
+
+        # T = Wm @ J (float64-reference convention): screen offset
+        # Delta = T[:, :2]^T . delta_world.
+        n = k.shape[0]
+        J = torch.zeros(n, 3, 2, device=k.device, dtype=k.dtype)
+        J[:, 0, 0] = focal_x / tz
+        J[:, 1, 1] = focal_y / tz
+        J[:, 2, 0] = -focal_x * tx / (tz * tz)
+        J[:, 2, 1] = -focal_y * ty / (tz * tz)
+        T = W_mat[:3, :3].unsqueeze(0) @ J                        # [N,3,2]
+
+        # 3D world covariance of the base (same construction as the renderer).
+        L = build_scaling_rotation(scaling_modifier * scales, rotations)
+        Sigma = L @ L.transpose(1, 2)                             # [N,3,3]
+
+        ST = Sigma @ T                                            # [N,3,2]
+        Sigma2d = T.transpose(1, 2) @ ST                          # [N,2,2]
+        ks = 0.1 if antialiasing else 0.3
+        a = Sigma2d[:, 0, 0] + ks
+        b = Sigma2d[:, 0, 1]
+        c = Sigma2d[:, 1, 1] + ks
+        det = (a * c - b * b).clamp_min(1e-12)
+
+        q = torch.einsum('nij,ni->nj', ST, k)                     # [N,2] = T^T Sigma k
+        # omega_2d = -Sigma_2d^-1 q (closed-form 2x2 inverse)
+        wx = -(c * q[:, 0] - b * q[:, 1]) / det
+        wy = -(a * q[:, 1] - b * q[:, 0]) / det
+        # Var(k.delta | Delta) = k^T Sigma k - q^T Sigma_2d^-1 q; note
+        # Sigma_2d^-1 q = -omega_2d.
+        kSk = torch.einsum('ni,nij,nj->n', k, Sigma, k)
+        var_ray = (kSk + q[:, 0] * wx + q[:, 1] * wy).clamp_min(0.0)
+        atten = torch.exp(-0.5 * var_ray).unsqueeze(-1)           # [N,1]
+
+        amp_eff = torch.tanh(self._gabor_amp) * atten
         gabor = torch.cat([
-            omega[:, 0:2],
+            wx.unsqueeze(-1),
+            wy.unsqueeze(-1),
             self._gabor_phase,
-            self._gabor_amp,
+            amp_eff,
         ], dim=1).contiguous()
         return gabor
 
@@ -457,7 +587,10 @@ class GaussianModel(DGSGaussianModel):
             opacity = opacity * keep.to(opacity.dtype).view(-1, 1)
             clip_plane_tensor = None
 
-        gabor = self._gabor_tensors_for_raster()
+        gabor = self._gabor_tensors_for_raster(
+            viewpoint_camera, means3D=m_cond, scales=scales,
+            rotations=self.get_rotation, antialiasing=antialiasing,
+            tanfovx=tanfovx, tanfovy=tanfovy, scaling_modifier=scaling_modifier)
 
         raster_settings = TCGSRasterizationSettings(
             image_height=int(viewpoint_camera.image_height),
