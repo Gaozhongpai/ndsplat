@@ -21,11 +21,22 @@ sys.path.insert(0, "/workspace/ndsplat/submodules/gsplat")
 import torch
 
 DATA = "/data/nerf_dataset/heart_900"
-PLY = "/data/output/xclipgs/ours/heart_900/point_cloud/iteration_30000/point_cloud.ply"
-# Flags the heart checkpoint was trained with (its cfg_args).
-MODEL_KW = dict(input_dim=6, use_view_dependent_pos=False,
-                use_opacity_pos_decouple=False, l_22_inv_init_scale=2.0,
-                lambda_init=-1.2, lambda_opc=0.35)
+# Model-family selection: dgs-gabor vs dgs (default) or dbs-gabor vs dbs-sh
+# (GABOR_MODE=dbs-gabor GABOR_PLY=<plain dbs-sh ckpt>).
+GABOR_MODE = os.environ.get("GABOR_MODE", "dgs-gabor")
+if GABOR_MODE == "dgs-gabor":
+    BASE_MODE = "dgs"
+    PLY = os.environ.get(
+        "GABOR_PLY",
+        "/data/output/xclipgs/ours/heart_900/point_cloud/iteration_30000/point_cloud.ply")
+    # Flags the heart checkpoint was trained with (its cfg_args).
+    MODEL_KW = dict(input_dim=6, use_view_dependent_pos=False,
+                    use_opacity_pos_decouple=False, l_22_inv_init_scale=2.0,
+                    lambda_init=-1.2, lambda_opc=0.35)
+else:
+    BASE_MODE = "dbs-sh"
+    PLY = os.environ["GABOR_PLY"]
+    MODEL_KW = dict(input_dim=6, l_22_inv_init_scale=2.0)
 SH_DEGREE = 3
 
 
@@ -53,14 +64,14 @@ def main():
     print(f"[cam] test view 0 of {n_cams}: {cam.image_name} "
           f"{cam.image_width}x{cam.image_height} clip={getattr(cam, 'clip_plane', None)}")
 
-    dgs = make_model("dgs")
+    dgs = make_model(BASE_MODE)
     with torch.no_grad():
         img_dgs = dgs.render_tcgs(cam, use_tcgs=False)["render"]
     n_dgs = dgs.get_xyz.shape[0]
     del dgs
     torch.cuda.empty_cache()
 
-    gab = make_model("dgs-gabor")
+    gab = make_model(GABOR_MODE)
     amp_max = gab.get_gabor_amp.abs().max().item()
     om = gab.get_gabor_omega
     print(f"[gabor-init] N={gab.get_xyz.shape[0]} (dgs N={n_dgs})  "

@@ -41,6 +41,8 @@ def get_gaussian_model(mode: str):
         from scene.gaussian_model_ndgs import GaussianModel
     elif mode == "dgs-gabor":  ## dGS base + additive residual Gabor band (Gabor Fields style)
         from scene.gaussian_model_gabor import GaussianModel
+    elif mode == "dbs-gabor":  ## dBS-SH base + additive residual Gabor band
+        from scene.gaussian_model_beta_gabor import GaussianModel
     elif mode == "dgs":  ## Full DGS with view-dependent position, time-dependent rotation
         from scene.gaussian_model_dgs import GaussianModel
     elif mode == "dbs":  ## dBS: Direct Beta Splatting (dGS + UBS)

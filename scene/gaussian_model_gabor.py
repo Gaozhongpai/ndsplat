@@ -44,6 +44,85 @@ from scene.gaussian_model_dgs import GaussianModel as DGSGaussianModel
 from utils.general_utils import build_rotation, build_scaling_rotation
 
 
+def project_gabor_band(k, phase, raw_amp, viewpoint_camera, means3D, Sigma,
+                       antialiasing, tanfovx, tanfovy):
+    """World-space wave vector -> per-view screen float4 for the CUDA forward.
+
+    The 3D atom is G_3d(x) * (1 + amp * cos(k . (x - mu) + phase)); conditioning
+    the world offset delta on the screen offset Delta = P delta (P = the same
+    affine world->pixel map the covariance projection uses,
+    Sigma_2d = P Sigma P^T) gives E[cos(k.delta + phase) | Delta]
+        = exp(-0.5 * Var(k.delta | Delta)) * cos((M^T k) . Delta + phase),
+    M = Sigma P^T Sigma_2d^-1. So per view:
+        omega_2d = -Sigma_2d^-1 P Sigma k      (CUDA d = center - pixel = -Delta)
+        amp_eff  = tanh(raw_amp) * exp(-0.5 * (k^T Sigma k - q^T Sigma_2d^-1 q)),
+                   q = P Sigma k.
+    The attenuation kills atoms whose wave points along the viewing ray (they
+    would otherwise paint stripes with an arbitrary orientation), and the
+    frequency foreshortens correctly with view — this is what makes the band
+    consistent across training views. Everything here is autograd-
+    differentiable, so grad flows from the CUDA grad_gabor back into k.
+    Sigma_2d uses the same dilation as the renderer (0.1 antialiased /
+    0.3 classic), which also guarantees invertibility. Exact for a Gaussian
+    envelope; for the beta kernel the same conditioning is an approximation
+    (the same one the analytic clip already makes for beta).
+
+    Verified against finite-difference Jacobians and numerical line-integral
+    conditional expectations in scripts/tests/gabor_projection_check.py.
+
+    Args: k [N,3], phase [N,1], raw_amp [N,1] (tanh applied here),
+          means3D [N,3] rendered centers, Sigma [N,3,3] world covariance.
+    Returns the packed [N,4] {omega_x, omega_y, phase, amp_eff} tensor.
+    """
+    W_mat = viewpoint_camera.world_view_transform             # [4,4], row-vector conv
+    width = int(viewpoint_camera.image_width)
+    height = int(viewpoint_camera.image_height)
+    focal_x = width / (2.0 * tanfovx)
+    focal_y = height / (2.0 * tanfovy)
+
+    # View-space centers, with the same frustum clamp computeCov2D applies.
+    t = means3D @ W_mat[:3, :3] + W_mat[3, :3]                # [N,3]
+    tz = t[:, 2].clamp_min(0.2)
+    tx = (t[:, 0] / tz).clamp(-1.3 * tanfovx, 1.3 * tanfovx) * tz
+    ty = (t[:, 1] / tz).clamp(-1.3 * tanfovy, 1.3 * tanfovy) * tz
+
+    # T = Wm @ J (float64-reference convention): screen offset
+    # Delta = T[:, :2]^T . delta_world.
+    n = k.shape[0]
+    J = torch.zeros(n, 3, 2, device=k.device, dtype=k.dtype)
+    J[:, 0, 0] = focal_x / tz
+    J[:, 1, 1] = focal_y / tz
+    J[:, 2, 0] = -focal_x * tx / (tz * tz)
+    J[:, 2, 1] = -focal_y * ty / (tz * tz)
+    T = W_mat[:3, :3].unsqueeze(0) @ J                        # [N,3,2]
+
+    ST = Sigma @ T                                            # [N,3,2]
+    Sigma2d = T.transpose(1, 2) @ ST                          # [N,2,2]
+    ks = 0.1 if antialiasing else 0.3
+    a = Sigma2d[:, 0, 0] + ks
+    b = Sigma2d[:, 0, 1]
+    c = Sigma2d[:, 1, 1] + ks
+    det = (a * c - b * b).clamp_min(1e-12)
+
+    q = torch.einsum('nij,ni->nj', ST, k)                     # [N,2] = T^T Sigma k
+    # omega_2d = -Sigma_2d^-1 q (closed-form 2x2 inverse)
+    wx = -(c * q[:, 0] - b * q[:, 1]) / det
+    wy = -(a * q[:, 1] - b * q[:, 0]) / det
+    # Var(k.delta | Delta) = k^T Sigma k - q^T Sigma_2d^-1 q; note
+    # Sigma_2d^-1 q = -omega_2d.
+    kSk = torch.einsum('ni,nij,nj->n', k, Sigma, k)
+    var_ray = (kSk + q[:, 0] * wx + q[:, 1] * wy).clamp_min(0.0)
+    atten = torch.exp(-0.5 * var_ray).unsqueeze(-1)           # [N,1]
+
+    amp_eff = torch.tanh(raw_amp) * atten
+    return torch.cat([
+        wx.unsqueeze(-1),
+        wy.unsqueeze(-1),
+        phase,
+        amp_eff,
+    ], dim=1).contiguous()
+
+
 class GaussianModel(DGSGaussianModel):
     """dGS base + additive residual Gabor band.
 
@@ -137,6 +216,16 @@ class GaussianModel(DGSGaussianModel):
         self._gabor_amp = nn.Parameter(amp.requires_grad_(True))
 
     @torch.no_grad()
+    def gabor_whitened_magnitude(self):
+        """Whitened frequency magnitude ||S R^T k|| per primitive [N, 1]
+        (rad per envelope sigma)."""
+        k = self._gabor_omega
+        R = build_rotation(self._rotation)
+        # S R^T k, per-axis: (R^T k)_i * s_i
+        white = torch.einsum('nji,nj->ni', R, k) * self.get_scaling
+        return white.norm(dim=1, keepdim=True)
+
+    @torch.no_grad()
     def clamp_gabor_frequency(self):
         """Keep the whitened frequency magnitude ||S R^T k|| inside
         [WHITENED_OMEGA_LO, WHITENED_OMEGA_HI] by rescaling k. Call after each
@@ -145,14 +234,10 @@ class GaussianModel(DGSGaussianModel):
         opacity. Upper bound: super-Nyquist atoms alias and train poorly."""
         if self._gabor_omega.numel() == 0:
             return
-        k = self._gabor_omega
-        R = build_rotation(self._rotation)
-        # S R^T k, per-axis: (R^T k)_i * s_i
-        white = torch.einsum('nji,nj->ni', R, k) * self.get_scaling
-        m = white.norm(dim=1, keepdim=True)
+        m = self.gabor_whitened_magnitude()
         factor = m.clamp(self.WHITENED_OMEGA_LO, self.WHITENED_OMEGA_HI) \
             / m.clamp_min(1e-12)
-        k.mul_(factor)
+        self._gabor_omega.mul_(factor)
 
     # ---- creation --------------------------------------------------------
     def create_from_pcd(self, pcd, spatial_lr_scale, mcmc_cap_max=None, densification_strategy="standard"):
@@ -456,86 +541,20 @@ class GaussianModel(DGSGaussianModel):
     def _gabor_tensors_for_raster(self, viewpoint_camera, means3D, scales,
                                   rotations, antialiasing, tanfovx, tanfovy,
                                   scaling_modifier=1.0):
-        """Pack the gabor band into the [N, 4] tensor the CUDA forward expects:
-        columns = (omega_x_screen, omega_y_screen, phase, amp_effective).
+        """Pack the gabor band into the [N, 4] tensor the CUDA forward expects
+        (projection math and conventions: see project_gabor_band above).
         Returns None when the residual is globally disabled so the CUDA path is
-        byte-identical to dGS.
-
-        _gabor_omega is a WORLD-SPACE wave vector k. The 3D atom is
-        G_3d(x) * (1 + amp * cos(k . (x - mu) + phase)); conditioning the world
-        offset delta on the screen offset Delta = P delta (P = the same affine
-        world->pixel map the covariance projection uses, Sigma_2d = P Sigma P^T)
-        gives E[cos(k.delta + phase) | Delta]
-            = exp(-0.5 * Var(k.delta | Delta)) * cos((M^T k) . Delta + phase),
-        M = Sigma P^T Sigma_2d^-1. So per view:
-            omega_2d = -Sigma_2d^-1 P Sigma k      (CUDA d = center - pixel = -Delta)
-            amp_eff  = tanh(raw_amp) * exp(-0.5 * (k^T Sigma k - q^T Sigma_2d^-1 q)),
-                       q = P Sigma k.
-        The attenuation kills atoms whose wave points along the viewing ray
-        (they would otherwise paint stripes with an arbitrary orientation), and
-        the frequency foreshortens correctly with view — this is what makes the
-        band consistent across training views. Everything here is autograd-
-        differentiable, so grad flows from the CUDA grad_gabor back into k.
-        Sigma_2d uses the same dilation as the renderer (0.1 antialiased /
-        0.3 classic), which also guarantees invertibility.
-        """
+        byte-identical to dGS."""
         if not getattr(self, "use_gabor", True):
             return None
         if self._gabor_amp.numel() == 0:
             return None
-        k = self._gabor_omega                                     # [N,3]
-        W_mat = viewpoint_camera.world_view_transform             # [4,4], row-vector conv
-        width = int(viewpoint_camera.image_width)
-        height = int(viewpoint_camera.image_height)
-        focal_x = width / (2.0 * tanfovx)
-        focal_y = height / (2.0 * tanfovy)
-
-        # View-space centers, with the same frustum clamp computeCov2D applies.
-        t = means3D @ W_mat[:3, :3] + W_mat[3, :3]                # [N,3]
-        tz = t[:, 2].clamp_min(0.2)
-        tx = (t[:, 0] / tz).clamp(-1.3 * tanfovx, 1.3 * tanfovx) * tz
-        ty = (t[:, 1] / tz).clamp(-1.3 * tanfovy, 1.3 * tanfovy) * tz
-
-        # T = Wm @ J (float64-reference convention): screen offset
-        # Delta = T[:, :2]^T . delta_world.
-        n = k.shape[0]
-        J = torch.zeros(n, 3, 2, device=k.device, dtype=k.dtype)
-        J[:, 0, 0] = focal_x / tz
-        J[:, 1, 1] = focal_y / tz
-        J[:, 2, 0] = -focal_x * tx / (tz * tz)
-        J[:, 2, 1] = -focal_y * ty / (tz * tz)
-        T = W_mat[:3, :3].unsqueeze(0) @ J                        # [N,3,2]
-
         # 3D world covariance of the base (same construction as the renderer).
         L = build_scaling_rotation(scaling_modifier * scales, rotations)
         Sigma = L @ L.transpose(1, 2)                             # [N,3,3]
-
-        ST = Sigma @ T                                            # [N,3,2]
-        Sigma2d = T.transpose(1, 2) @ ST                          # [N,2,2]
-        ks = 0.1 if antialiasing else 0.3
-        a = Sigma2d[:, 0, 0] + ks
-        b = Sigma2d[:, 0, 1]
-        c = Sigma2d[:, 1, 1] + ks
-        det = (a * c - b * b).clamp_min(1e-12)
-
-        q = torch.einsum('nij,ni->nj', ST, k)                     # [N,2] = T^T Sigma k
-        # omega_2d = -Sigma_2d^-1 q (closed-form 2x2 inverse)
-        wx = -(c * q[:, 0] - b * q[:, 1]) / det
-        wy = -(a * q[:, 1] - b * q[:, 0]) / det
-        # Var(k.delta | Delta) = k^T Sigma k - q^T Sigma_2d^-1 q; note
-        # Sigma_2d^-1 q = -omega_2d.
-        kSk = torch.einsum('ni,nij,nj->n', k, Sigma, k)
-        var_ray = (kSk + q[:, 0] * wx + q[:, 1] * wy).clamp_min(0.0)
-        atten = torch.exp(-0.5 * var_ray).unsqueeze(-1)           # [N,1]
-
-        amp_eff = torch.tanh(self._gabor_amp) * atten
-        gabor = torch.cat([
-            wx.unsqueeze(-1),
-            wy.unsqueeze(-1),
-            self._gabor_phase,
-            amp_eff,
-        ], dim=1).contiguous()
-        return gabor
+        return project_gabor_band(
+            self._gabor_omega, self._gabor_phase, self._gabor_amp,
+            viewpoint_camera, means3D, Sigma, antialiasing, tanfovx, tanfovy)
 
     def render_tcgs(self, viewpoint_camera, render_mode="RGB", scaling_modifier=1.0,
                     use_tcgs=False, tight_snugbox=False, compact_box_mult=1.0):
