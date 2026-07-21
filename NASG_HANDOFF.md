@@ -1,6 +1,11 @@
 # NASG-Gabor Color (replacing SH) — Handoff
 
-> **STATUS (2026-07-21): experiments complete on heart_900; decision open.**
+> **STATUS (2026-07-21): COMPLETE. Decision — do NOT adopt (user call, same
+> day): the gains do not help the project. Staged L=2 saves 2.3x color params
+> for -0.05 dB and L=4 is only parity-plus-a-rounding-error at 0.8x; the
+> clipped-view half (the vengine-relevant regime) stays below SH at every
+> lobe count, and adoption would add feed-forward lobe prediction + renderer
+> work for no quality win. Branch frozen as a verified reference.**
 > The NASG-Gabor appearance model (Miazga/Condor/Didyk, "Beyond Spherical
 > Harmonics"; github.com/ewaMiazga/NASGabor) replaces SH view-dependent color
 > on the dGS base. Under the STAGED protocol (frozen SH-checkpoint geometry,
