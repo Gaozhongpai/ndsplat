@@ -157,6 +157,15 @@ def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_
                                         use_rot_scale_l_triangle=dataset.use_rot_scale_l_triangle,
                                         learnable_lambda_opc=dataset.learnable_lambda_opc,
                                         lambda_opc=dataset.lambda_opc)
+        elif mode == "dgs-nasg":
+            # NASG-Gabor color on the dGS base; before the "dgs" branch.
+            gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim,
+                                      lobe_number=getattr(dataset, "lobe_number", 1),
+                                      use_view_dependent_pos=dataset.use_view_dependent_pos,
+                                      use_opacity_pos_decouple=dataset.use_opacity_pos_decouple,
+                                      l_22_inv_init_scale=dataset.l_22_inv_init_scale,
+                                      lambda_init=dataset.lambda_init,
+                                      lambda_opc=dataset.lambda_opc)
         elif "dgs" in mode:
             gaussians = GaussianModel(dataset.sh_degree, input_dim=dataset.input_dim,
                                       use_view_dependent_pos=dataset.use_view_dependent_pos,

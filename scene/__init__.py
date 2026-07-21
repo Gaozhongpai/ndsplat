@@ -39,6 +39,8 @@ def get_gaussian_model(mode: str):
         from scene.gaussian_model_ubs import GaussianModel
     elif mode == "ndgs":  ## N-DGS (supports both 6DGS and 7DGS with time, with merged parametrization)
         from scene.gaussian_model_ndgs import GaussianModel
+    elif mode == "dgs-nasg":  ## dGS base with NASG-Gabor color replacing SH
+        from scene.gaussian_model_nasg import GaussianModel
     elif mode == "dgs":  ## Full DGS with view-dependent position, time-dependent rotation
         from scene.gaussian_model_dgs import GaussianModel
     elif mode == "dbs":  ## dBS: Direct Beta Splatting (dGS + UBS)

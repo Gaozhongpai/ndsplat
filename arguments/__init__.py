@@ -90,6 +90,7 @@ class ModelParams(ParamGroup):
         self.lambda_opc = 0.35  # Default lambda_opc for opacity scaling (0.35 standard, 0.01 for dnerf, 0.2 for PBR)
         self.use_gsplat = False  # If True: use gsplat rasterizer instead of TCGS for UBS/DGS modes
         self.mip3dgs = False  # Mip-Splatting: 3D smoothing filter + 2D antialiasing (Gaussian-kernel TCGS modes: dgs/ndgs)
+        self.lobe_number = 1  # dgs-nasg: NASG-Gabor lobes per Gaussian (color = 3 + 9*L params vs 48 for SH3)
         self.clip_operator = "analytic"  # XClipGS clip operator: "analytic" (Ours, exact half-space), "moment" (MM, moment-matched truncation), "hardcull" (HC, per-primitive keep/drop). dgs mode.
         # ClipGS baseline reimpl (--mode clipgs): 3DGS + STE hard-cull + deform MLP.
         self.clipgs_deform_scale = False  # let the deform MLP also predict log-scale offsets (else position-only)
@@ -142,6 +143,7 @@ class OptimizationParams(ParamGroup):
         self.opacity_reset_interval = 3000
 
         # Densification strategy: "standard" or "mcmc"
+        self.nasg_color_only = False  # dgs-nasg: freeze the dGS base, train ONLY c0 + NASG lobes (pair with --densify_until_iter 0)
         self.densification_strategy = "standard"
 
         # Mip-Splatting: refresh cadence of the 3D smoothing filter (iterations).
