@@ -5,7 +5,9 @@
 > optimizes an intrinsic chart (conditional covariance Sigma_cond, query
 > precision P = L L^T, regression matrix M) of the joint Gaussian, rather than
 > an entangled ambient covariance. Four training variants + two theory probes.
-> **Headline: all reparameterizations are quality-neutral (within ~0.02 dB);
+> **Headline (heart): all reparameterizations quality-neutral (within ~0.02 dB).
+> Multi-dataset (below) refines this: parity on surfaces, NET-NEGATIVE and
+> high-variance on volumetric PBR — the P-coupled default is not beaten.
 > the useful result is the coupling regularizer, which makes positions ~70%
 > more view-static at a 0.009 dB cost — deployment-relevant for RenderFM.**
 > The contribution is a coordinate-chart / conditioning result, NOT a PSNR win
@@ -109,6 +111,30 @@ predict feed-forward and cheaper to store/compress. NOTE the implemented
 penalty uses tr(v_12 P v_12^T)/tr(Sigma); the review's anisotropy-exact form
 is tr(S^-1 v_12 D_Lambda P D_Lambda v_12^T) (= ||K||_F^2) — worth swapping if
 pursued.
+
+## Multi-dataset benchmark (nerf_synthetic + tandt_pbr, in progress 2026-07-22)
+
+Ran dgs-cca / dgs-mdirect vs the opacity_pos baseline (same flags, matched or
+FEWER primitives; scripts/benchmarks/dgs_{nerf_synthetic,6dgs_pbr}.sh). This
+tests the variants OFF smooth-CT, on content with real view-dependence. The
+heart null does NOT generalize uniformly:
+
+- **nerf_synthetic (opaque surfaces): parity** — cca mean +0.20 dB (n=5/8;
+  -0.09..+0.54). Like heart: surface scenes barely use the view shift.
+- **tandt_pbr (volumetric / participating media): high-variance, NET-NEGATIVE**
+  — mdirect mean -0.59 dB (n=7/7): bunny_cloud +3.11 (lone win), but dragon
+  -3.11, rvr_x -2.75, cloud -0.94, smoke -0.50, suzanne -0.15, explosion +0.21.
+  cca -0.20 (n=4/7, missing its worst scenes). Config + density matched (the
+  +3 dB bunny_cloud uses 70k prims vs the baseline's 79k), so these are real
+  parameterization effects, not artifacts.
+
+**Refined conclusion:** the standard P-coupled shift is a solid default. On
+strong view-dependence (volumetric) the decoupled/free variants REGRESS on
+average — evidence the shared-P coupling is a *beneficial* inductive bias
+there, not dead weight (the opposite of what the heart-only null implied,
+where the shift was sub-footprint so nothing could matter). bunny_cloud is a
+genuine outlier worth a footnote, not a trend. (nerf_synthetic + cca/tandt
+still completing on GPU 3/4; means may shift slightly.)
 
 ## Verification (all PASS)
 - `dgs_whitened_checks.py`: torch slice == CUDA kernel (~2e-7 values + all
