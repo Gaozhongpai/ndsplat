@@ -247,4 +247,48 @@ for dir in "$base_dir"*/; do
     fi
 done
 
+# ============================================
+# 6. dgs-cca mode (S^{1/2} K P^{1/2} regression; conditional-coords study)
+#    Baseline for comparison: output/standard/opacity_pos (same flags, mode=dgs)
+# ============================================
+echo "=============================================="
+echo "Running dgs-cca mode benchmarks"
+echo "=============================================="
+
+for dir in "$base_dir"*/; do
+    if [ -d "$dir" ]; then
+        clean_dir="${dir%/}"
+        scene_name=$(basename "$clean_dir")
+        if [[ "$scene_name" == "README.txt" ]] || [[ "$scene_name" == *.zip ]]; then
+            continue
+        fi
+
+        output_dir="output/standard/dgs_cca/nerf_synthetic/${scene_name}"
+        echo "Processing ${scene_name} with mode dgs-cca..."
+        run_experiment "dgs-cca" "$output_dir" "$dir" "--use_view_dependent_pos True"
+    fi
+done
+
+# ============================================
+# 7. dgs-mdirect mode (free P-independent M; conditional-coords study)
+#    Baseline for comparison: output/standard/opacity_pos (same flags, mode=dgs)
+# ============================================
+echo "=============================================="
+echo "Running dgs-mdirect mode benchmarks"
+echo "=============================================="
+
+for dir in "$base_dir"*/; do
+    if [ -d "$dir" ]; then
+        clean_dir="${dir%/}"
+        scene_name=$(basename "$clean_dir")
+        if [[ "$scene_name" == "README.txt" ]] || [[ "$scene_name" == *.zip ]]; then
+            continue
+        fi
+
+        output_dir="output/standard/dgs_mdirect/nerf_synthetic/${scene_name}"
+        echo "Processing ${scene_name} with mode dgs-mdirect..."
+        run_experiment "dgs-mdirect" "$output_dir" "$dir" "--use_view_dependent_pos True"
+    fi
+done
+
 echo "Benchmark completed!"
