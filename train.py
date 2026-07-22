@@ -486,6 +486,10 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
                 else:
                     gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none = True)
+                # dgs-cca: clamp the regression matrix K's spectral norm after
+                # each step to realise the metric displacement bound.
+                if hasattr(gaussians, "clamp_cca_kappa"):
+                    gaussians.clamp_cca_kappa()
 
             # Update viewer
             if viewer is not None:

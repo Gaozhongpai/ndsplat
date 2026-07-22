@@ -41,6 +41,8 @@ def get_gaussian_model(mode: str):
         from scene.gaussian_model_ndgs import GaussianModel
     elif mode == "dgs-white":  ## dGS with whitened view-dependent position shift
         from scene.gaussian_model_dgs_whitened import GaussianModel
+    elif mode == "dgs-cca":  ## dGS with M = S^{1/2} K P^{1/2} regression parameterization
+        from scene.gaussian_model_dgs_cca import GaussianModel
     elif mode == "dgs":  ## Full DGS with view-dependent position, time-dependent rotation
         from scene.gaussian_model_dgs import GaussianModel
     elif mode == "dbs":  ## dBS: Direct Beta Splatting (dGS + UBS)

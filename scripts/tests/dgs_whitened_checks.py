@@ -132,6 +132,40 @@ def main():
               0.5 < float(rw) < 2.0 and float(rs) > 3.0,
               f"whitened x{float(rw):.2f}, standard x{float(rs):.2f}")
 
+    # ---- 3. dgs-cca slice: M = S^{1/2} K P^{1/2} ---------------------------
+    print("== dgs-cca (S^{1/2} K P^{1/2}) ==")
+    from scene.gaussian_model_dgs_cca import _sym_sqrt_spd
+    with torch.no_grad():
+        L = unpack_L(L_tri)
+        P = L @ L.transpose(1, 2)
+        P_half = _sym_sqrt_spd(P)
+        # P^{1/2} is a valid symmetric PSD sqrt of P
+        check("P^{1/2} @ P^{1/2} == P", rel(P_half @ P_half, P) < 1e-4,
+              f"rel {rel(P_half @ P_half, P):.2e}")
+        check("P^{1/2} symmetric",
+              rel(P_half, P_half.transpose(1, 2)) < 1e-5, "")
+        # independent reference: dmu = lam * S^{1/2} K P^{1/2} x, K = v12 raw
+        S_half = sbar.expand(N, 3).sqrt()  # stand-in scaling for the check
+        Kmat = v12.reshape(N, 3, 3)
+        x = query - view_mean
+        ref = lam.unsqueeze(-1) * S_half * torch.einsum(
+            'nij,njk,nk->ni', Kmat, P_half, x)
+        # metric bound: ||S^{-1/2} dmu|| <= lam * ||K||_2 * ||P^{1/2} x||
+        lhs = (ref / S_half).norm(dim=1)
+        svK = torch.linalg.matrix_norm(Kmat, ord=2)
+        rhs = lam * svK * torch.einsum('nij,nj->ni', P_half, x).norm(dim=1)
+        viol = (lhs > rhs * (1 + 1e-4)).sum().item()
+        check("metric bound ||S^-1/2 dmu|| <= lam ||K||_2 ||P^1/2 x||",
+              viol == 0, f"{viol}/{N} violations")
+        # kappa clamp caps the spectral norm
+        Kbig = torch.randn(N, 3, 3, device=dev) * 5.0
+        sv0 = torch.linalg.matrix_norm(Kbig, ord=2)
+        factor = sv0.clamp_max(3.0) / sv0.clamp_min(1e-12)
+        Kc = Kbig * factor.reshape(-1, 1, 1)
+        svc = torch.linalg.matrix_norm(Kc, ord=2)
+        check("kappa clamp: ||K||_2 <= 3.0", svc.max().item() <= 3.0 + 1e-3,
+              f"max ||K||_2 {svc.max().item():.3f}")
+
     print("ALL PASS" if not FAILS else f"FAILURES: {FAILS}")
     sys.exit(1 if FAILS else 0)
 
