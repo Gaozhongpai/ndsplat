@@ -32,7 +32,8 @@ from scene.gaussian_model_dgs_whitened import GaussianModel as WhitenedDGS, unpa
 
 
 def _sym_sqrt_spd(P):
-    """Symmetric PSD square root of a batch of SPD 3x3 matrices via eigh."""
+    """Symmetric PSD square root of a batch of SPD 3x3 matrices via eigh.
+    Kept for the verification harness; the model uses L directly (see below)."""
     evals, evecs = torch.linalg.eigh(P)
     s = evals.clamp_min(1e-12).sqrt()
     return evecs @ torch.diag_embed(s) @ evecs.transpose(1, 2)
@@ -57,8 +58,12 @@ class GaussianModel(WhitenedDGS):
             return self._xyz, attention
 
         S_half = self.get_scaling.sqrt()                         # [N,3] diag of S^{1/2}
-        P = L @ L.transpose(1, 2)
-        P_half = _sym_sqrt_spd(P)                                # [N,3,3]
+        # P^{1/2} := L (Cholesky root of P = L L^T). Any root works because K
+        # absorbs the rotation between roots; L is what unpack_L already gives
+        # and needs no eigendecomposition (the symmetric-root eigh is
+        # ill-conditioned at init, where all L diagonals are equal -> repeated
+        # eigenvalues -> cuSOLVER non-convergence; L sidesteps it entirely).
+        P_half = L                                               # [N,3,3]
         # NOTE: _v_12_direction is used RAW here (K), without the
         # F.normalize/mean-scale of get_v_12 — the S^{1/2} factor now carries
         # the spatial scaling that get_v_12 baked in, and the KAPPA clamp bounds
