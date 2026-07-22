@@ -142,6 +142,7 @@ class OptimizationParams(ParamGroup):
         self.opacity_reset_interval = 3000
 
         # Densification strategy: "standard" or "mcmc"
+        self.lambda_coupling = 0.0  # dgs coupling-energy regularizer weight (eta); 0 = off (exact baseline)
         self.densification_strategy = "standard"
 
         # Mip-Splatting: refresh cadence of the 3D smoothing filter (iterations).

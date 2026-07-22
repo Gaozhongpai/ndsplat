@@ -315,6 +315,26 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
             batch_radii.append(radii)
             batch_viewspace_tensors.append(viewspace_point_tensor)
 
+        # Coupling-energy regularizer (conditional-coordinates analysis of dGS):
+        # the implemented view shift is dmu = lambda * v_12 @ P @ delta, whose
+        # expected squared magnitude under the query kernel is
+        # lambda^2 * tr(v_12 P v_12^T). Penalize it relative to the primitive's
+        # spatial size tr(Sigma) = sum(s^2) (dimensionless). View-independent,
+        # so computed once per iteration outside the camera loop.
+        if getattr(opt, "lambda_coupling", 0.0) > 0.0 \
+                and getattr(gaussians, "use_view_dependent_pos", False) \
+                and "dgs" in mode:
+            from scene.gaussian_model_dgs_whitened import unpack_L
+            L_w = unpack_L(gaussians.get_L_22_inv)                # [N,3,3]
+            P_w = L_w @ L_w.transpose(1, 2)
+            V12_w = gaussians.get_v_12.reshape(-1, 3, 3)
+            lam_w = gaussians.lambda_activation(gaussians._lambda_view) \
+                if not gaussians.use_opacity_pos_decouple else gaussians._lambda_view
+            e_shift = lam_w ** 2 * torch.einsum('nic,ncd,nid->n', V12_w, P_w, V12_w)
+            tr_sigma = (gaussians.get_scaling ** 2).sum(dim=1)
+            total_loss = total_loss + opt.lambda_coupling * (
+                e_shift / (tr_sigma + 1e-12)).mean()
+
         total_loss.backward()
 
         iter_end.record()
