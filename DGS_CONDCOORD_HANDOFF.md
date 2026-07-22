@@ -50,11 +50,21 @@ the winner to CUDA for production).
   | baseline (dgs)      | 28.9171 | 30.7915 | 27.0426 | 0.9368 | 0.1011 |
   | +coupling (eta=.01) | 28.9083 | 30.7605 | 27.0561 | 0.9370 | 0.1010 |
   | whitened            | 28.9038 | 30.7717 | 27.0359 | 0.9371 | 0.1009 |
-  | cca (S^1/2 K L)     | <PENDING> | | | | |
-  | mdirect (free M)    | <PENDING> | | | | |
+  | cca (S^1/2 K L)     | 28.9232 | 30.7697 | 27.0766 | 0.9371 | 0.1004 |
+  | mdirect (free M)    | 28.9227 | 30.7088 | 27.1366 | 0.9371 | 0.1008 |
 
-All finished variants land within **0.013 dB overall** and **~0.02 dB on both
-the intact and clipped halves** — a clean quality-null.
+All five variants land within **0.019 dB overall** (28.904-28.923) and within
+~0.08 dB on either half — a clean quality-null across every reparameterization
+AND the inductive-bias change. cca has the best LPIPS (0.1004) and mdirect the
+best clipped-view PSNR (27.137), both inside the noise band.
+
+**mdirect (free, P-independent M) is the informative one.** It is the only
+variant that changes the model's inductive bias (breaks the shared-P coupling),
+not just the coordinate chart — yet it too is neutral (+0.006 dB vs baseline).
+All variants are expressively equivalent (below), so a change in result here
+would have meant the shared-P coupling was a useful/harmful prior; its
+neutrality means the coupling is NOT a load-bearing inductive bias on this
+content.
 
 ## Theory probes
 
@@ -115,8 +125,19 @@ reparameterizations (whitened / cca / free-M) are quality-neutral BECAUSE the
 geometry is coordinate-invariant, the parameters are fully observable at 810
 views, and the view shift is sub-footprint. The one practical lever is the
 coupling regularizer (view-static positions ~free). Independent-M (mdirect)
-tests whether decoupling the shift from P — breaking the shared-P inductive
-bias — helps; result <PENDING>.
+tested whether decoupling the shift from P — breaking the shared-P inductive
+bias — helps: it does not (+0.006 dB), so the coupling is not a load-bearing
+prior on this content either.
+
+The dGS conditional-coordinate interpretation is sound and useful for the
+paper's THEORY (block-triangular, invertible chart; local identifiability
+theorem verified empirically); it does not, on its own, yield a better model
+on smooth CT. Fifth consecutive appearance-model / parameterization study this
+week (gabor band, NASG color, dbs kernel, and now four dGS coordinate variants)
+where alternatives to the current dGS+SH+exact-clip stack are quality-neutral
+or worse — the current stack is robust. Recommended: keep the theory + the
+coupling regularizer as an optional compression/predictability aid; do not
+change the dGS forward.
 
 Branch `feat/dgs-conditional-coords` (base `mip`). Outputs under
 `/data/output/xclipgs/dgscoord/heart_900_{baseline,coupling,whitened,cca,mdirect}`.
