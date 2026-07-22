@@ -112,29 +112,57 @@ penalty uses tr(v_12 P v_12^T)/tr(Sigma); the review's anisotropy-exact form
 is tr(S^-1 v_12 D_Lambda P D_Lambda v_12^T) (= ||K||_F^2) — worth swapping if
 pursued.
 
-## Multi-dataset benchmark (nerf_synthetic + tandt_pbr, in progress 2026-07-22)
+## Multi-dataset benchmark — FINAL (nerf_synthetic 8 + tandt_pbr 7, 30/30 fits)
 
-Ran dgs-cca / dgs-mdirect vs the opacity_pos baseline (same flags, matched or
-FEWER primitives; scripts/benchmarks/dgs_{nerf_synthetic,6dgs_pbr}.sh). This
-tests the variants OFF smooth-CT, on content with real view-dependence. The
-heart null does NOT generalize uniformly:
+dgs-cca / dgs-mdirect vs the opacity_pos baseline (mode-only difference; matched
+or fewer primitives; `scripts/benchmarks/dgs_{nerf_synthetic,6dgs_pbr}.sh`).
+Tests the variants OFF smooth CT, on content with real view-dependence. Full
+per-scene PSNR and Δ vs baseline:
 
-- **nerf_synthetic (opaque surfaces): parity** — cca mean +0.20 dB (n=5/8;
-  -0.09..+0.54). Like heart: surface scenes barely use the view shift.
-- **tandt_pbr (volumetric / participating media): high-variance, NET-NEGATIVE**
-  — mdirect mean -0.59 dB (n=7/7): bunny_cloud +3.11 (lone win), but dragon
-  -3.11, rvr_x -2.75, cloud -0.94, smoke -0.50, suzanne -0.15, explosion +0.21.
-  cca -0.20 (n=4/7, missing its worst scenes). Config + density matched (the
-  +3 dB bunny_cloud uses 70k prims vs the baseline's 79k), so these are real
-  parameterization effects, not artifacts.
+  tandt_pbr (volumetric / participating media):
+  | scene       | base  |   cca Δ |  mdirect Δ |
+  |-------------|-------|---------|------------|
+  | bunny_cloud | 35.41 |  +2.63  |   +3.11    |
+  | cloud       | 39.17 |  -1.00  |   -0.94    |
+  | dragon      | 32.64 |  -2.44  |   -3.11    |
+  | explosion   | 33.29 |  +0.00  |   +0.21    |
+  | rvr_x       | 31.15 |  -1.87  |   -2.75    |
+  | smoke       | 35.15 |  -0.38  |   -0.50    |
+  | suzanne     | 26.15 |  +0.02  |   -0.15    |
+  | **mean**    |       | **-0.44** | **-0.59** |
 
-**Refined conclusion:** the standard P-coupled shift is a solid default. On
-strong view-dependence (volumetric) the decoupled/free variants REGRESS on
-average — evidence the shared-P coupling is a *beneficial* inductive bias
-there, not dead weight (the opposite of what the heart-only null implied,
-where the shift was sub-footprint so nothing could matter). bunny_cloud is a
-genuine outlier worth a footnote, not a trend. (nerf_synthetic + cca/tandt
-still completing on GPU 3/4; means may shift slightly.)
+  nerf_synthetic (opaque surfaces):
+  | scene     | base  |   cca Δ |  mdirect Δ |
+  |-----------|-------|---------|------------|
+  | chair     | 33.92 |  +0.24  |   +0.26    |
+  | drums     | 25.56 |  +0.11  |   +0.03    |
+  | ficus     | 33.66 |  -0.09  |   +0.14    |
+  | hotdog    | 35.72 |  +0.54  |   +0.60    |
+  | lego      | 33.34 |  +0.18  |   +0.32    |
+  | materials | 29.67 |  +0.25  |   -0.20    |
+  | mic       | 32.82 |  +0.04  |   +0.05    |
+  | ship      | 29.82 |  +0.05  |   +0.09    |
+  | **mean**  |       | **+0.166** | **+0.163** |
+
+Findings (complete, 30/30):
+1. **Surfaces (nerf_synthetic): parity.** cca +0.166 dB, mdirect +0.163 dB
+   over all 8 scenes — near-IDENTICAL, and both within noise of baseline
+   (per-scene -0.20..+0.60). The two variants converging to the same mean is a
+   direct empirical confirmation of the expressive-equivalence result: on
+   surface content the shift is small and all charts reach the same optimum.
+2. **Volumetric (tandt_pbr): net-negative, high-variance.** cca -0.44, mdirect
+   -0.59 over all 7. bunny_cloud (+2.63/+3.11) is a genuine lone outlier win,
+   but dragon (-2.4/-3.1), rvr_x (-1.9/-2.8), cloud (-1.0) dominate. On the
+   content where the view shift does real work, the decoupled/free variants
+   REGRESS on average. Config + density matched (the +3 dB bunny_cloud uses
+   70k prims vs the baseline's 79k), so these are real parameterization
+   effects, not artifacts.
+3. **The standard P-coupled shift is not beaten on average on any dataset**
+   (heart parity, surfaces parity, volumetric regression). This is positive
+   evidence that the shared-P coupling is a *beneficial inductive bias* on
+   strong view-dependence — the opposite of what the heart-only null implied
+   (there the shift was sub-footprint so nothing could matter). bunny_cloud is
+   a footnote, not a trend.
 
 ## Verification (all PASS)
 - `dgs_whitened_checks.py`: torch slice == CUDA kernel (~2e-7 values + all
