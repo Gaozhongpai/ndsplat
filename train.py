@@ -113,7 +113,8 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
                                   use_opacity_pos_decouple=dataset.use_opacity_pos_decouple,
                                   l_22_inv_init_scale=dataset.l_22_inv_init_scale,
                                   lambda_init=dataset.lambda_init,
-                                  lambda_opc=dataset.lambda_opc)
+                                  lambda_opc=dataset.lambda_opc,
+                                  direct_unrestricted=getattr(dataset, "direct_unrestricted", False))
     else:
         raise ValueError(f"Unknown mode: {mode}")
 

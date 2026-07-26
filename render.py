@@ -163,7 +163,8 @@ def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_
                                       use_opacity_pos_decouple=dataset.use_opacity_pos_decouple,
                                       l_22_inv_init_scale=dataset.l_22_inv_init_scale,
                                       lambda_init=dataset.lambda_init,
-                                      lambda_opc=dataset.lambda_opc)
+                                      lambda_opc=dataset.lambda_opc,
+                                      direct_unrestricted=getattr(dataset, "direct_unrestricted", False))
         else:
             raise ValueError(f"Unknown mode: {mode}")
 

@@ -183,7 +183,7 @@ class GaussianModel(MipFilterMixin):
     def __init__(self, sh_degree: int, input_dim: int = 6,
                  use_view_dependent_pos: bool = True, use_opacity_pos_decouple: bool = False,
                 time_duration: list = [0.0, 1.0], l_22_inv_init_scale: float = 1.0, lambda_init: float = -1.2,
-                lambda_opc: float = 0.35):
+                lambda_opc: float = 0.35, direct_unrestricted: bool = False):
         """
         Initialize Full DGS with view-dependent position, time-dependent rotation, and opacity.
 
@@ -210,6 +210,12 @@ class GaussianModel(MipFilterMixin):
         self.lambda_init = lambda_init  # Initial value for lambda parameters
         self.default_lambda_opc = lambda_opc  # Opacity scaling factor
         self.cond_dim = input_dim - 3  # C = 3 for view-only, 4 for view+time
+        # Direct-unrestricted ablation: learn the regression operator M in R^{3xC} freely,
+        # instead of the constrained factorization M = V_pq diag(Lambda) V_qq. Together with
+        # Sigma_cond and V_qq this is the unrestricted conditional tuple, which is a bijective
+        # reparameterization of the joint Gaussian covariance (Appendix D). No _v_12_direction,
+        # no normalization, no s-bar prefactor, no Lambda.
+        self.direct_unrestricted = direct_unrestricted
 
         # Standard 3DGS parameters
         self._xyz = torch.empty(0)
@@ -228,6 +234,12 @@ class GaussianModel(MipFilterMixin):
         # Bounded v_12 parameterization for position shift
         self._v_12_direction = torch.empty(0)  # [N, 3*C] - will be normalized
         self.v_12_activaton = torch.tanh  # Bounded to [-1, 1]
+
+        # Direct-unrestricted reuses the _v_12_direction tensor as the free regression
+        # operator M [N, 3*C] rather than adding a parallel parameter, so densification,
+        # pruning, save/load, and MCMC relocation all work unchanged. What differs is the
+        # READ path (get_v_12 / get_M) and the slicing math: no normalization, no s-bar,
+        # no Lambda. See the direct_unrestricted branch in slice_gaussian_full_method.
 
         # L_22_inv: [N, C*(C+1)/2] Cholesky of V_22^{-1} (precision matrix)
         # Uses full Cholesky (not diagonal) for better opacity performance
@@ -487,6 +499,28 @@ class GaussianModel(MipFilterMixin):
         if lambda_opc is None:
             lambda_opc = self.default_lambda_opc
 
+        if self.direct_unrestricted:
+            # Unrestricted conditional tuple (Sigma_cond, M, V_qq): M is a free 3xC matrix.
+            # Opacity is unchanged, so we reuse the fused kernel with v_12=None (opacity only)
+            # and apply the position shift in PyTorch. Correct and differentiable; not used
+            # for speed benchmarks, since it costs an extra kernel launch.
+            _, opacity_scale = slice_gaussian_full(
+                xyz=self._xyz,
+                view_mean=self.get_cond_mean,
+                query=query,
+                v_12=None,
+                L_22_inv=self.get_L_22_inv,
+                lambda_opc=lambda_opc,
+                lambda_view=None,
+                lambda_time=None,
+            )
+            if not self.use_view_dependent_pos:
+                return self._xyz, opacity_scale
+            delta = query - self.get_cond_mean                              # [N, C]
+            M = self._v_12_direction.reshape(-1, 3, self.cond_dim)          # [N, 3, C], raw
+            x_cond = self._xyz + torch.bmm(M, delta.unsqueeze(-1)).squeeze(-1)
+            return x_cond, opacity_scale
+
         # Apply sigmoid to lambda parameters (stored in logit space)
         # Only used when use_view_dependent_pos is True
         # Apply activation based on mode:
@@ -591,6 +625,12 @@ class GaussianModel(MipFilterMixin):
         # Position shift parameters
         if self.use_view_dependent_pos:
             v_12_direction = torch.normal(0, 0.01, size=(num_gaussians, 3 * C), device=device)
+            if self.direct_unrestricted:
+                # Here this tensor IS the free regression operator M (no normalization,
+                # no s-bar prefactor, no Lambda). N(0, 0.01^2) starts M near zero, i.e. an
+                # almost query-independent position, which is the neutral counterpart of
+                # dGS's near-zero initial displacement.
+                pass
         else:
             v_12_direction = torch.empty(0, device=device)
 

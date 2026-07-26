@@ -85,6 +85,12 @@ class ModelParams(ParamGroup):
         # DGS view-dependent flags (only used when mode="dgs")
         self.use_view_dependent_pos = True  # Enable view-dependent position shift
         self.use_opacity_pos_decouple = False  # If True: decouple position and opacity by setting lambda_view=lambda_time=0 (not learnable)
+        self.direct_unrestricted = False  # Ablation (NeurIPS'26 rebuttal): replace dGS's constrained factorization
+                                          # M = V_pq diag(Lambda) V_qq with a FREE matrix M in R^{3xC}, so that
+                                          # (Sigma_cond, M, V_qq) is the unrestricted conditional tuple -- a bijective
+                                          # reparameterization of the joint Gaussian covariance (Appendix D).
+                                          # N-DGS vs. this isolates the coordinate change; this vs. dGS isolates the
+                                          # spatial normalization, bounded Lambda, and structured regression prior.
         self.l_22_inv_init_scale = 1.0  # Initialization scale for L_22_inv diagonal (1.0 for standard, 2.0 for PBR scenes)
         self.lambda_init = -1.2  # Initial value for lambda_view and lambda_time parameters
         self.beta_init_view = -3.0  # dBS-only: raw init for view beta dims (7D); activated beta = 4*exp(beta_init_view)
