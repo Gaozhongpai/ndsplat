@@ -720,7 +720,15 @@ class GaussianModel(MipFilterMixin):
 
         # Add view-dependent position parameters
         if self.use_view_dependent_pos:
-            l.append({'params': [self._v_12_direction], 'lr': training_args.rotation_lr, "name": "v_12_direction"})
+            # In direct_unrestricted mode this tensor is the raw regression operator M, not a
+            # unit-normalized direction later scaled by s-bar (~1e-2). Reusing rotation_lr
+            # therefore gives M an effective step ~1/s-bar times too large, which is a tuning
+            # artifact rather than a property of the unrestricted parameterization. --m_lr
+            # overrides it; default None keeps the original behavior.
+            v12_lr = training_args.rotation_lr
+            if self.direct_unrestricted and getattr(training_args, "m_lr", 0.0):
+                v12_lr = training_args.m_lr
+            l.append({'params': [self._v_12_direction], 'lr': v12_lr, "name": "v_12_direction"})
             # Lambda parameters (only when position conditioning is enabled AND not in decouple mode)
             if not self.use_opacity_pos_decouple:
                 l.append({'params': [self._lambda_view], 'lr': training_args.beta_lr, "name": "lambda_view"})

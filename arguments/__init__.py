@@ -132,6 +132,11 @@ class OptimizationParams(ParamGroup):
         self.opacity_lr = 0.05
         self.scaling_lr = 0.005
         self.rotation_lr = 0.001
+        self.m_lr = 0.0   # LR for the free regression operator M (--direct_unrestricted only).
+                          # 0.0 => reuse rotation_lr (original behavior). Set explicitly to avoid
+                          # the scale mismatch: dGS's rotation_lr acts on a unit-normalized
+                          # direction later multiplied by s-bar, so a raw M wants ~s-bar times
+                          # that value (s-bar median 3e-3..6e-3 => m_lr ~3e-6..6e-6).
 
         # UBS-specific learning rates
         self.mean_lr = 0.001
