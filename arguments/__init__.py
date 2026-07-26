@@ -76,6 +76,7 @@ class ModelParams(ParamGroup):
         self._white_background = False
         self.data_device = "cuda"
         self.eval = False
+        self.seed = 0  # RNG seed for random/numpy/torch. Default 0 reproduces all previously published runs.
         self.mode = "dgs"  # Options: "3dgs", "ndgs", "ubs", "dgs", "dbs", "dbs-sh"
         self.input_dim = 6  # Gaussian dimension: 6 for 6DGS/UBS, 7 for 7DGS (with time)
         self.use_rot_scale_l_triangle = False  # If True: use rotation-scale-l_triangle (UBS-style), If False: use diagonal-l_triangle (NDGS-style)

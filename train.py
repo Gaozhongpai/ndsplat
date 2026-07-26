@@ -636,7 +636,7 @@ if __name__ == "__main__":
     print("Optimizing " + args.model_path)
 
     # Initialize system state (RNG)
-    safe_state(args.quiet)
+    safe_state(args.quiet, args.seed)
 
     # Configure and run training
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
