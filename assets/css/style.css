@@ -229,6 +229,8 @@ em { font-style: italic; }
   max-width: 340px; position: relative; padding-top: 30px;
 }
 .lineage-branch .branch-note { text-align: center; }
+.apps-arrow { align-self: flex-start; margin-top: 76px; }
+@media (max-width: 720px) { .apps-arrow { align-self: center; margin-top: 0; transform: rotate(90deg); } }
 .branch-connector {
   position: absolute; top: 0; left: 50%; width: 2px; height: 30px;
   background: linear-gradient(var(--line), var(--accent-2)); border-radius: 2px;
