@@ -384,6 +384,7 @@ em { font-style: italic; }
 .venue-iclr { background: rgba(109,92,246,.12); color: var(--accent-ink); }
 .venue-iccv { background: rgba(24,182,201,.14); color: #0d8090; }
 .venue-eccv { background: rgba(240,86,111,.13); color: #cf3b54; }
+.venue-arxiv { background: rgba(179,27,27,.10); color: #b31b1b; }
 .paper-title { font-size: 1.34rem; font-weight: 700; letter-spacing: -.015em; line-height: 1.28; margin: 0 0 10px; }
 .paper-pair .paper-title { font-size: 1.18rem; }
 .paper-authors { font-size: .9rem; color: var(--ink-faint); margin: 0; line-height: 1.5; }
