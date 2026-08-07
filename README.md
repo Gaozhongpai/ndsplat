@@ -13,7 +13,7 @@ and situates it within the broader lineage:
 | Universal Beta Splatting (UBS) | ICLR 2026 | https://rongliu-leo.github.io/universal-beta-splatting/ |
 | Render-FM — Feedforward Volumetric Rendering | ECCV 2026 | https://gaozhongpai.github.io/renderfm/ |
 | XClipGS — Exact Half-Space Clipping for Medical Volumes | arXiv | https://gaozhongpai.github.io/XClipGS/ |
-| *d*GS / *d*BS — Direct Conditional Parameterization | latest | (this site) |
+| *d*GS / *d*BS — Direct Conditional Parameterization | latest | https://gaozhongpai.github.io/ndsplat/ |
 
 ## Structure
 
