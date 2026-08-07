@@ -89,7 +89,9 @@
           view-dependent geometry. <strong>N-dimensional splatting</strong> solves this by lifting
           each primitive into a joint distribution over 3D position and conditioning variables, then
           <em>conditionally slicing</em> it at render time to recover a 3D primitive whose mean,
-          opacity, and covariance vary continuously with view or time.
+          opacity, and covariance vary continuously with view or time. The same primitives now carry
+          into the clinic: <strong>Render-FM</strong> predicts them from CT in one forward pass, and
+          <strong>XClipGS</strong> cuts them exactly with an interactive clipping plane.
         </p>
       </div>
 
