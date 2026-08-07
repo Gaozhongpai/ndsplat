@@ -12,6 +12,7 @@ and situates it within the broader lineage:
 | 7DGS — Unified Spatial-Temporal-Angular Gaussian Splatting | ICCV 2025 | https://gaozhongpai.github.io/7dgs/ |
 | Universal Beta Splatting (UBS) | ICLR 2026 | https://rongliu-leo.github.io/universal-beta-splatting/ |
 | Render-FM — Feedforward Volumetric Rendering | ECCV 2026 | https://gaozhongpai.github.io/renderfm/ |
+| XClipGS — Exact Half-Space Clipping for Medical Volumes | arXiv | https://gaozhongpai.github.io/XClipGS/ |
 | *d*GS / *d*BS — Direct Conditional Parameterization | latest | (this site) |
 
 ## Structure
