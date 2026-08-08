@@ -3,7 +3,7 @@
 
 The diagnostic fixes the Ours-trained interior and evaluates the analytic,
 moment-matched (MM), and hard-cull (HC) operators at the exact planes stored in
-each ``<scene>_cuteval/transforms_test.json``.  Unlike the historical script,
+each ``<scene>_<eval_name>/transforms_test.json``.  Unlike the historical script,
 this implementation uses each Gaussian's full rotated covariance and the
 persisted Mip-Splatting 3D filter.
 
@@ -132,8 +132,9 @@ def operator_components(t, opacity):
     }
 
 
-def analyze_scene(scene, data_root, out_root, geometry):
-    transform_path = data_root / "nerf_dataset" / f"{scene}_cuteval" / "transforms_test.json"
+def analyze_scene(scene, data_root, out_root, geometry, eval_name):
+    transform_path = data_root / "nerf_dataset" / \
+        f"{scene}_{eval_name}" / "transforms_test.json"
     ply_path = out_root / geometry / f"{scene}_900" / "point_cloud" / \
         "iteration_best" / "point_cloud.ply"
     xyz, scales, rotations, opacity = load_cloud(ply_path)
@@ -177,6 +178,8 @@ def main():
     parser.add_argument("--out-root", type=Path, default=Path("/data/output/xclipgs"))
     parser.add_argument("--geometry", default="ours",
                         help="fixed checkpoint geometry used for all three operators")
+    parser.add_argument("--eval-name", default="cuteval",
+                        help="dataset suffix containing evaluation planes")
     parser.add_argument("--scenes", nargs="+", default=list(SCENES))
     parser.add_argument("--output", type=Path,
                         default=Path("/data/output/xclipgs/cuteval/cerr3d.json"))
@@ -185,7 +188,9 @@ def main():
     results = {}
     print(f"{'scene':10s} {'ours':>8s} {'MM':>8s} {'HC':>8s}  (CErr3D x10^-2)")
     for scene in args.scenes:
-        result = analyze_scene(scene, args.data_root, args.out_root, args.geometry)
+        result = analyze_scene(
+            scene, args.data_root, args.out_root, args.geometry, args.eval_name
+        )
         results[scene] = result
         metrics = result["metrics"]
         print(f"{scene:10s} {0.0:8.3f} {100*metrics['mm']['total']:8.3f} "
@@ -205,7 +210,10 @@ def main():
     payload = {
         "metric": "CErr3D: wrong-side opacity mass / exact kept opacity mass",
         "geometry": args.geometry,
-        "planes": "unique normals and offsets from each cuteval transforms_test.json",
+        "planes": (
+            "unique normals and offsets from each "
+            f"{args.eval_name} transforms_test.json"
+        ),
         "covariance": "full quaternion covariance with persisted Mip-Splatting filter",
         "scene_average": average,
         "scenes": results,

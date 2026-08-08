@@ -169,6 +169,7 @@ python scripts/benchmarks/cutplane_metrics.py \
   --gt-transforms /data/nerf_dataset/<scene>_cuteval/transforms_test.json \
   --gt-dir        /data/nerf_dataset/<scene>_cuteval/test \
   --scene <scene> --out /data/output/xclipgs/cuteval/<scene> --band-px 12 --debug \
+  --fg-thr 0.04 --leak-margin-px 2 --leak-window-px 60 \
   --methods ours=<...>/ours_cuteval/<scene>/test/ours_best/renders \
             clipgs=<...>/clipgs_cuteval/<scene>/test/ours_best/renders \
             mm=<...>/mm_cuteval/<scene>/test/ours_best/renders \

@@ -48,7 +48,7 @@ class GaussianViewer(Viewer):
         self._loop_start_time = None
         super().__init__(server, render_fn, mode=mode)
         # Configure the panel
-        panel_label = f"{input_dim}D Gaussian Splatting Viewer"
+        panel_label = "Gaussian Splatting Viewer"
         if input_dim == 7:
             panel_label += " (with Time)"
         server.gui.set_panel_label(panel_label)

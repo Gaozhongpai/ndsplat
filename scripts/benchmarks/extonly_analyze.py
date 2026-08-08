@@ -18,6 +18,7 @@ Cut-face band/CDE/Leak for the ext-only model come from cuteval_extonly/<scene>
 cuteval/<scene> tables.
 """
 import argparse
+import filecmp
 import json
 from pathlib import Path
 
@@ -43,24 +44,44 @@ def frame_labels(transforms_test):
     return labels
 
 
-def per_view_split(per_view_json, labels):
-    """Mean PSNR/SSIM over intact vs clipped test frames from a per_view.json."""
+def per_view_split(per_view_json, labels, iteration=30000, model_dir=None):
+    """Mean PSNR/SSIM over intact vs clipped frames at a fixed checkpoint."""
     payload = json.loads(Path(per_view_json).read_text())
     # per_view.json = {method: {"PSNR": {name: v}, "SSIM": {...}, ...}}, where a
     # method key is "<label>_<iteration>" and a model can carry several (e.g.
-    # ours_7000, ours_best, ours_30000). Select the *best* checkpoint -- the one
-    # the paper's Tables 1-2 report -- not whatever happens to be first (which was
-    # ours_7000 and silently mixed a 7k-step PSNR with best-checkpoint cut-face).
+    # ours_7000, ours_best, ours_30000). Select the fixed 30k checkpoint used by
+    # the paper instead of a test-selected "best" checkpoint.
     keys = list(payload)
-    best = [k for k in keys if k.endswith("_best")]
-    if best:
-        method = best[0]
+    fixed = [k for k in keys if k.endswith(f"_{iteration}")]
+    if fixed:
+        method = fixed[0]
+    elif model_dir is not None:
+        # Older evaluation folders may label the render as *_best. Accept that
+        # alias only after proving that its PLY is byte-identical to the fixed
+        # final checkpoint; otherwise checkpoint selection remains ambiguous.
+        best = [k for k in keys if k.endswith("_best")]
+        best_ply = Path(model_dir) / "point_cloud" / "iteration_best" / "point_cloud.ply"
+        fixed_ply = (Path(model_dir) / "point_cloud" /
+                     f"iteration_{iteration}" / "point_cloud.ply")
+        if (len(best) == 1 and best_ply.exists() and fixed_ply.exists() and
+                filecmp.cmp(best_ply, fixed_ply, shallow=False)):
+            method = best[0]
+        else:
+            raise ValueError(
+                f"{per_view_json}: no *_{iteration} metrics and *_best is not "
+                "verified byte-identical to the fixed checkpoint")
     elif len(keys) == 1:
-        method = keys[0]
+        only = keys[0]
+        if only.endswith(f"_{iteration}"):
+            method = only
+        else:
+            raise ValueError(
+                f"{per_view_json}: only checkpoint is {only}, not iteration "
+                f"{iteration}")
     else:
         raise ValueError(
-            f"{per_view_json}: no *_best checkpoint and multiple keys {keys}; "
-            "refusing to guess (this is the bug being fixed)")
+            f"{per_view_json}: no *_{iteration} checkpoint among {keys}; "
+            "refusing to substitute a test-selected checkpoint")
     psnr = payload[method]["PSNR"]
     ssim = payload[method]["SSIM"]
     out = {}
@@ -92,6 +113,8 @@ def main():
                     help="output subdir of the external-view-only model")
     ap.add_argument("--eval900-subdir", default="extonly_eval900",
                     help="where the ext-only 900-test per_view.json lives")
+    ap.add_argument("--iteration", type=int, default=30000,
+                    help="fixed checkpoint used for all reported comparisons")
     ap.add_argument("--scenes", nargs="+", default=list(SCENES))
     ap.add_argument("--output", type=Path,
                     default=Path("/data/output/xclipgs/cuteval/extonly_ablation.json"))
@@ -106,9 +129,13 @@ def main():
         labels = frame_labels(args.data_root / "nerf_dataset" / f"{scene}_900" /
                               "transforms_test.json")
         ca = per_view_split(
-            args.out_root / args.clipaware / f"{scene}_900" / "per_view.json", labels)
+            args.out_root / args.clipaware / f"{scene}_900" / "per_view.json",
+            labels, args.iteration,
+            args.out_root / args.clipaware / f"{scene}_900")
         ex = per_view_split(
-            args.out_root / args.eval900_subdir / scene / "per_view.json", labels)
+            args.out_root / args.eval900_subdir / scene / "per_view.json",
+            labels, args.iteration,
+            args.out_root / args.extonly / f"{scene}_900")
         rows[scene] = {"clip_aware": ca, "ext_only": ex}
         print(f"{scene:11s} "
               f"{ca['clipped']['psnr']:8.2f} {ex['clipped']['psnr']:8.2f} "
@@ -143,7 +170,10 @@ def main():
           f"{summary['intact']['ext_only_psnr']:7.2f}")
 
     payload = {
-        "description": "external-view-only vs clip-aware analytic model, same 900 test split",
+        "description": (
+            "external-view-only vs clip-aware analytic model, same 900 test "
+            f"split, fixed iteration {args.iteration}"
+        ),
         "summary": summary,
         "scenes": rows,
     }

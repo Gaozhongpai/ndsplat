@@ -17,12 +17,12 @@ thin grazing frames with tiny kept-side foreground -- the bug this script's desi
 avoids). Grazing views only; face-on frames skipped.
 
 Usage:
-  python scripts/benchmarks/cutplane_cuterror_merge.py \
+python scripts/benchmarks/cutplane_cuterror_merge.py \
       --gt-transforms <nerf>/<scene>_cuteval/transforms_test.json \
       --gt-dir <nerf>/<scene>_cuteval/test \
       --results <out>/cuteval/<scene>/cutplane_results.json \
       --methods ours=<...>/renders clipgs=<...> mm=<...> hc=<...> \
-      --band-px 12
+      --band-px 12 --fg-thr 0.04 --leak-margin-px 2 --leak-window-px 60
 """
 import argparse
 import json
@@ -46,6 +46,9 @@ def main():
     ap.add_argument("--results", required=True, help="cutplane_results.json to patch")
     ap.add_argument("--methods", nargs="+", required=True, help="name=renders_dir")
     ap.add_argument("--band-px", type=float, default=12.0)
+    ap.add_argument("--fg-thr", type=float, default=0.04)
+    ap.add_argument("--leak-margin-px", type=float, default=2.0)
+    ap.add_argument("--leak-window-px", type=float, default=60.0)
     args = ap.parse_args()
 
     tf = json.load(open(args.gt_transforms))
@@ -75,7 +78,8 @@ def main():
             signed_px, abc = cm.plane_line_distance(fr, W, H, fx, fy, cx, cy, geom)
             if math.hypot(abc[0], abc[1]) < 1e-6:      # face-on, no line
                 continue
-            gt_fg = cm.foreground_mask(gt); r_fg = cm.foreground_mask(rimg)
+            gt_fg = cm.foreground_mask(gt, thr=args.fg_thr)
+            r_fg = cm.foreground_mask(rimg, thr=args.fg_thr)
             Lg = gt.max(-1); Lr = rimg.max(-1)
             cband = np.abs(signed_px) <= args.band_px
             kept = (signed_px < 0.0) & cband
@@ -85,8 +89,10 @@ def main():
             over_num += float(Lr[culled & r_fg & (~gt_fg)].sum())
             ref_den += float(Lg[kept & gt_fg].sum())
             # leak (same sign convention: culled = s>0), pooled energies
-            near = np.abs(signed_px) <= 60.0
-            leak_num += float(Lr[r_fg & (signed_px > 2.0) & (~gt_fg) & near].sum())
+            near = np.abs(signed_px) <= args.leak_window_px
+            leak_num += float(
+                Lr[r_fg & (signed_px > args.leak_margin_px) & (~gt_fg) & near].sum()
+            )
             leak_den += float(Lr[r_fg & near].sum())
             # edge spread (per-frame, averaged)
             ew = cm.edge_spread(rimg.mean(-1), signed_px, args.band_px)

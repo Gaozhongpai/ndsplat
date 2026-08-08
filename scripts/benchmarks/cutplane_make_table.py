@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Aggregate the per-scene cut-plane-eval results into a comparison table.
 
-Reads <out_root>/cuteval/<scene>/cutplane_results.json (written by
+Reads <out_root>/<eval_name>/<scene>/cutplane_results.json (written by
 cutplane_metrics.py) for every scene and emits a Markdown + CSV table across the
 four methods {ours, clipgs, mm, hc}, with a per-method average row.
 
@@ -14,7 +14,7 @@ Metrics reported (see cutplane_metrics.py for definitions):
 
 Usage:
   python scripts/benchmarks/cutplane_make_table.py \
-      --out-root /data/output/xclipgs --dest /data/output/xclipgs/cuteval
+      --out-root /data/output/xclipgs --eval-name cuteval
 """
 import argparse
 import csv
@@ -57,8 +57,8 @@ def get_metric(mdict, path):
     return cur if isinstance(cur, (int, float)) else None
 
 
-def load_scene(out_root, scene):
-    p = Path(out_root) / "cuteval" / scene / "cutplane_results.json"
+def load_scene(out_root, eval_name, scene):
+    p = Path(out_root) / eval_name / scene / "cutplane_results.json"
     if not p.is_file():
         return None
     try:
@@ -67,7 +67,7 @@ def load_scene(out_root, scene):
         return None
     # graft the improved-metric result files (if present) under per-method keys
     for fname, key in (("cde_results.json", "cde"), ("sweep_flicker.json", "flicker")):
-        fp = Path(out_root) / "cuteval" / scene / fname
+        fp = Path(out_root) / eval_name / scene / fname
         if fp.is_file():
             try:
                 extra = json.load(open(fp))
@@ -79,8 +79,8 @@ def load_scene(out_root, scene):
     return r
 
 
-def discover_scenes(out_root):
-    d = Path(out_root) / "cuteval"
+def discover_scenes(out_root, eval_name):
+    d = Path(out_root) / eval_name
     if not d.is_dir():
         return []
     return sorted(p.name for p in d.iterdir()
@@ -106,18 +106,20 @@ def fmt(v, key):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out-root", default="/data/output/xclipgs")
+    ap.add_argument("--eval-name", default="cuteval",
+                    help="evaluation directory under --out-root")
     ap.add_argument("--dest", default=None)
     args = ap.parse_args()
 
     out_root = Path(args.out_root)
-    dest = Path(args.dest) if args.dest else out_root / "cuteval"
+    dest = Path(args.dest) if args.dest else out_root / args.eval_name
     dest.mkdir(parents=True, exist_ok=True)
 
-    scenes = discover_scenes(out_root)
+    scenes = discover_scenes(out_root, args.eval_name)
     # data[scene][method][metric_key] = value
     data = {}
     for s in scenes:
-        r = load_scene(out_root, s)
+        r = load_scene(out_root, args.eval_name, s)
         if not r:
             continue
         data[s] = {}
@@ -133,7 +135,7 @@ def main():
             avg[mk][key] = (sum(vals) / len(vals)) if vals else None
 
     # ---- Markdown: one section per metric, methods as columns ----
-    lines = ["# XClipGS cut-plane evaluation", "",
+    lines = [f"# XClipGS cut-plane evaluation: {args.eval_name}", "",
              "Metrics restricted to a band around the clip plane (see "
              "`cutplane_metrics.py`). Perp = head-on cut-face views; graze = edge-on "
              "(plane→line) views. **Best per (scene, metric) in bold.**", ""]

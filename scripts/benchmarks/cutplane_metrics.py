@@ -267,6 +267,9 @@ def main():
     ap.add_argument("--scene", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--band-px", type=float, default=12.0)
+    ap.add_argument("--fg-thr", type=float, default=0.04)
+    ap.add_argument("--leak-margin-px", type=float, default=2.0)
+    ap.add_argument("--leak-window-px", type=float, default=60.0)
     ap.add_argument("--debug", action="store_true")
     args = ap.parse_args()
 
@@ -348,7 +351,7 @@ def main():
         face_on = math.hypot(line_abc[0], line_abc[1]) < 1e-6
 
         # GT foreground (so black background never enters any band metric).
-        gt_fg = foreground_mask(gt)
+        gt_fg = foreground_mask(gt, thr=args.fg_thr)
         if family == "perp" or face_on:
             # Face-on / perpendicular: the whole visible cut face is the region of
             # interest -> band = GT foreground (the exposed interior fills the frame).
@@ -391,15 +394,19 @@ def main():
             # total near-plane foreground so it's a fraction, scale-free.
             # signed_px > 0 is the culled side (oriented in plane_line_distance).
             if family == "graze" and not face_on:
-                r_fg = foreground_mask(rimg)
+                r_fg = foreground_mask(rimg, thr=args.fg_thr)
                 gt_bg = ~gt_fg
-                culled = signed_px > 2.0               # just past the cut edge
-                near = np.abs(signed_px) <= 60.0       # ignore far-field; focus at cut
+                culled = signed_px > args.leak_margin_px
+                near = np.abs(signed_px) <= args.leak_window_px
                 leak_mask = r_fg & culled & gt_bg & near
                 ref_mask = r_fg & near
                 leak_energy = rimg.max(-1)[leak_mask].sum()
-                total_energy = rimg.max(-1)[ref_mask].sum() + 1e-9
-                noref[mname][family]["leak"].append(float(leak_energy / total_energy))
+                total_energy = rimg.max(-1)[ref_mask].sum()
+                # Store raw energies and take one pooled ratio across all grazing
+                # views. Averaging per-view ratios overweights views whose thin
+                # near-plane foreground gives a tiny denominator.
+                noref[mname][family]["leak_num"].append(float(leak_energy))
+                noref[mname][family]["leak_den"].append(float(total_energy))
 
                 # --- GT-referenced CUT-BOUNDARY MASS ERROR (holes + overshoot).
                 # A whole-splat cull mis-truncates near the plane in two SIGNED ways,
@@ -469,7 +476,14 @@ def main():
         lst = [x for x in lst if x is not None]
         return float(np.mean(lst)) if lst else None
 
-    results = {"scene": args.scene, "band_px": args.band_px, "methods": {}}
+    results = {
+        "scene": args.scene,
+        "band_px": args.band_px,
+        "fg_thr": args.fg_thr,
+        "leak_margin_px": args.leak_margin_px,
+        "leak_window_px": args.leak_window_px,
+        "methods": {},
+    }
     edge_by_family = {fam: agg(v) for fam, v in edge_w_acc.items()}
     results["gt_edge_width_px"] = edge_by_family
 
@@ -482,7 +496,11 @@ def main():
                 "band_lpips": agg(ref[mname][fam]["band_lpips"]),
             }
             if fam == "graze":
-                entry[fam]["leak"] = agg(noref[mname][fam]["leak"])
+                leak_den = sum(noref[mname][fam]["leak_den"])
+                entry[fam]["leak"] = (
+                    sum(noref[mname][fam]["leak_num"]) / leak_den
+                    if leak_den > 0 else None
+                )
                 entry[fam]["edge_w"] = agg(noref[mname][fam]["edge_w"])
                 # Pool energies across frames, then one ratio (see the metric block).
                 den = sum(noref[mname][fam]["cutref_den"]) + 1e-9
