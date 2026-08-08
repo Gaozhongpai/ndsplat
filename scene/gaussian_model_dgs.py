@@ -1203,6 +1203,12 @@ class GaussianModel(MipFilterMixin):
             new_lambda_view, new_lambda_time
         )
 
+    def get_pruning_opacity(self):
+        """Opacity used for the prune test. Subclasses whose opacity is
+        conditioned (e.g. on the transfer function) override this so a
+        primitive survives if ANY training condition reveals it."""
+        return self.get_opacity
+
     def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size, iteration):
         grads = self.xyz_gradient_accum / self.denom
         grads[grads.isnan()] = 0.0
@@ -1210,7 +1216,7 @@ class GaussianModel(MipFilterMixin):
         self.densify_and_clone(grads, max_grad, extent)
         self.densify_and_split(grads, max_grad, extent)
 
-        prune_mask = (self.get_opacity < min_opacity).squeeze()
+        prune_mask = (self.get_pruning_opacity() < min_opacity).squeeze()
         if max_screen_size:
             big_points_vs = self.max_radii2D > max_screen_size
             big_points_ws = self.get_scaling.max(dim=1).values > 0.1 * extent

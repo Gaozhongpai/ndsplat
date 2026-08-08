@@ -27,6 +27,7 @@ class GaussianModel(DGSModel):
                  tf_condition_opacity: bool = True,
                  tf_encoder_type: str = "functional",
                  tf_embedding_fallback: str = "nearest",
+                 tf_aware_prune: bool = True,
                  tf_use_lookup: bool = False,
                  tf_lookup_bins: int = 64,
                  tf_lookup_color_scale: float = 1.0,
@@ -59,6 +60,7 @@ class GaussianModel(DGSModel):
         self.tf_embedding_fallback = tf_embedding_fallback
         self._tf_train_rows = []
         self._tf_nearest_train = None
+        self.tf_aware_prune = bool(tf_aware_prune)
         self.tf_use_lookup = bool(tf_use_lookup)
         self.tf_lookup_bins = int(tf_lookup_bins)
         self.tf_lookup_color_scale = float(tf_lookup_color_scale)
@@ -264,14 +266,7 @@ class GaussianModel(DGSModel):
                 "per_gaussian": False,
             })
 
-    def _tf_code(self, viewpoint_camera):
-        index = getattr(viewpoint_camera, "tf_index", None)
-        if index is None:
-            return None
-        index = int(index)
-        if not 0 <= index < self._tf_descriptors.shape[0]:
-            raise IndexError(f"tf_index={index} outside bank of size "
-                             f"{self._tf_descriptors.shape[0]}")
+    def _code_for_index(self, index):
         if self.tf_encoder_type == "embedding":
             if (self.tf_embedding_fallback == "nearest"
                     and index not in self._tf_train_rows
@@ -281,6 +276,39 @@ class GaussianModel(DGSModel):
                 torch.tensor(index, device=self.tf_encoder.weight.device)
             )
         return self.tf_encoder(self._tf_descriptors[index])
+
+    def _tf_code(self, viewpoint_camera):
+        index = getattr(viewpoint_camera, "tf_index", None)
+        if index is None:
+            return None
+        index = int(index)
+        if not 0 <= index < self._tf_descriptors.shape[0]:
+            raise IndexError(f"tf_index={index} outside bank of size "
+                             f"{self._tf_descriptors.shape[0]}")
+        return self._code_for_index(index)
+
+    def get_pruning_opacity(self):
+        """TF-aware pruning opacity: max over TRAINING presets of the
+        conditioned opacity (view gate excluded; it is TF-independent).
+        A primitive that some training preset reveals must not be deleted
+        because the shared/base logit alone falls below the threshold --
+        that would permanently remove anatomy other presets need."""
+        if (not self.tf_aware_prune or self._tf_descriptors is None
+                or not self._tf_train_rows):
+            return self.get_opacity
+        with torch.no_grad():
+            best_logit = None
+            for row in self._tf_train_rows:
+                logit = self._opacity
+                if self.tf_use_lookup and self._tf_lookup_p is not None:
+                    delta = self._lookup_delta(row)
+                    logit = logit + self.tf_lookup_opacity_scale *                         self._tf_lookup_gain[3] * delta[:, 3:4]
+                if self.tf_condition_opacity:
+                    code = self._code_for_index(row)
+                    offset = torch.einsum("nr,r->n", self._tf_opacity_factors, code)
+                    logit = logit + self.tf_opacity_scale * offset[:, None]
+                best_logit = logit if best_logit is None                     else torch.maximum(best_logit, logit)
+            return torch.sigmoid(best_logit)
 
     def conditioned_appearance(self, viewpoint_camera, opacity_scale):
         code = self._tf_code(viewpoint_camera)
