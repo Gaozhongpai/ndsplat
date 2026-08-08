@@ -36,6 +36,7 @@ class ParamGroup:
         'tf_condition_color',
         'tf_condition_opacity',
         'tf_use_lookup',
+        'tf_aware_prune',
     }
 
     def __init__(self, parser: ArgumentParser, name : str, fill_none = False):
@@ -116,6 +117,9 @@ class ModelParams(ParamGroup):
         self.tf_condition_opacity = True
         # Local-lookup branch (Eq. 6): per-Gaussian label/intensity descriptors
         # predict the zeroth-order RGBA edit directly from the preset.
+        # Prune on max-over-training-presets opacity so no preset-revealed
+        # anatomy is deleted for having a low shared/base opacity.
+        self.tf_aware_prune = True
         self.tf_use_lookup = False
         self.tf_lookup_bins = 64
         self.tf_lookup_color_scale = 1.0

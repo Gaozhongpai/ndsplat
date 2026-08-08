@@ -180,6 +180,7 @@ def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_
                 tf_condition_opacity=dataset.tf_condition_opacity,
                 tf_encoder_type=dataset.tf_encoder_type,
                 tf_embedding_fallback=dataset.tf_embedding_fallback,
+                tf_aware_prune=dataset.tf_aware_prune,
                 tf_use_lookup=dataset.tf_use_lookup,
                 tf_lookup_bins=dataset.tf_lookup_bins,
                 tf_lookup_color_scale=dataset.tf_lookup_color_scale,
