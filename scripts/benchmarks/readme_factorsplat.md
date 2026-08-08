@@ -204,6 +204,36 @@ Oracle datasets at smoke scale are 2-view floors, not ceilings.
 The controlled FactorSplat ablation is TF-opacity only, TF-color only, and both.
 No main variant enables TF- or view-dependent position.
 
+### Baseline implementations (2026-08-08)
+
+**Seen-only embedding (comparison 3).** `--tf_encoder_type embedding`
+(`FACTORSPLAT_ENCODER=embedding`) swaps the functional encoder for an
+`nn.Embedding(num_bank_TFs, tf_rank)` ID table, zero-initialized so untrained
+rows give a zero code (= base appearance). Only training-preset rows ever
+receive gradients. At test time unseen presets use the embedding of the
+nearest *training* preset in descriptor space (`--tf_embedding_fallback
+nearest`; `zero` renders base appearance instead). Output dirs get an
+`_embedding` suffix. The sidecar records the encoder type and refuses a
+mismatched load.
+
+**Local lookup (comparisons 2/5 + hybrid).** `--tf_use_lookup True`
+(`FACTORSPLAT_LOOKUP=1`, or `FACTORSPLAT_VARIANT=lookup` for lookup-alone with
+the low-rank branch disabled). Per-Gaussian descriptors — a label distribution
+over the bank's `label_ids` and an HU histogram over the bank's `hu` grid,
+sampled in a 3^3 voxel window around each init Gaussian — are generated on the
+HOST (SimpleITK reads the DICOM series; the mask raw is z-flipped when the
+.ini `tm[8] < 0`) by
+`trueview/vengine-runtime/factorsplat_lookup_descriptors.py <scan> <dataset>`,
+writing `<dataset>/points3d_lookup.npz`. The model contracts them against the
+raw (un-premultiplied) bank downsampled to `--tf_lookup_bins` (64):
+`delta_i(T) = sum_l p_i(l) <q_i, R_T(l,:) - R_T0(l,:)>`, applied as a DC-color
+offset (`/C0`) and an opacity-logit offset, each through a learned global RGBA
+gain. Descriptors follow densification by nearest-pre-existing-Gaussian
+inheritance and travel in the sidecar, so `render.py` needs no npz. The tool
+prints in-grid / foreground-support fractions and refuses to write below
+95% / 50% (frame-mapping guard). Verified: pilot heart + vascular 100%/100%;
+unit tests (zero delta at base TF, NN inherit, prune, gain gradients) pass.
+
 ## Evaluation
 
 `metrics.py` reports PSNR/SSIM/LPIPS; `factorsplat_group_metrics.py` regroups

@@ -128,6 +128,12 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
             tf_opacity_scale=dataset.tf_opacity_scale,
             tf_condition_color=dataset.tf_condition_color,
             tf_condition_opacity=dataset.tf_condition_opacity,
+            tf_encoder_type=dataset.tf_encoder_type,
+            tf_embedding_fallback=dataset.tf_embedding_fallback,
+            tf_use_lookup=dataset.tf_use_lookup,
+            tf_lookup_bins=dataset.tf_lookup_bins,
+            tf_lookup_color_scale=dataset.tf_lookup_color_scale,
+            tf_lookup_opacity_scale=dataset.tf_lookup_opacity_scale,
         )
     else:
         raise ValueError(f"Unknown mode: {mode}")
@@ -174,6 +180,13 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
             (model_params, first_iter) = torch.load(checkpoint)
             gaussians.restore(model_params, opt)
             print(f"Resuming training from iteration {first_iter}")
+
+    # FactorSplat local lookup: per-Gaussian volume/mask descriptors, sampled at
+    # init and aligned to the init PLY row order (so this must run after any
+    # --start_checkpoint load and before densification changes the count).
+    if getattr(dataset, "tf_use_lookup", False) and first_iter == 0:
+        gaussians.load_lookup_descriptors(
+            os.path.join(dataset.source_path, "points3d_lookup.npz"))
 
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")

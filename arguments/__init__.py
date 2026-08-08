@@ -35,6 +35,7 @@ class ParamGroup:
         'use_opacity_pos_decouple',
         'tf_condition_color',
         'tf_condition_opacity',
+        'tf_use_lookup',
     }
 
     def __init__(self, parser: ArgumentParser, name : str, fill_none = False):
@@ -107,10 +108,18 @@ class ModelParams(ParamGroup):
         self.tf_rank = 8
         self.tf_hidden = 64
         self.tf_samples = 32
+        self.tf_encoder_type = "functional"
+        self.tf_embedding_fallback = "nearest"
         self.tf_color_scale = 0.25
         self.tf_opacity_scale = 4.0
         self.tf_condition_color = True
         self.tf_condition_opacity = True
+        # Local-lookup branch (Eq. 6): per-Gaussian label/intensity descriptors
+        # predict the zeroth-order RGBA edit directly from the preset.
+        self.tf_use_lookup = False
+        self.tf_lookup_bins = 64
+        self.tf_lookup_color_scale = 1.0
+        self.tf_lookup_opacity_scale = 4.0
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):

@@ -24,7 +24,13 @@ class GaussianModel(DGSModel):
                  tf_rank: int = 8, tf_hidden: int = 64, tf_samples: int = 32,
                  tf_color_scale: float = 0.25, tf_opacity_scale: float = 4.0,
                  tf_condition_color: bool = True,
-                 tf_condition_opacity: bool = True):
+                 tf_condition_opacity: bool = True,
+                 tf_encoder_type: str = "functional",
+                 tf_embedding_fallback: str = "nearest",
+                 tf_use_lookup: bool = False,
+                 tf_lookup_bins: int = 64,
+                 tf_lookup_color_scale: float = 1.0,
+                 tf_lookup_opacity_scale: float = 4.0):
         super().__init__(
             sh_degree=sh_degree,
             input_dim=input_dim,
@@ -45,6 +51,24 @@ class GaussianModel(DGSModel):
         self.tf_opacity_scale = float(tf_opacity_scale)
         self.tf_condition_color = bool(tf_condition_color)
         self.tf_condition_opacity = bool(tf_condition_opacity)
+        if tf_encoder_type not in ("functional", "embedding"):
+            raise ValueError(f"tf_encoder_type must be functional|embedding, got {tf_encoder_type}")
+        if tf_embedding_fallback not in ("nearest", "zero"):
+            raise ValueError(f"tf_embedding_fallback must be nearest|zero, got {tf_embedding_fallback}")
+        self.tf_encoder_type = tf_encoder_type
+        self.tf_embedding_fallback = tf_embedding_fallback
+        self._tf_train_rows = []
+        self._tf_nearest_train = None
+        self.tf_use_lookup = bool(tf_use_lookup)
+        self.tf_lookup_bins = int(tf_lookup_bins)
+        self.tf_lookup_color_scale = float(tf_lookup_color_scale)
+        self.tf_lookup_opacity_scale = float(tf_lookup_opacity_scale)
+        self._tf_bank_lookup = None      # [T, L, B, 4] raw RGBA, downsampled bins
+        self._tf_base_index = 0
+        self._tf_label_ids = None
+        self._tf_lookup_p = None         # [N, L] per-Gaussian label distribution
+        self._tf_lookup_q = None         # [N, B] per-Gaussian intensity histogram
+        self._tf_lookup_gain = None      # learned global RGBA gain (4,)
 
         self.tf_encoder = None
         self._tf_descriptors = None
@@ -56,6 +80,24 @@ class GaussianModel(DGSModel):
         rgba = np.asarray(bank["rgba"], dtype=np.float32)
         if rgba.ndim != 4 or rgba.shape[-1] != 4:
             raise ValueError(f"expected TF bank rgba [T,L,K,4], got {rgba.shape}")
+        if self.tf_use_lookup:
+            # The lookup consumes the bank as exported (raw RGB + alpha): color
+            # deltas come from the RGB channels, opacity deltas from alpha, so
+            # premultiplying here would double-count alpha edits in the color path.
+            raw = rgba.copy()
+            bins = min(self.tf_lookup_bins, raw.shape[2])
+            if raw.shape[2] % bins == 0:
+                raw = raw.reshape(raw.shape[0], raw.shape[1], bins,
+                                  raw.shape[2] // bins, 4).mean(axis=3)
+            else:
+                keep = np.linspace(0, raw.shape[2] - 1, bins).round().astype(int)
+                raw = raw[:, :, keep, :]
+            self._tf_bank_lookup = torch.tensor(raw, dtype=torch.float32, device="cuda")
+            self._tf_label_ids = np.asarray(bank["label_ids"]).astype(int).tolist() \
+                if "label_ids" in bank else None
+            if self._tf_lookup_gain is None:
+                self._tf_lookup_gain = nn.Parameter(
+                    torch.ones(4, device="cuda").requires_grad_(True))
         # RGB is irrelevant where the TF is transparent. Premultiplication keeps
         # hidden-label and zero-alpha colors from becoming spurious conditions.
         rgba = rgba.copy()
@@ -66,20 +108,78 @@ class GaussianModel(DGSModel):
         tf_ids = np.asarray(bank["tf_ids"]).astype(str).tolist()
         base_index = next((i for i, value in enumerate(tf_ids)
                            if value == "train_00_base"), 0)
+        self._tf_base_index = base_index
         # Centering gives the authored base TF an exact zero code. Bias-free
         # layers consequently preserve the input dGS checkpoint at T_base.
         descriptors = descriptors - descriptors[base_index:base_index + 1]
         self._tf_descriptors = torch.tensor(descriptors, dtype=torch.float32, device="cuda")
         self._tf_ids = tf_ids
         input_dim = int(descriptors.shape[1])
+        # Seen-only baseline bookkeeping: rows whose id marks a training preset,
+        # and each row's nearest training row in descriptor space (used when the
+        # embedding encoder must answer for an unseen preset).
+        self._tf_train_rows = [i for i, t in enumerate(tf_ids) if t.startswith("train")]
+        if self._tf_train_rows:
+            train = self._tf_descriptors[self._tf_train_rows]           # [Ttr, D]
+            dist = torch.cdist(self._tf_descriptors, train)             # [T, Ttr]
+            self._tf_nearest_train = torch.tensor(
+                [self._tf_train_rows[j] for j in dist.argmin(dim=1).tolist()],
+                device="cuda")
         if self.tf_encoder is None:
-            self.tf_encoder = nn.Sequential(
-                nn.Linear(input_dim, self.tf_hidden, bias=False),
-                nn.ReLU(inplace=False),
-                nn.Linear(self.tf_hidden, self.tf_rank, bias=False),
-            ).cuda()
-        elif self.tf_encoder[0].in_features != input_dim:
+            if self.tf_encoder_type == "embedding":
+                # Zero init: presets whose rows never receive gradients (all
+                # held-out presets) keep an exactly-zero code, i.e. render the
+                # base appearance unless the nearest-training fallback is used.
+                self.tf_encoder = nn.Embedding(len(tf_ids), self.tf_rank).cuda()
+                nn.init.zeros_(self.tf_encoder.weight)
+            else:
+                self.tf_encoder = nn.Sequential(
+                    nn.Linear(input_dim, self.tf_hidden, bias=False),
+                    nn.ReLU(inplace=False),
+                    nn.Linear(self.tf_hidden, self.tf_rank, bias=False),
+                ).cuda()
+        elif self.tf_encoder_type == "functional" and self.tf_encoder[0].in_features != input_dim:
             raise ValueError("TF descriptor dimension changed after encoder initialization")
+
+    def load_lookup_descriptors(self, path):
+        """Attach per-Gaussian (label distribution, intensity histogram) sampled
+        from the volume+mask at init (factorsplat_lookup_descriptors.py). Must be
+        called after the init PLY is loaded; row order must match."""
+        if not self.tf_use_lookup:
+            return
+        if self._tf_bank_lookup is None:
+            raise RuntimeError("set_tf_bank must run before load_lookup_descriptors")
+        with np.load(path) as payload:
+            probs = np.asarray(payload["label_probs"], dtype=np.float32)
+            hist = np.asarray(payload["intensity_hist"], dtype=np.float32)
+            label_ids = np.asarray(payload["label_ids"]).astype(int).tolist()
+        if self._tf_label_ids is not None and label_ids != self._tf_label_ids:
+            raise ValueError("lookup descriptor label order does not match tf_bank")
+        count = self.get_xyz.shape[0]
+        if probs.shape[0] != count or hist.shape[0] != count:
+            raise ValueError(f"lookup descriptors cover {probs.shape[0]} Gaussians "
+                             f"but the model has {count}")
+        if probs.shape[1] != self._tf_bank_lookup.shape[1]:
+            raise ValueError("lookup descriptor label axis does not match tf_bank")
+        bins = self._tf_bank_lookup.shape[2]
+        if hist.shape[1] % bins == 0:
+            # Histograms are distributions: rebin by summation.
+            hist = hist.reshape(hist.shape[0], bins, hist.shape[1] // bins).sum(axis=2)
+        elif hist.shape[1] != bins:
+            raise ValueError(f"cannot rebin {hist.shape[1]}-bin histograms to {bins}")
+        self._tf_lookup_p = torch.tensor(probs, device="cuda")
+        self._tf_lookup_q = torch.tensor(hist, device="cuda")
+        covered = float((probs.sum(axis=1) > 0).mean())
+        print(f"Loaded lookup descriptors for {count} Gaussians "
+              f"({covered:.1%} with foreground support) from {path}")
+
+    def _lookup_delta(self, tf_index):
+        """Eq. 6: histogram-weighted RGBA change of the locally relevant part of
+        the preset, relative to the base preset. Returns [N, 4]."""
+        bank = self._tf_bank_lookup
+        delta_r = bank[tf_index] - bank[self._tf_base_index]            # [L,B,4]
+        per_label = torch.einsum("nb,lbc->nlc", self._tf_lookup_q, delta_r)
+        return torch.einsum("nl,nlc->nc", self._tf_lookup_p, per_label)
 
     def _initialize_tf_factors(self, count):
         device = self._xyz.device
@@ -122,6 +222,13 @@ class GaussianModel(DGSModel):
             "name": "tf_encoder",
             "per_gaussian": False,
         })
+        if self.tf_use_lookup and self._tf_lookup_gain is not None:
+            self.optimizer.add_param_group({
+                "params": [self._tf_lookup_gain],
+                "lr": training_args.tf_encoder_lr,
+                "name": "tf_lookup_gain",
+                "per_gaussian": False,
+            })
 
     def _tf_code(self, viewpoint_camera):
         index = getattr(viewpoint_camera, "tf_index", None)
@@ -131,6 +238,14 @@ class GaussianModel(DGSModel):
         if not 0 <= index < self._tf_descriptors.shape[0]:
             raise IndexError(f"tf_index={index} outside bank of size "
                              f"{self._tf_descriptors.shape[0]}")
+        if self.tf_encoder_type == "embedding":
+            if (self.tf_embedding_fallback == "nearest"
+                    and index not in self._tf_train_rows
+                    and self._tf_nearest_train is not None):
+                index = int(self._tf_nearest_train[index])
+            return self.tf_encoder(
+                torch.tensor(index, device=self.tf_encoder.weight.device)
+            )
         return self.tf_encoder(self._tf_descriptors[index])
 
     def conditioned_appearance(self, viewpoint_camera, opacity_scale):
@@ -138,20 +253,27 @@ class GaussianModel(DGSModel):
         if code is None:
             return super().conditioned_appearance(viewpoint_camera, opacity_scale)
 
+        dc = self._features_dc[:, 0, :]
+        logit = self._opacity
+        if self.tf_use_lookup and self._tf_lookup_p is not None:
+            delta = self._lookup_delta(int(viewpoint_camera.tf_index))   # [N,4]
+            # RGB deltas live in [0,1] LUT units; SH DC coeffs relate to RGB via
+            # rgb = 0.5 + C0*dc, so the conversion to DC space divides by C0.
+            C0 = 0.28209479177387814
+            dc = dc + (self.tf_lookup_color_scale / C0) * \
+                self._tf_lookup_gain[:3] * delta[:, :3]
+            logit = logit + self.tf_lookup_opacity_scale * \
+                self._tf_lookup_gain[3] * delta[:, 3:4]
+
         if self.tf_condition_color:
             color_delta = torch.einsum("ncr,r->nc", self._tf_color_factors, code)
-            dc = self._features_dc[:, 0, :] + self.tf_color_scale * torch.tanh(color_delta)
-            shs = torch.cat((dc[:, None, :], self._features_rest), dim=1)
-        else:
-            shs = self.get_features
+            dc = dc + self.tf_color_scale * torch.tanh(color_delta)
+        shs = torch.cat((dc[:, None, :], self._features_rest), dim=1)
 
         if self.tf_condition_opacity:
             opacity_delta = torch.einsum("nr,r->n", self._tf_opacity_factors, code)
-            opacity = torch.sigmoid(
-                self._opacity + self.tf_opacity_scale * opacity_delta[:, None]
-            )
-        else:
-            opacity = self.get_opacity
+            logit = logit + self.tf_opacity_scale * opacity_delta[:, None]
+        opacity = torch.sigmoid(logit)
         return shs, opacity * opacity_scale
 
     def _prune_optimizer(self, mask):
@@ -160,6 +282,9 @@ class GaussianModel(DGSModel):
             self._tf_color_factors = tensors["tf_color_factors"]
         if "tf_opacity_factors" in tensors:
             self._tf_opacity_factors = tensors["tf_opacity_factors"]
+        if self._tf_lookup_p is not None and mask.shape[0] == self._tf_lookup_p.shape[0]:
+            self._tf_lookup_p = self._tf_lookup_p[mask]
+            self._tf_lookup_q = self._tf_lookup_q[mask]
         return tensors
 
     def _append_factor(self, name, attribute, extension):
@@ -196,6 +321,19 @@ class GaussianModel(DGSModel):
                 "tf_opacity_factors", "_tf_opacity_factors",
                 torch.zeros(added, self.tf_rank, device=self._xyz.device),
             )
+            if self._tf_lookup_p is not None:
+                # Descriptors are fixed volume samples, so children inherit them
+                # from the nearest pre-existing Gaussian (clones sit exactly on
+                # their parent; split children land within the parent footprint).
+                old = self.get_xyz[: self.get_xyz.shape[0] - added].detach()
+                nearest = []
+                for chunk in new_xyz.detach().split(1024):
+                    nearest.append(torch.cdist(chunk, old).argmin(dim=1))
+                nearest = torch.cat(nearest)
+                self._tf_lookup_p = torch.cat(
+                    (self._tf_lookup_p, self._tf_lookup_p[nearest]), dim=0)
+                self._tf_lookup_q = torch.cat(
+                    (self._tf_lookup_q, self._tf_lookup_q[nearest]), dim=0)
 
     @staticmethod
     def _sidecar(path):
@@ -205,16 +343,22 @@ class GaussianModel(DGSModel):
         super().save_ply(path)
         encoder_state = {key: value.detach().cpu()
                          for key, value in self.tf_encoder.state_dict().items()}
-        torch.save({
+        payload = {
             "version": 1,
             "tf_rank": self.tf_rank,
             "tf_hidden": self.tf_hidden,
             "tf_samples": self.tf_samples,
             "tf_ids": self._tf_ids,
+            "tf_encoder_type": self.tf_encoder_type,
             "color_factors": self._tf_color_factors.detach().cpu(),
             "opacity_factors": self._tf_opacity_factors.detach().cpu(),
             "encoder": encoder_state,
-        }, self._sidecar(path))
+        }
+        if self.tf_use_lookup and self._tf_lookup_p is not None:
+            payload["lookup_p"] = self._tf_lookup_p.detach().cpu()
+            payload["lookup_q"] = self._tf_lookup_q.detach().cpu()
+            payload["lookup_gain"] = self._tf_lookup_gain.detach().cpu()
+        torch.save(payload, self._sidecar(path))
 
     def load_ply(self, path):
         super().load_ply(path)
@@ -225,6 +369,9 @@ class GaussianModel(DGSModel):
         payload = torch.load(sidecar, map_location="cuda")
         if int(payload["tf_rank"]) != self.tf_rank:
             raise ValueError("FactorSplat sidecar rank does not match --tf_rank")
+        saved_type = payload.get("tf_encoder_type", "functional")
+        if saved_type != self.tf_encoder_type:
+            raise ValueError(f"sidecar encoder type {saved_type} != --tf_encoder_type {self.tf_encoder_type}")
         color = payload["color_factors"].to(device="cuda", dtype=torch.float32)
         opacity = payload["opacity_factors"].to(device="cuda", dtype=torch.float32)
         if color.shape[0] != self.get_xyz.shape[0] or opacity.shape[0] != self.get_xyz.shape[0]:
@@ -232,14 +379,26 @@ class GaussianModel(DGSModel):
         self._tf_color_factors = nn.Parameter(color.requires_grad_(True))
         self._tf_opacity_factors = nn.Parameter(opacity.requires_grad_(True))
         self.tf_encoder.load_state_dict(payload["encoder"])
+        if self.tf_use_lookup:
+            if "lookup_p" not in payload:
+                raise ValueError("--tf_use_lookup set but sidecar has no lookup descriptors")
+            self._tf_lookup_p = payload["lookup_p"].to("cuda")
+            self._tf_lookup_q = payload["lookup_q"].to("cuda")
+            self._tf_lookup_gain = nn.Parameter(
+                payload["lookup_gain"].to("cuda").requires_grad_(True))
 
     def capture(self):
-        return {
+        state = {
             "base": super().capture(),
             "color_factors": self._tf_color_factors,
             "opacity_factors": self._tf_opacity_factors,
             "encoder": self.tf_encoder.state_dict(),
         }
+        if self.tf_use_lookup and self._tf_lookup_p is not None:
+            state["lookup_p"] = self._tf_lookup_p
+            state["lookup_q"] = self._tf_lookup_q
+            state["lookup_gain"] = self._tf_lookup_gain
+        return state
 
     def restore(self, model_args, training_args):
         self._tf_color_factors = nn.Parameter(
@@ -249,4 +408,9 @@ class GaussianModel(DGSModel):
             model_args["opacity_factors"].to("cuda").requires_grad_(True)
         )
         self.tf_encoder.load_state_dict(model_args["encoder"])
+        if self.tf_use_lookup and "lookup_p" in model_args:
+            self._tf_lookup_p = model_args["lookup_p"].to("cuda")
+            self._tf_lookup_q = model_args["lookup_q"].to("cuda")
+            self._tf_lookup_gain = nn.Parameter(
+                model_args["lookup_gain"].to("cuda").requires_grad_(True))
         super().restore(model_args["base"], training_args)
