@@ -9,6 +9,9 @@ OUT_ROOT="${FACTORSPLAT_OUT:-/data/output/factorsplat}"
 SCENES="${FACTORSPLAT_SCENES:-heart vascular}"
 PRESET="${FACTORSPLAT_PRESET:-pilot}"
 ITERS="${FACTORSPLAT_ITERS:-30000}"
+# Extra train.py flags, e.g. --use_jpeg_compression for 40-preset datasets
+# whose decoded frames exceed GPU memory.
+EXTRA_NOTE="${FACTORSPLAT_EXTRA_FLAGS:-}"
 
 for scene in $SCENES; do
     dataset="${scene}_factorsplat_${PRESET}"
@@ -28,7 +31,7 @@ for scene in $SCENES; do
     python train.py -s "$source" --model_path "$output" \
         --mode dgs --use_view_dependent_pos False \
         --l_22_inv_init_scale 2.0 --mip3dgs \
-        --iterations "$ITERS" --eval --disable_viewer $checkpoint
+        --iterations "$ITERS" --eval --disable_viewer $checkpoint ${FACTORSPLAT_EXTRA_FLAGS:-}
     python render.py -m "$output" --skip_train --iteration "$ITERS"
     python metrics.py -m "$output"
     python scripts/benchmarks/factorsplat_group_metrics.py \
