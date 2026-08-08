@@ -230,6 +230,12 @@ preset and consumes several times the aggregate iterations.
 ### Frozen sequence (2026-08-08)
 
 1. CODE FREEZE on the training path until the residual rank sweep completes.
+   Exception staged, NOT merged: branch `feat/tf-aware-prune` (worktree
+   ../ndsplat-tfprune) makes pruning TF-aware -- prune on
+   max_{T in T_train} alpha_i(T) via a get_pruning_opacity() seam
+   (--tf_aware_prune, default True) so no preset-revealed anatomy is deleted
+   for a low shared logit. Unit-tested. MERGE THIS FIRST after the sweep, so
+   the entire six-variant r* ablation trains under it.
 2. `factorsplat_select_rank.py` emits the machine-readable manifest
    (`rank_selection_<scene>_<preset>.json`): val delta primary, guardrails
    recorded, parsimony tie-break to the smaller rank.
@@ -240,6 +246,15 @@ preset and consumes several times the aggregate iterations.
 6. `hybrid` becomes the headline FactorSplat model ONLY if it beats `residual`
    consistently across scenes/splits; otherwise `residual` stays primary and
    the lookup is analysis/ablation.
+
+### v2 ladder (only if hybrid stays weak on label-selective/OOD)
+
+Local functional residual: per-Gaussian code
+`z_i(T) = sum_{l,h} p_i(l,h) phi(l, h, T(l,h)-T0(l,h))` so the LEARNED branch
+becomes locally TF-aware too (currently only the analytic lookup is). Explore
+before all-SH conditioning (entanglement risk) and never TF-dependent position
+shifts (TFs edit appearance/support, not anatomy). Render-FM stays the
+cross-scene amortization branch.
 
 ### Bank TODO before the six-scene study
 
