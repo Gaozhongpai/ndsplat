@@ -85,6 +85,16 @@ FACTORSPLAT_SCENES="heart vascular" FACTORSPLAT_PRESET=pilot \
   bash scripts/benchmarks/dgs_factorsplat_mixed.sh
 ```
 
+Train the rank-8 functional color+opacity model:
+
+```bash
+FACTORSPLAT_SCENES="heart vascular" FACTORSPLAT_PRESET=pilot \
+  bash scripts/benchmarks/factorsplat_train.sh
+```
+
+Set `FACTORSPLAT_VARIANT=color` or `opacity` for the controlled appearance
+ablations and `FACTORSPLAT_RANK=4|8|16|32` for the rank sweep.
+
 For a fast pipeline check, select only the base and one held-out TF and reduce
 the training budget:
 

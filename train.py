@@ -67,7 +67,7 @@ def render_wrapper(viewpoint_cam, gaussians, pipe, bg, mode, scaling_modifier=1.
     if mode == "3dgs" or mode == "clipgs":
         # clipgs (ClipGS baseline reimpl) shares the 3dgs render_tcgs signature.
         return gaussians.render_tcgs(viewpoint_cam, pipe, bg, scaling_modifier)
-    elif "ubs" in mode or "ndgs" in mode or "dgs" in mode or "dbs" in mode:
+    elif "ubs" in mode or "ndgs" in mode or "dgs" in mode or "dbs" in mode or mode == "factorsplat":
         gaussians.background = bg
         if use_gsplat and hasattr(gaussians, 'render'):
             return gaussians.render(viewpoint_cam, render_mode="RGB", accutile=accutile)
@@ -115,6 +115,20 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
                                   lambda_init=dataset.lambda_init,
                                   lambda_opc=dataset.lambda_opc,
                                   direct_unrestricted=getattr(dataset, "direct_unrestricted", False))
+    elif mode == "factorsplat":
+        gaussians = GaussianModel(
+            dataset.sh_degree, input_dim=dataset.input_dim,
+            use_view_dependent_pos=dataset.use_view_dependent_pos,
+            use_opacity_pos_decouple=dataset.use_opacity_pos_decouple,
+            l_22_inv_init_scale=dataset.l_22_inv_init_scale,
+            lambda_init=dataset.lambda_init, lambda_opc=dataset.lambda_opc,
+            direct_unrestricted=getattr(dataset, "direct_unrestricted", False),
+            tf_rank=dataset.tf_rank, tf_hidden=dataset.tf_hidden,
+            tf_samples=dataset.tf_samples, tf_color_scale=dataset.tf_color_scale,
+            tf_opacity_scale=dataset.tf_opacity_scale,
+            tf_condition_color=dataset.tf_condition_color,
+            tf_condition_opacity=dataset.tf_condition_opacity,
+        )
     else:
         raise ValueError(f"Unknown mode: {mode}")
 

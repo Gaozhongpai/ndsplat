@@ -33,6 +33,8 @@ class ParamGroup:
         'use_view_dependent_pos',
         'use_rot_scale_l_triangle',
         'use_opacity_pos_decouple',
+        'tf_condition_color',
+        'tf_condition_opacity',
     }
 
     def __init__(self, parser: ArgumentParser, name : str, fill_none = False):
@@ -101,6 +103,14 @@ class ModelParams(ParamGroup):
         # ClipGS baseline reimpl (--mode clipgs): 3DGS + STE hard-cull + deform MLP.
         self.clipgs_deform_scale = False  # let the deform MLP also predict log-scale offsets (else position-only)
         self.clipgs_deform_lr = 1e-4      # learning rate for the ClipGS deformation MLP
+        # FactorSplat: functional transfer-function conditioning on dGS appearance.
+        self.tf_rank = 8
+        self.tf_hidden = 64
+        self.tf_samples = 32
+        self.tf_color_scale = 0.25
+        self.tf_opacity_scale = 4.0
+        self.tf_condition_color = True
+        self.tf_condition_opacity = True
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
@@ -142,6 +152,8 @@ class OptimizationParams(ParamGroup):
         self.mean_lr = 0.001
         self.beta_lr = 0.001
         self.rgb_lr = 0.001
+        self.tf_factor_lr = 0.0025
+        self.tf_encoder_lr = 0.001
         self.scale_lr = 0.005
         self.l_triangle_lr = 0.001
 

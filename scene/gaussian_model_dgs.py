@@ -1000,6 +1000,11 @@ class GaussianModel(MipFilterMixin):
     def _prune_optimizer(self, mask):
         optimizable_tensors = {}
         for group in self.optimizer.param_groups:
+            # Global modules (for example FactorSplat's TF encoder) do not have
+            # one row per Gaussian and must not be indexed by a prune mask.
+            if not group.get("per_gaussian", True):
+                continue
+            assert len(group["params"]) == 1
             stored_state = self.optimizer.state.get(group['params'][0], None)
             if stored_state is not None:
                 stored_state["exp_avg"] = stored_state["exp_avg"][mask]
@@ -1054,6 +1059,10 @@ class GaussianModel(MipFilterMixin):
     def cat_tensors_to_optimizer(self, tensors_dict):
         optimizable_tensors = {}
         for group in self.optimizer.param_groups:
+            # Subclasses may own additional per-Gaussian tensors and global
+            # modules. They append their tensors after the base dGS postfix.
+            if not group.get("per_gaussian", True) or group["name"] not in tensors_dict:
+                continue
             assert len(group["params"]) == 1
             extension_tensor = tensors_dict[group["name"]]
             stored_state = self.optimizer.state.get(group['params'][0], None)
@@ -1215,6 +1224,14 @@ class GaussianModel(MipFilterMixin):
             return
         self.xyz_gradient_accum[update_filter] += torch.norm(grad[update_filter,:2], dim=-1, keepdim=True)
         self.denom[update_filter] += 1
+
+    def conditioned_appearance(self, viewpoint_camera, opacity_scale):
+        """Return full per-Gaussian SH features and opacity for a camera.
+
+        The base dGS model conditions opacity on view direction only. Appearance
+        subclasses override this hook without changing conditional geometry.
+        """
+        return self.get_features, self.get_opacity * opacity_scale
 
     # ============================================================================
     # MCMC-based densification methods (adapted from UBS/gaussian_model_ndgs.py)
@@ -1485,8 +1502,8 @@ class GaussianModel(MipFilterMixin):
             cond_params = mean_view
 
         m_cond, opacity_scale = self.slice_gaussian_full_method(cond_params)
-        opacity = self.get_opacity * opacity_scale
-        shs = self.get_features[mask]
+        shs_all, opacity = self.conditioned_appearance(viewpoint_camera, opacity_scale)
+        shs = shs_all[mask]
 
         # Build 3x3 covariance from quaternion rotations and scales
         covars, _ = quat_scale_to_covar_preci(
@@ -1573,11 +1590,9 @@ class GaussianModel(MipFilterMixin):
         # (scale and rotation are NOT conditioned, use get_scaling and get_rotation directly)
         m_cond, opacity_scale = self.slice_gaussian_full_method(cond_params)
 
-        # Get SH features for color
-        shs = self.get_features
-
-        # Get opacity scaled by view-dependent factor
-        opacity = self.get_opacity * opacity_scale
+        # Base dGS uses static SH color and view-conditioned opacity. Appearance
+        # subclasses (FactorSplat) inject additional non-geometric conditions.
+        shs, opacity = self.conditioned_appearance(viewpoint_camera, opacity_scale)
 
         # Mip-Splatting 3D smoothing filter (no-op when filter_3D is None)
         scales, opacity, antialiasing = self.mip_filtered(opacity, scales=self.get_scaling)

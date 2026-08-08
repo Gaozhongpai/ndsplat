@@ -43,7 +43,7 @@ def render_wrapper(view, gaussians, pipeline, background, mode, is_test=False, t
     if mode == "3dgs" or mode == "clipgs":
         # clipgs (ClipGS baseline reimpl) shares the 3dgs render_tcgs signature.
         return gaussians.render_tcgs(view, pipeline, background, is_test=is_test)
-    elif "ubs" in mode or "ndgs" in mode or "dgs" in mode or "dbs" in mode:
+    elif "ubs" in mode or "ndgs" in mode or "dgs" in mode or "dbs" in mode or mode == "factorsplat":
         gaussians.background = background
         if use_gsplat and hasattr(gaussians, 'render'):
             return gaussians.render(view, render_mode="RGB", use_tcgs=is_test, accutile=accutile)
@@ -165,6 +165,20 @@ def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_
                                       lambda_init=dataset.lambda_init,
                                       lambda_opc=dataset.lambda_opc,
                                       direct_unrestricted=getattr(dataset, "direct_unrestricted", False))
+        elif mode == "factorsplat":
+            gaussians = GaussianModel(
+                dataset.sh_degree, input_dim=dataset.input_dim,
+                use_view_dependent_pos=dataset.use_view_dependent_pos,
+                use_opacity_pos_decouple=dataset.use_opacity_pos_decouple,
+                l_22_inv_init_scale=dataset.l_22_inv_init_scale,
+                lambda_init=dataset.lambda_init, lambda_opc=dataset.lambda_opc,
+                direct_unrestricted=getattr(dataset, "direct_unrestricted", False),
+                tf_rank=dataset.tf_rank, tf_hidden=dataset.tf_hidden,
+                tf_samples=dataset.tf_samples, tf_color_scale=dataset.tf_color_scale,
+                tf_opacity_scale=dataset.tf_opacity_scale,
+                tf_condition_color=dataset.tf_condition_color,
+                tf_condition_opacity=dataset.tf_condition_opacity,
+            )
         else:
             raise ValueError(f"Unknown mode: {mode}")
 

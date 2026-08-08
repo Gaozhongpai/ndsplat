@@ -42,12 +42,14 @@ def get_gaussian_model(mode: str):
         from scene.gaussian_model_ndgs import GaussianModel
     elif mode == "dgs":  ## Full DGS with view-dependent position, time-dependent rotation
         from scene.gaussian_model_dgs import GaussianModel
+    elif mode == "factorsplat":  ## TF-conditioned color/opacity on opacity-only dGS
+        from scene.gaussian_model_factorsplat import GaussianModel
     elif mode == "dbs":  ## dBS: Direct Beta Splatting (dGS + UBS)
         from scene.gaussian_model_dbs import GaussianModel
     elif mode == "dbs-sh":  ## dBS-SH: Direct Beta Splatting with Spherical Harmonics
         from scene.gaussian_model_dbs_sh import GaussianModel
     else:
-        raise ValueError(f"Unknown mode: {mode}. Must be one of: 3dgs, ndgs, ubs, dgs, dbs.")
+        raise ValueError(f"Unknown mode: {mode}. Must be one of: 3dgs, ndgs, ubs, dgs, factorsplat, dbs.")
     return GaussianModel
 
 
