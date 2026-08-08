@@ -12,6 +12,7 @@
 import os
 import random
 import json
+import numpy as np
 from typing import TYPE_CHECKING
 from utils.system_utils import searchForMaxIteration
 from scene.dataset_readers import sceneLoadTypeCallbacks
@@ -92,6 +93,25 @@ class Scene:
             scene_info = sceneLoadTypeCallbacks["Blender"](args.source_path, args.white_background, args.eval)
         else:
             assert False, "Could not recognize scene type!"
+
+        # FactorSplat datasets keep the sampled transfer functions once at the
+        # scene root. Cameras carry only tf_index/tf_id, avoiding one large LUT
+        # tensor per image. Existing models safely ignore this metadata.
+        self.tf_bank = None
+        tf_bank_path = os.path.join(args.source_path, "tf_bank.npz")
+        if os.path.isfile(tf_bank_path):
+            with np.load(tf_bank_path, allow_pickle=False) as bank:
+                self.tf_bank = {key: bank[key].copy() for key in bank.files}
+            tf_count = len(self.tf_bank.get("tf_ids", []))
+            for camera in scene_info.train_cameras + scene_info.test_cameras:
+                if camera.tf_index is not None and not 0 <= int(camera.tf_index) < tf_count:
+                    raise ValueError(
+                        f"camera {camera.image_name} has tf_index={camera.tf_index}, "
+                        f"but tf_bank.npz contains {tf_count} transfer functions"
+                    )
+            print(f"Loaded FactorSplat TF bank: {tf_count} TFs from {tf_bank_path}")
+            if hasattr(self.gaussians, "set_tf_bank"):
+                self.gaussians.set_tf_bank(self.tf_bank)
 
         if not self.loaded_iter:
             with open(scene_info.ply_path, 'rb') as src_file, open(os.path.join(self.model_path, "input.ply") , 'wb') as dest_file:

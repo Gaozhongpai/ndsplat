@@ -19,7 +19,8 @@ class Camera(nn.Module):
                  image_name, uid, x_threshold=None, color_idx=None, label=None,
                  clip_plane=None,
                  trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda",
-                 timestamp=0.0, compressed_data=None
+                 timestamp=0.0, compressed_data=None, tf_id=None, tf_index=None,
+                 tf_split=None, tf_family=None
                  ):
         super(Camera, self).__init__()
 
@@ -35,6 +36,12 @@ class Camera(nn.Module):
         self.label = torch.tensor(label).cuda() if label is not None else None
         self.color_idx = color_idx
         self.timestamp = timestamp  # Time dimension for 7DGS
+        # FactorSplat metadata. The potentially large sampled TF bank is stored
+        # once at dataset/model level; cameras carry only the compact lookup key.
+        self.tf_id = tf_id
+        self.tf_index = tf_index
+        self.tf_split = tf_split
+        self.tf_family = tf_family
 
         try:
             self.data_device = torch.device(data_device)
@@ -113,4 +120,3 @@ class MiniCam:
         self.full_proj_transform = full_proj_transform
         view_inv = torch.inverse(self.world_view_transform)
         self.camera_center = view_inv[3][:3]
-

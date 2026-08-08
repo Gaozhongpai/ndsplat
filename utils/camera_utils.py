@@ -45,6 +45,8 @@ def loadCam(args, id, cam_info, resolution_scale, *, resolution=None, image_tens
                   x_threshold=cam_info.x_threshold, clip_plane=cam_info.clip_plane,
                   color_idx=cam_info.color_idx, label=cam_info.label,
                   data_device=args.data_device, timestamp=cam_info.timestamp,
+                  tf_id=cam_info.tf_id, tf_index=cam_info.tf_index,
+                  tf_split=cam_info.tf_split, tf_family=cam_info.tf_family,
                   compressed_data=compressed_data)
 
 def cameraList_from_camInfos(cam_infos, resolution_scale, args):

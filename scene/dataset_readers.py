@@ -39,6 +39,10 @@ class CameraInfo(NamedTuple):
     label: list = None
     color_idx: float = None
     timestamp: float = 0.0  # Time dimension for 7DGS
+    tf_id: str = None
+    tf_index: int = None
+    tf_split: str = None
+    tf_family: str = None
 
 class SceneInfo(NamedTuple):
     point_cloud: BasicPointCloud
@@ -236,6 +240,10 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
                 clip_plane = None
             color_idx = frame.get("color_idx", None)
             label = frame.get("label", None)
+            tf_id = frame.get("tf_id", None)
+            tf_index = frame.get("tf_index", None)
+            tf_split = frame.get("tf_split", None)
+            tf_family = frame.get("tf_family", None)
 
             # Read time parameter for 7DGS if it exists
             try:
@@ -282,6 +290,10 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
                     color_idx=color_idx,
                     label=label,
                     timestamp=timestamp,
+                    tf_id=tf_id,
+                    tf_index=tf_index,
+                    tf_split=tf_split,
+                    tf_family=tf_family,
                 )
             )
 
