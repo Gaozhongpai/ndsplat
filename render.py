@@ -178,14 +178,14 @@ def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_
                 tf_opacity_scale=dataset.tf_opacity_scale,
                 tf_condition_color=dataset.tf_condition_color,
                 tf_condition_opacity=dataset.tf_condition_opacity,
-                tf_encoder_type=dataset.tf_encoder_type,
-                tf_embedding_fallback=dataset.tf_embedding_fallback,
-                tf_aware_prune=dataset.tf_aware_prune,
-                tf_use_lookup=dataset.tf_use_lookup,
-                tf_lookup_mode=dataset.tf_lookup_mode,
-                tf_lookup_bins=dataset.tf_lookup_bins,
-                tf_lookup_color_scale=dataset.tf_lookup_color_scale,
-                tf_lookup_opacity_scale=dataset.tf_lookup_opacity_scale,
+                tf_encoder_type=getattr(dataset, "tf_encoder_type", "functional"),
+                tf_embedding_fallback=getattr(dataset, "tf_embedding_fallback", "nearest"),
+                tf_aware_prune=getattr(dataset, "tf_aware_prune", True),
+                tf_use_lookup=getattr(dataset, "tf_use_lookup", False),
+                tf_lookup_mode=getattr(dataset, "tf_lookup_mode", "joint"),
+                tf_lookup_bins=getattr(dataset, "tf_lookup_bins", 64),
+                tf_lookup_color_scale=getattr(dataset, "tf_lookup_color_scale", 1.0),
+                tf_lookup_opacity_scale=getattr(dataset, "tf_lookup_opacity_scale", 4.0),
             )
         else:
             raise ValueError(f"Unknown mode: {mode}")
