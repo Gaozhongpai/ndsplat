@@ -223,7 +223,23 @@ blind to localized edits.
 Run all rows of the table above at r* on both scenes with identical data,
 budget, and cameras: mixed floor, residual, lookup, hybrid,
 residual_embedding, specialists. Table labels in the paper must match the
-directory names.
+directory names. Budget wording: the comparison is at matched TOTAL DATA
+COVERAGE, not matched compute -- the specialist suite trains one model per
+preset and consumes several times the aggregate iterations.
+
+### Frozen sequence (2026-08-08)
+
+1. CODE FREEZE on the training path until the residual rank sweep completes.
+2. `factorsplat_select_rank.py` emits the machine-readable manifest
+   (`rank_selection_<scene>_<preset>.json`): val delta primary, guardrails
+   recorded, parsimony tie-break to the smaller rank.
+3. Six matched variants at r*: heart first, then vascular.
+4. Label-selective presets extend the bank as a STRICT SUPERSET (append after
+   index 39 only; never reorder) so all existing 40-TF renders stay reusable.
+5. Validate the new presets on heart before any six-scene expansion.
+6. `hybrid` becomes the headline FactorSplat model ONLY if it beats `residual`
+   consistently across scenes/splits; otherwise `residual` stays primary and
+   the lookup is analysis/ablation.
 
 ### Bank TODO before the six-scene study
 
