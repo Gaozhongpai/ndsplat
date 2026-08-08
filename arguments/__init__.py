@@ -121,6 +121,7 @@ class ModelParams(ParamGroup):
         # anatomy is deleted for having a low shared/base opacity.
         self.tf_aware_prune = True
         self.tf_use_lookup = False
+        self.tf_lookup_mode = "joint"  # joint = packed empirical p(l,h); separable = p(l)q(h) ablation
         self.tf_lookup_bins = 64
         self.tf_lookup_color_scale = 1.0
         self.tf_lookup_opacity_scale = 4.0

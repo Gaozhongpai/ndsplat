@@ -227,6 +227,19 @@ directory names. Budget wording: the comparison is at matched TOTAL DATA
 COVERAGE, not matched compute -- the specialist suite trains one model per
 preset and consumes several times the aggregate iterations.
 
+### Deployment payload (packed lookup, sidecar v2)
+
+`--tf_lookup_mode joint` (default) stores the empirical joint p(l,h) PACKED:
+one uint16 id `label_col*S + hu_bin` per window voxel (valid-first) + one
+uint8 count per Gaussian; uniform weights are reconstructed at lookup time.
+Nothing dense is allocated in joint mode; `separable` keeps only p/q. Only
+ACTIVE branches carry parameters (lookup-only saves no residual factors or
+encoder; color/opacity ablations allocate one factor tensor). Sidecar format
+v2; v1 checkpoints load (v1 joint arrays are converted, v1 separable-only
+sidecars fall back to separable). Measured: heart pilot lookup checkpoint
+(187,930 G) 69.6 MB -> 10.3 MB (85% smaller). Use packed for all matched
+lookup/hybrid runs and final storage numbers.
+
 ### Frozen sequence (2026-08-08)
 
 1. CODE FREEZE on the training path until the residual rank sweep completes.
