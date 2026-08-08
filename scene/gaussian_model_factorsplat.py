@@ -68,6 +68,12 @@ class GaussianModel(DGSModel):
         self._tf_label_ids = None
         self._tf_lookup_p = None         # [N, L] per-Gaussian label distribution
         self._tf_lookup_q = None         # [N, B] per-Gaussian intensity histogram
+        # Joint descriptor p_i(l,h): the window's voxel samples (label col, HU
+        # bin, weight). Exact empirical joint -- preferred over the separable
+        # p*q approximation when present.
+        self._tf_lookup_l = None         # [N, K] int16 label cols (0 where invalid)
+        self._tf_lookup_b = None         # [N, K] int16 HU bins at bank resolution
+        self._tf_lookup_w = None         # [N, K] float weights (0 where invalid)
         self._tf_lookup_gain = None      # learned global RGBA gain (4,)
 
         self.tf_encoder = None
@@ -153,6 +159,10 @@ class GaussianModel(DGSModel):
             probs = np.asarray(payload["label_probs"], dtype=np.float32)
             hist = np.asarray(payload["intensity_hist"], dtype=np.float32)
             label_ids = np.asarray(payload["label_ids"]).astype(int).tolist()
+            sample_cols = (np.asarray(payload["sample_label_cols"], dtype=np.int64)
+                           if "sample_label_cols" in payload else None)
+            sample_bins = (np.asarray(payload["sample_bins"], dtype=np.int64)
+                           if "sample_bins" in payload else None)
         if self._tf_label_ids is not None and label_ids != self._tf_label_ids:
             raise ValueError("lookup descriptor label order does not match tf_bank")
         count = self.get_xyz.shape[0]
@@ -162,6 +172,7 @@ class GaussianModel(DGSModel):
         if probs.shape[1] != self._tf_bank_lookup.shape[1]:
             raise ValueError("lookup descriptor label axis does not match tf_bank")
         bins = self._tf_bank_lookup.shape[2]
+        native = int(hist.shape[1])          # npz HU-grid resolution (pre-rebin)
         if hist.shape[1] % bins == 0:
             # Histograms are distributions: rebin by summation.
             hist = hist.reshape(hist.shape[0], bins, hist.shape[1] // bins).sum(axis=2)
@@ -169,15 +180,38 @@ class GaussianModel(DGSModel):
             raise ValueError(f"cannot rebin {hist.shape[1]}-bin histograms to {bins}")
         self._tf_lookup_p = torch.tensor(probs, device="cuda")
         self._tf_lookup_q = torch.tensor(hist, device="cuda")
+        mode = "separable p*q"
+        if sample_cols is not None and sample_bins is not None:
+            if sample_cols.shape[0] != count:
+                raise ValueError("joint sample arrays do not match Gaussian count")
+            valid = sample_cols >= 0
+            weights = valid.astype(np.float32)
+            denom = weights.sum(axis=1, keepdims=True)
+            weights = np.divide(weights, denom, out=np.zeros_like(weights),
+                                where=denom > 0)
+            rebin = max(native // bins, 1)
+            self._tf_lookup_l = torch.tensor(
+                np.where(valid, sample_cols, 0).astype(np.int16), device="cuda")
+            self._tf_lookup_b = torch.tensor(
+                np.clip(sample_bins // rebin, 0, bins - 1).astype(np.int16),
+                device="cuda")
+            self._tf_lookup_w = torch.tensor(weights, device="cuda")
+            mode = f"joint p(l,h) ({sample_cols.shape[1]} samples/Gaussian)"
         covered = float((probs.sum(axis=1) > 0).mean())
         print(f"Loaded lookup descriptors for {count} Gaussians "
-              f"({covered:.1%} with foreground support) from {path}")
+              f"({covered:.1%} with foreground support, {mode}) from {path}")
 
     def _lookup_delta(self, tf_index):
-        """Eq. 6: histogram-weighted RGBA change of the locally relevant part of
-        the preset, relative to the base preset. Returns [N, 4]."""
+        """Eq. 6: locally relevant RGBA change of the preset relative to the
+        base preset. Uses the exact empirical joint p_i(l,h) (window voxel
+        samples) when available, else the separable p_i(l) q_i(h) product.
+        Returns [N, 4]."""
         bank = self._tf_bank_lookup
         delta_r = bank[tf_index] - bank[self._tf_base_index]            # [L,B,4]
+        if self._tf_lookup_l is not None:
+            vals = delta_r[self._tf_lookup_l.long(),
+                           self._tf_lookup_b.long()]                    # [N,K,4]
+            return (vals * self._tf_lookup_w.unsqueeze(-1)).sum(dim=1)
         per_label = torch.einsum("nb,lbc->nlc", self._tf_lookup_q, delta_r)
         return torch.einsum("nl,nlc->nc", self._tf_lookup_p, per_label)
 
@@ -283,8 +317,11 @@ class GaussianModel(DGSModel):
         if "tf_opacity_factors" in tensors:
             self._tf_opacity_factors = tensors["tf_opacity_factors"]
         if self._tf_lookup_p is not None and mask.shape[0] == self._tf_lookup_p.shape[0]:
-            self._tf_lookup_p = self._tf_lookup_p[mask]
-            self._tf_lookup_q = self._tf_lookup_q[mask]
+            for name in ("_tf_lookup_p", "_tf_lookup_q", "_tf_lookup_l",
+                         "_tf_lookup_b", "_tf_lookup_w"):
+                tensor = getattr(self, name)
+                if tensor is not None:
+                    setattr(self, name, tensor[mask])
         return tensors
 
     def _append_factor(self, name, attribute, extension):
@@ -330,10 +367,12 @@ class GaussianModel(DGSModel):
                 for chunk in new_xyz.detach().split(1024):
                     nearest.append(torch.cdist(chunk, old).argmin(dim=1))
                 nearest = torch.cat(nearest)
-                self._tf_lookup_p = torch.cat(
-                    (self._tf_lookup_p, self._tf_lookup_p[nearest]), dim=0)
-                self._tf_lookup_q = torch.cat(
-                    (self._tf_lookup_q, self._tf_lookup_q[nearest]), dim=0)
+                for name in ("_tf_lookup_p", "_tf_lookup_q", "_tf_lookup_l",
+                             "_tf_lookup_b", "_tf_lookup_w"):
+                    tensor = getattr(self, name)
+                    if tensor is not None:
+                        setattr(self, name,
+                                torch.cat((tensor, tensor[nearest]), dim=0))
 
     @staticmethod
     def _sidecar(path):
@@ -358,6 +397,12 @@ class GaussianModel(DGSModel):
             payload["lookup_p"] = self._tf_lookup_p.detach().cpu()
             payload["lookup_q"] = self._tf_lookup_q.detach().cpu()
             payload["lookup_gain"] = self._tf_lookup_gain.detach().cpu()
+            for key, name in (("lookup_l", "_tf_lookup_l"),
+                              ("lookup_b", "_tf_lookup_b"),
+                              ("lookup_w", "_tf_lookup_w")):
+                tensor = getattr(self, name)
+                if tensor is not None:
+                    payload[key] = tensor.detach().cpu()
         torch.save(payload, self._sidecar(path))
 
     def load_ply(self, path):
@@ -386,6 +431,11 @@ class GaussianModel(DGSModel):
             self._tf_lookup_q = payload["lookup_q"].to("cuda")
             self._tf_lookup_gain = nn.Parameter(
                 payload["lookup_gain"].to("cuda").requires_grad_(True))
+            for key, name in (("lookup_l", "_tf_lookup_l"),
+                              ("lookup_b", "_tf_lookup_b"),
+                              ("lookup_w", "_tf_lookup_w")):
+                if key in payload:
+                    setattr(self, name, payload[key].to("cuda"))
 
     def capture(self):
         state = {
@@ -398,6 +448,12 @@ class GaussianModel(DGSModel):
             state["lookup_p"] = self._tf_lookup_p
             state["lookup_q"] = self._tf_lookup_q
             state["lookup_gain"] = self._tf_lookup_gain
+            for key, name in (("lookup_l", "_tf_lookup_l"),
+                              ("lookup_b", "_tf_lookup_b"),
+                              ("lookup_w", "_tf_lookup_w")):
+                tensor = getattr(self, name)
+                if tensor is not None:
+                    state[key] = tensor
         return state
 
     def restore(self, model_args, training_args):
@@ -413,4 +469,9 @@ class GaussianModel(DGSModel):
             self._tf_lookup_q = model_args["lookup_q"].to("cuda")
             self._tf_lookup_gain = nn.Parameter(
                 model_args["lookup_gain"].to("cuda").requires_grad_(True))
+            for key, name in (("lookup_l", "_tf_lookup_l"),
+                              ("lookup_b", "_tf_lookup_b"),
+                              ("lookup_w", "_tf_lookup_w")):
+                if key in model_args:
+                    setattr(self, name, model_args[key].to("cuda"))
         super().restore(model_args["base"], training_args)

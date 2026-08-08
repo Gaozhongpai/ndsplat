@@ -11,7 +11,12 @@ ITERS="${FACTORSPLAT_ITERS:-30000}"
 # whose decoded frames exceed GPU memory.
 EXTRA_NOTE="${FACTORSPLAT_EXTRA_FLAGS:-}"
 RANK="${FACTORSPLAT_RANK:-8}"
-VARIANT="${FACTORSPLAT_VARIANT:-hybrid}"
+# Variant names correspond EXACTLY to the enabled branches:
+#   residual = functional low-rank residual only (color+opacity conditioning)
+#   lookup   = local lookup only (low-rank branch off)
+#   hybrid   = local lookup + functional residual
+#   color / opacity = residual restricted to one channel (ablation)
+VARIANT="${FACTORSPLAT_VARIANT:-residual}"
 # functional (default) or embedding (seen-only per-preset codes baseline)
 ENCODER="${FACTORSPLAT_ENCODER:-functional}"
 
@@ -20,22 +25,19 @@ if [ "$ENCODER" != "functional" ]; then
     ENCODER_FLAGS="--tf_encoder_type $ENCODER"
 fi
 
-# FACTORSPLAT_LOOKUP=1 adds the local-lookup branch (needs points3d_lookup.npz
-# in the dataset root). VARIANT=lookup runs the lookup ALONE (low-rank off).
-LOOKUP="${FACTORSPLAT_LOOKUP:-0}"
-
+LOOKUP=0
 case "$VARIANT" in
-    hybrid)  TF_FLAGS="--tf_condition_color True --tf_condition_opacity True" ;;
-    color)   TF_FLAGS="--tf_condition_color True --tf_condition_opacity False" ;;
-    opacity) TF_FLAGS="--tf_condition_color False --tf_condition_opacity True" ;;
-    lookup)  TF_FLAGS="--tf_condition_color False --tf_condition_opacity False"; LOOKUP=1 ;;
-    *) echo "unknown FACTORSPLAT_VARIANT=$VARIANT (hybrid|color|opacity|lookup)" >&2; exit 2 ;;
+    residual) TF_FLAGS="--tf_condition_color True --tf_condition_opacity True" ;;
+    hybrid)   TF_FLAGS="--tf_condition_color True --tf_condition_opacity True"; LOOKUP=1 ;;
+    color)    TF_FLAGS="--tf_condition_color True --tf_condition_opacity False" ;;
+    opacity)  TF_FLAGS="--tf_condition_color False --tf_condition_opacity True" ;;
+    lookup)   TF_FLAGS="--tf_condition_color False --tf_condition_opacity False"; LOOKUP=1 ;;
+    *) echo "unknown FACTORSPLAT_VARIANT=$VARIANT (residual|hybrid|color|opacity|lookup)" >&2; exit 2 ;;
 esac
 
 VARIANT_DIR="$VARIANT"
 if [ "$LOOKUP" = "1" ]; then
     TF_FLAGS="$TF_FLAGS --tf_use_lookup True"
-    [ "$VARIANT" != "lookup" ] && VARIANT_DIR="${VARIANT}_lookup"
 fi
 [ "$ENCODER" != "functional" ] && VARIANT_DIR="${VARIANT_DIR}_${ENCODER}"
 

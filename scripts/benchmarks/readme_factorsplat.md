@@ -32,12 +32,13 @@ view direction or transfer function. Existing dGS conditioning changes opacity
 with view direction. The new TF branch changes color and opacity only:
 
 ```text
-alpha_i(v,T) = alpha_i^coverage * s_i^view(v) * s_i^TF(T)
-SH_i(T)      = SH_i^base + delta_SH_i^TF(T)
+alpha_i(v,T) = sigmoid(o_i + delta_i^TF(T)) * s_i^view(v)   # logit OFFSET, can
+SH_i(T)      = SH_i^base + delta_SH_i^TF(T)                 # reveal AND suppress
 ```
 
-The proposed branch will use a physical local lookup followed by a low-rank
-residual. A learned `tf_id` lookup is a seen-TF baseline, not the proposed input.
+The TF branch is a physical local lookup (Eq. 6, joint p(l,h)) plus a low-rank
+functional residual. A learned `tf_id` embedding is a seen-TF baseline, not the
+proposed input.
 
 ## Model (`--mode factorsplat`)
 
@@ -55,7 +56,7 @@ delta_logit_alpha_i = a_i^T z_T    a_i:   [N, r]      (opacity factors)
 
 - `--tf_rank` r in {4, 8, 16, 32}; pilot default 8, smoke used 4.
 - `--tf_condition_color / --tf_condition_opacity` gate the two channels
-  (the hybrid/color/opacity ablation).
+  (the residual/color/opacity ablation).
 - Factors are per-Gaussian optimizer groups (`--tf_factor_lr 0.0025`); the
   encoder uses `--tf_encoder_lr 0.001`. Densify/clone/prune/reset carry the
   factors along; `capture()/restore()` checkpoints include them (11 optimizer
@@ -154,11 +155,11 @@ extras — and each runs check -> train -> render -> metrics -> group metrics ->
 delta metrics, skipping outputs that already have `results.json`:
 
 ```bash
-# supervised per-TF ceilings (subset with FACTORSPLAT_TF_IDS="...")
+# per-preset specialists (subset with FACTORSPLAT_TF_IDS="...")
 bash scripts/benchmarks/dgs_factorsplat_oracles.sh
 # unconditioned mixed-TF floor (plain dgs on the combined set)
 bash scripts/benchmarks/dgs_factorsplat_mixed.sh
-# conditioned model; FACTORSPLAT_VARIANT=hybrid|color|opacity, FACTORSPLAT_RANK=4|8|16|32
+# conditioned model; FACTORSPLAT_VARIANT=residual|hybrid|lookup|color|opacity, FACTORSPLAT_RANK=4|8|16|32
 bash scripts/benchmarks/factorsplat_train.sh
 ```
 
@@ -191,18 +192,46 @@ Oracle datasets at smoke scale are 2-view floors, not ceilings.
 
 ## Main comparisons
 
-1. Original-TF opacity-only dGS, frozen under edits.
-2. Direct local TF lookup using each Gaussian's label/intensity statistics.
-3. Seen-only learned TF embedding.
-4. Dense TF-conditioned appearance MLP.
-5. FactorSplat local lookup only.
-6. FactorSplat low-rank residual only.
-7. FactorSplat hybrid.
-8. Separately trained dGS for each TF (supervised ceiling).
-9. Optional Render-FM regeneration for each TF (amortized regeneration baseline).
+Names correspond EXACTLY to enabled flags (FACTORSPLAT_VARIANT / output dir):
 
-The controlled FactorSplat ablation is TF-opacity only, TF-color only, and both.
-No main variant enables TF- or view-dependent position.
+| name | low-rank residual | local lookup | encoder | notes |
+|---|---|---|---|---|
+| `mixed_unconditioned` | -- | -- | -- | identity floor (one image for all TFs) |
+| `residual` | color+opacity | off | functional | the pilot model (was mislabeled "hybrid") |
+| `lookup` | off | on | (unused) | Eq. 6 alone, learned global gain only |
+| `hybrid` | color+opacity | on | functional | full model: lookup + residual |
+| `residual_embedding` | color+opacity | off | embedding | seen-only baseline, nearest-train fallback |
+| `color` / `opacity` | one channel | off | functional | channel ablation |
+| `specialist` | -- | -- | -- | one dGS per preset ("per-preset specialist", NOT a strict ceiling: each sees 1/6 of the images) |
+
+Plus: dense TF-conditioned appearance MLP (hypernetwork, TODO) and optional
+Render-FM regeneration per preset. Render-FM stays a SEPARATE amortization
+branch (it could generate the canonical FactorSplat representation for a new
+volume; FactorSplat then handles instantaneous TF switching) -- it is not part
+of the core per-scene study. No main variant enables TF- or view-dependent
+position.
+
+### Rank selection (full study)
+
+Primary criterion: validation-preset changed-region TF-delta error
+(`delta_l1_changed`). Guardrails: `unchanged_delta_leak`, PSNR/SSIM, model
+size, and TF-switch latency. NEVER select rank on PSNR alone -- it is nearly
+blind to localized edits.
+
+### Matched ablation at the selected rank r*
+
+Run all rows of the table above at r* on both scenes with identical data,
+budget, and cameras: mixed floor, residual, lookup, hybrid,
+residual_embedding, specialists. Table labels in the paper must match the
+directory names.
+
+### Bank TODO before the six-scene study
+
+Add label-SELECTIVE mutations (per-label hue/alpha edits, show/hide of
+specific anatomy) to the bank families. The current bank is mostly global
+(hue/opacity/window/gamma), so the label-aware contribution of Eq. 6 is
+under-tested: on the pilot bank the joint p(l,h) and separable p(l)q(h)
+lookups agree to 1.6% relative -- selective presets are what separates them.
 
 ### Baseline implementations (2026-08-08)
 
