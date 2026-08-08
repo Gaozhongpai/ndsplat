@@ -410,31 +410,33 @@ class GaussianModel(DGSModel):
             new_v_12_direction, new_lambda_view, new_lambda_time,
         )
         if added:
+            # Children inherit BOTH the fixed lookup descriptors and the learned
+            # TF factors from the nearest pre-existing Gaussian (clones sit
+            # exactly on their parent; split children land within the parent
+            # footprint). Zero-initializing children's factors would make every
+            # densified Gaussian TF-unresponsive until gradients rebuild it --
+            # an artificial cold-start handicap for the residual branch.
+            old = self.get_xyz[: self.get_xyz.shape[0] - added].detach()
+            nearest = []
+            for chunk in new_xyz.detach().split(1024):
+                nearest.append(torch.cdist(chunk, old).argmin(dim=1))
+            nearest = torch.cat(nearest)
             if self._tf_color_factors is not None:
                 self._append_factor(
                     "tf_color_factors", "_tf_color_factors",
-                    torch.zeros(added, 3, self.tf_rank, device=self._xyz.device),
+                    self._tf_color_factors.detach()[nearest].clone(),
                 )
             if self._tf_opacity_factors is not None:
                 self._append_factor(
                     "tf_opacity_factors", "_tf_opacity_factors",
-                    torch.zeros(added, self.tf_rank, device=self._xyz.device),
+                    self._tf_opacity_factors.detach()[nearest].clone(),
                 )
-            if self.tf_lookup_ready:
-                # Descriptors are fixed volume samples, so children inherit them
-                # from the nearest pre-existing Gaussian (clones sit exactly on
-                # their parent; split children land within the parent footprint).
-                old = self.get_xyz[: self.get_xyz.shape[0] - added].detach()
-                nearest = []
-                for chunk in new_xyz.detach().split(1024):
-                    nearest.append(torch.cdist(chunk, old).argmin(dim=1))
-                nearest = torch.cat(nearest)
-                for name in ("_tf_lookup_p", "_tf_lookup_q",
-                             "_tf_lookup_ids", "_tf_lookup_counts"):
-                    tensor = getattr(self, name)
-                    if tensor is not None:
-                        setattr(self, name,
-                                torch.cat((tensor, tensor[nearest]), dim=0))
+            for name in ("_tf_lookup_p", "_tf_lookup_q",
+                         "_tf_lookup_ids", "_tf_lookup_counts"):
+                tensor = getattr(self, name)
+                if tensor is not None:
+                    setattr(self, name,
+                            torch.cat((tensor, tensor[nearest]), dim=0))
 
     @staticmethod
     def _sidecar(path):

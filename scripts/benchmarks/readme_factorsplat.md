@@ -260,14 +260,47 @@ lookup/hybrid runs and final storage numbers.
    consistently across scenes/splits; otherwise `residual` stays primary and
    the lookup is analysis/ablation.
 
+### Densification factor inheritance (fixed pre-sweep)
+
+Children inherit their nearest pre-existing Gaussian's TF FACTORS as well as
+its lookup descriptors (previously factors were zero-initialized -- a
+cold-start handicap that made every densified Gaussian TF-unresponsive until
+gradients rebuilt it, artificially disadvantaging the residual vs a future
+factor generator). Unconditional behavior; in effect for the rank sweep.
+
+### Response-space predictability diagnostic (run after the r* ablation)
+
+Decides whether a factor GENERATOR G_psi(q_i) can replace stored factors.
+The factorization has latent-basis ambiguity (encoder and factors can rotate
+the rank dimension), so per-column R^2 on raw A_i is only supplementary.
+Primary protocol: regress the identifiable response signature
+Y_i = [A_i z_T1 ... A_i z_TM] from q_i with (a) spatially BLOCKED validation
+splits, not random; (b) variance-weighted R^2 reported separately for RGB and
+opacity responses; (c) the decisive test = substitute predicted factors into
+the checkpoint and re-render ALL TF tiers, scoring delta error, leak,
+PSNR/SSIM.
+
 ### v2 ladder (only if hybrid stays weak on label-selective/OOD)
 
-Local functional residual: per-Gaussian code
-`z_i(T) = sum_{l,h} p_i(l,h) phi(l, h, T(l,h)-T0(l,h))` so the LEARNED branch
-becomes locally TF-aware too (currently only the analytic lookup is). Explore
-before all-SH conditioning (entanglement risk) and never TF-dependent position
-shifts (TFs edit appearance/support, not anatomy). Render-FM stays the
-cross-scene amortization branch.
+Preferred v2 = FACTOR GENERATOR, not a generic joint MLP:
+`A_i = G_psi(q_i)`, `delta_theta_i(T) = A_i z_T` -- linear in z_T preserves
+exact identity at T0; cache A_i after training so TF-switch cost is unchanged;
+ablation is surgical (stored vs generated factors, same rank). Input
+`q_i = q_physical (+) sg(q_canonical) (+) e_i`: physical = permutation-
+invariant encoding of the packed label-HU samples; canonical = scale/cov/
+appearance features FROZEN after warm-up or EMA-snapshotted (stop-gradient
+alone does not stop value drift, so G_psi(q_i) cannot be cached during
+training otherwise); e_i = optional 4-8D learned context code -- test the
+physical-only generator FIRST, add e_i only if it materially recovers
+accuracy. Compression at r=8 (128 B/G explicit FP32 factors): 4D FP32 code
+16 B/G = 8x; 8D FP32 = 4x; 4-8D FP16 = 8-16x; the 55 B/G packed descriptor
+is additional fixed storage either way. QUALIFICATION: cross-scene transfer
+requires G_psi AND the TF encoder to be trained/shared across scenes; a
+per-scene generator compresses storage but provides no Render-FM transfer
+by itself. Also in the ladder: local functional residual
+`z_i(T) = sum_{l,h} p_i(l,h) phi(l, h, T(l,h)-T0(l,h))`. Explore before
+all-SH conditioning (entanglement risk) and never TF-dependent position
+shifts (TFs edit appearance/support, not anatomy).
 
 ### Bank TODO before the six-scene study
 
