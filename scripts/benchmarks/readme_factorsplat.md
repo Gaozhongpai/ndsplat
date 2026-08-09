@@ -199,7 +199,8 @@ Names correspond EXACTLY to enabled flags (FACTORSPLAT_VARIANT / output dir):
 | `mixed_unconditioned` | -- | -- | -- | identity floor (one image for all TFs) |
 | `residual` | color+opacity | off | functional | the pilot model (was mislabeled "hybrid") |
 | `lookup` | off | on | (unused) | Eq. 6 alone, learned global gain only |
-| `hybrid` | color+opacity | on | functional | full model: lookup + residual |
+| `hybrid` | color+opacity (deg-1) | on | functional | degree-one conditioning ablation |
+| `hybrid_dc` | color+opacity (DC) | on | functional | PRIMARY model: lookup + DC residual (183 B/G at r=8) |
 | `residual_embedding` | color+opacity | off | embedding | seen-only baseline, nearest-train fallback |
 | `color` / `opacity` | one channel | off | functional | channel ablation |
 | `specialist` | -- | -- | -- | one dGS per preset ("per-preset specialist", NOT a strict ceiling: each sees 1/6 of the images) |
