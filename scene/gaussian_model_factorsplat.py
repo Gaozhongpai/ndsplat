@@ -460,6 +460,14 @@ class GaussianModel(DGSModel):
         opacity = torch.sigmoid(logit)
         return shs, opacity * opacity_scale
 
+    def reset_opacity(self):
+        # Adapted VEG: opacity is read from the LUT at u_i; the shared logit
+        # is unused and receives no gradients, so it has no optimizer state to
+        # rewrite (and resetting it would do nothing anyway).
+        if self.tf_veg_packed:
+            return
+        super().reset_opacity()
+
     def _prune_optimizer(self, mask):
         tensors = super()._prune_optimizer(mask)
         if "tf_color_factors" in tensors:
