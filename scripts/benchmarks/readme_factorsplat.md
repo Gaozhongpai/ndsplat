@@ -260,6 +260,19 @@ lookup/hybrid runs and final storage numbers.
    consistently across scenes/splits; otherwise `residual` stays primary and
    the lookup is analysis/ablation.
 
+### SH-degree-1 protocol (bd5c120)
+
+EVERY dGS/N-DGS run (mixed, specialists, lookup, residual, hybrid, embedding,
+any VEG-side comparison) passes --sh_degree 1 explicitly (baked into all three
+trainer scripts). The learned residual conditions ALL SH color coefficients
+through degree 1 (DC + three first-order; factors [N,4,3,r]; 13Nr storage,
+416 B/G at r=8 FP32); the physical lookup stays DC-only (view-independent
+edit); higher-order coefficients are ABSENT, not silently shared.
+--tf_color_sh_degree 0 = the DC-only residual ablation to run at r*.
+load_ply truncates higher-degree PLYs on the coefficient axis, so the SH-3
+init warm-starts degree-1 models. DC-residual pilot results are LEGACY
+(labeled so in the paper) until retrained.
+
 ### Densification factor inheritance (fixed pre-sweep)
 
 Children inherit their nearest pre-existing Gaussian's TF FACTORS as well as
