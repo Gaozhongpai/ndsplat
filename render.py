@@ -52,7 +52,7 @@ def render_wrapper(view, gaussians, pipeline, background, mode, is_test=False, t
         raise ValueError(f"Unknown mode: {mode}.")
 
 
-def render_set(model_path, name, iteration, views, gaussians, pipeline, background, mode, measure_fps=False, use_gsplat=False):
+def render_set(model_path, name, iteration, views, gaussians, pipeline, background, mode, measure_fps=False, use_gsplat=False, bake_appearance=False):
     """Render a set of views and save results.
 
     Args:
@@ -85,8 +85,17 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         fpslist = []
         fps_measure_count = min(20, len(views))
 
-        print("Measuring FPS for first 20 frames...")
+        bake = (bake_appearance
+                and hasattr(gaussians, "bake_appearance")
+                and getattr(views[0], "tf_index", None) is not None)
+        if bake:
+            print("Measuring FPS with the conditioned appearance BAKED per preset "
+                  "(steady-state rate; conditioning amortized per TF switch)")
+        else:
+            print("Measuring FPS for first 20 frames...")
         for idx, view in enumerate(views[:fps_measure_count]):
+            if bake:
+                gaussians.bake_appearance(view.tf_index)
             num_frames = 100
 
             # Warmup
@@ -125,6 +134,9 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
                                        "tf_switch_ms.txt"), 'w') as f:
                     f.write(f"{ms:.3f}")
 
+    if getattr(gaussians, "_tf_baked_state", None) is not None:
+        gaussians.unbake()
+
     print("Rendering all frames for saving...")
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
         # Render with use_tcgs=False for quality-matched evaluation (same as training)
@@ -137,7 +149,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
 
 
-def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_train: bool, skip_test: bool, measure_fps: bool = False):
+def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_train: bool, skip_test: bool, measure_fps: bool = False, bake_appearance: bool = False):
     """Render train and/or test sets.
 
     Args:
@@ -226,11 +238,13 @@ def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_
         if not skip_train:
             render_set(dataset.model_path, "train", scene.loaded_iter,
                       scene.getTrainCameras(), gaussians, pipeline, background, mode, measure_fps,
+                      bake_appearance=bake_appearance,
                       use_gsplat=use_gsplat)
 
         if not skip_test:
             render_set(dataset.model_path, "test", scene.loaded_iter,
                       scene.getTestCameras(), gaussians, pipeline, background, mode, measure_fps,
+                      bake_appearance=bake_appearance,
                       use_gsplat=use_gsplat)
 
 
@@ -283,6 +297,6 @@ if __name__ == "__main__":
     else:
         iteration = int(args.iteration)
 
-    _BAKE_APPEARANCE = bool(getattr(args, "tf_bake_appearance", False))
     render_sets(model.extract(args), iteration, pipeline.extract(args),
-                args.skip_train, args.skip_test, args.measure_fps)
+                args.skip_train, args.skip_test, args.measure_fps,
+                bake_appearance=bool(getattr(args, "tf_bake_appearance", False)))
