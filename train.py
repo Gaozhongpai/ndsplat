@@ -146,6 +146,12 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
     gaussians.clip_operator = getattr(dataset, "clip_operator", "analytic")
 
     scene = Scene(dataset, gaussians, opt_params=opt)
+    # The adapted-VEG scalar must exist before the first training_setup (which
+    # validates it); the later --start_checkpoint load_ply keeps it intact
+    # because the init PLY has the same Gaussian count and row order.
+    if getattr(dataset, "tf_veg_packed", False):
+        gaussians.init_veg_scalar(
+            os.path.join(dataset.source_path, "points3d_lookup.npz"))
     gaussians.training_setup(opt)
 
     # # Replace optimizer with SelectiveAdam (CUDA-fused, visibility-aware)
@@ -190,9 +196,6 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
     # --start_checkpoint load and before densification changes the count).
     if getattr(dataset, "tf_use_lookup", False) and first_iter == 0:
         gaussians.load_lookup_descriptors(
-            os.path.join(dataset.source_path, "points3d_lookup.npz"))
-    if getattr(dataset, "tf_veg_packed", False) and first_iter == 0:
-        gaussians.init_veg_scalar(
             os.path.join(dataset.source_path, "points3d_lookup.npz"))
 
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
