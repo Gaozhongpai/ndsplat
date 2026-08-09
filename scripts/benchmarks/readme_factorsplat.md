@@ -241,6 +241,17 @@ sidecars fall back to separable). Measured: heart pilot lookup checkpoint
 (187,930 G) 69.6 MB -> 10.3 MB (85% smaller). Use packed for all matched
 lookup/hybrid runs and final storage numbers.
 
+### ARCHITECTURAL FREEZE (2026-08-09) + confirmatory vascular protocol
+
+Frozen: degree-one dGS backbone, DC-only TF conditioning, Hybrid (DC) =
+canonical FactorSplat. Vascular is CONFIRMATORY REPLICATION, not development:
+frozen r*=8, variants, metrics, and selection rule applied unchanged; heart
+and vascular reported SEPARATELY before any pooled average; abstract goes
+two-scene only if Hybrid (DC) replicates; if rankings differ, REPORT the
+scene dependence -- do not redesign from vascular. Remaining paper work:
+latency/storage table, sweep-stability result, conclusion, compress legacy
+pilot tables once the two-scene table supersedes them.
+
 ### Frozen sequence (2026-08-08)
 
 1. CODE FREEZE on the training path until the residual rank sweep completes.
