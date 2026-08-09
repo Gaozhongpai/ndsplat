@@ -28,7 +28,7 @@ for scene in $SCENES; do
     checkpoint=""
     [ -f "$source/points3d.ply" ] && checkpoint="--start_checkpoint $source/points3d.ply"
     python scripts/benchmarks/factorsplat_check_dataset.py "$source"
-    python train.py -s "$source" --model_path "$output" \
+    python train.py -s "$source" --model_path "$output" --sh_degree 1 \
         --mode dgs --use_view_dependent_pos False \
         --l_22_inv_init_scale 2.0 --mip3dgs \
         --iterations "$ITERS" --eval --disable_viewer $checkpoint ${FACTORSPLAT_EXTRA_FLAGS:-}

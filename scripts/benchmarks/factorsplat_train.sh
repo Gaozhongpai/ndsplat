@@ -56,7 +56,7 @@ for scene in $SCENES; do
     python scripts/benchmarks/factorsplat_check_dataset.py "$source"
     checkpoint=""
     [ -f "$source/points3d.ply" ] && checkpoint="--start_checkpoint $source/points3d.ply"
-    python train.py -s "$source" --model_path "$output" \
+    python train.py -s "$source" --model_path "$output" --sh_degree 1 \
         --mode factorsplat --use_view_dependent_pos False \
         --l_22_inv_init_scale 2.0 --mip3dgs --tf_rank "$RANK" \
         $TF_FLAGS $ENCODER_FLAGS --iterations "$ITERS" --eval --disable_viewer $checkpoint ${FACTORSPLAT_EXTRA_FLAGS:-}

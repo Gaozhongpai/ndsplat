@@ -128,6 +128,7 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
             tf_opacity_scale=dataset.tf_opacity_scale,
             tf_condition_color=dataset.tf_condition_color,
             tf_condition_opacity=dataset.tf_condition_opacity,
+            tf_color_sh_degree=dataset.tf_color_sh_degree,
             tf_encoder_type=dataset.tf_encoder_type,
             tf_embedding_fallback=dataset.tf_embedding_fallback,
             tf_aware_prune=dataset.tf_aware_prune,

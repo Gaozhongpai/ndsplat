@@ -51,7 +51,7 @@ for scene in $SCENES; do
         checkpoint=""
         [ -f "$source/points3d.ply" ] && checkpoint="--start_checkpoint $source/points3d.ply"
         echo "oracle: $scene / $tf_id -> $output"
-        python train.py -s "$source" --model_path "$output" \
+        python train.py -s "$source" --model_path "$output" --sh_degree 1 \
             $DGS_FLAGS $EVAL_FLAGS $checkpoint
         python render.py -m "$output" --skip_train --iteration "$ITERS"
         python metrics.py -m "$output"

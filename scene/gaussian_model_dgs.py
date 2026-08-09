@@ -849,11 +849,22 @@ class GaussianModel(MipFilterMixin):
 
         extra_f_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("f_rest_")]
         extra_f_names = sorted(extra_f_names, key=lambda x: int(x.split('_')[-1]))
-        assert len(extra_f_names) == 3 * (self.max_sh_degree + 1) ** 2 - 3
+        stored_rest = len(extra_f_names) // 3
+        expected_rest = (self.max_sh_degree + 1) ** 2 - 1
+        assert len(extra_f_names) == 3 * stored_rest
+        assert stored_rest >= expected_rest, \
+            f"PLY stores SH rest {stored_rest} < model needs {expected_rest}"
         features_extra = np.zeros((xyz.shape[0], len(extra_f_names)))
         for idx, attr_name in enumerate(extra_f_names):
             features_extra[:, idx] = np.asarray(plydata.elements[0][attr_name])
-        features_extra = features_extra.reshape((features_extra.shape[0], 3, (self.max_sh_degree + 1) ** 2 - 1))
+        # Layout is channel-major ([3, K] per point), so truncating a
+        # higher-degree checkpoint to this model's degree must slice the
+        # COEFFICIENT axis after the reshape, not the flat vector.
+        features_extra = features_extra.reshape((features_extra.shape[0], 3, stored_rest))
+        if stored_rest > expected_rest:
+            print(f"Truncating PLY SH rest coefficients {stored_rest} -> {expected_rest} "
+                  f"(sh_degree {self.max_sh_degree})")
+            features_extra = features_extra[:, :, :expected_rest]
 
         scale_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("scale_")]
         scale_names = sorted(scale_names, key=lambda x: int(x.split('_')[-1]))

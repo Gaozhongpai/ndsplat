@@ -25,6 +25,7 @@ class GaussianModel(DGSModel):
                  tf_color_scale: float = 0.25, tf_opacity_scale: float = 4.0,
                  tf_condition_color: bool = True,
                  tf_condition_opacity: bool = True,
+                 tf_color_sh_degree: int = 1,
                  tf_encoder_type: str = "functional",
                  tf_embedding_fallback: str = "nearest",
                  tf_aware_prune: bool = True,
@@ -53,6 +54,11 @@ class GaussianModel(DGSModel):
         self.tf_opacity_scale = float(tf_opacity_scale)
         self.tf_condition_color = bool(tf_condition_color)
         self.tf_condition_opacity = bool(tf_condition_opacity)
+        if not 0 <= int(tf_color_sh_degree) <= sh_degree:
+            raise ValueError(f"tf_color_sh_degree must be in [0, sh_degree={sh_degree}]")
+        self.tf_color_sh_degree = int(tf_color_sh_degree)
+        # SH color coefficients conditioned by the residual (DC + lower bands).
+        self.tf_color_coeffs = (self.tf_color_sh_degree + 1) ** 2
         if tf_encoder_type not in ("functional", "embedding"):
             raise ValueError(f"tf_encoder_type must be functional|embedding, got {tf_encoder_type}")
         if tf_embedding_fallback not in ("nearest", "zero"):
@@ -250,7 +256,8 @@ class GaussianModel(DGSModel):
         # no residual factors; color/opacity ablations allocate one tensor.
         device = self._xyz.device
         self._tf_color_factors = nn.Parameter(
-            (1e-3 * torch.randn(count, 3, self.tf_rank, device=device)).requires_grad_(True)
+            (1e-3 * torch.randn(count, self.tf_color_coeffs, 3, self.tf_rank,
+                                device=device)).requires_grad_(True)
         ) if self.tf_condition_color else None
         self._tf_opacity_factors = nn.Parameter(
             (1e-3 * torch.randn(count, self.tf_rank, device=device)).requires_grad_(True)
@@ -269,11 +276,19 @@ class GaussianModel(DGSModel):
             raise RuntimeError("residual branch active but TF encoder was never built")
         if getattr(training_args, "densification_strategy", "standard") != "standard":
             raise ValueError("FactorSplat currently supports standard densification only")
-        active = [t for t in (self._tf_color_factors, self._tf_opacity_factors)
-                  if t is not None]
-        if any(not isinstance(t, nn.Parameter) or t.shape[0] != self.get_xyz.shape[0]
-               for t in active) or (self.tf_factors_active and not active):
-            self._initialize_tf_factors(self.get_xyz.shape[0])
+        count = self.get_xyz.shape[0]
+        expected = {
+            "color": (count, self.tf_color_coeffs, 3, self.tf_rank),
+            "opacity": (count, self.tf_rank),
+        }
+        bad = ((self.tf_condition_color and
+                (not isinstance(self._tf_color_factors, nn.Parameter)
+                 or tuple(self._tf_color_factors.shape) != expected["color"]))
+               or (self.tf_condition_opacity and
+                   (not isinstance(self._tf_opacity_factors, nn.Parameter)
+                    or tuple(self._tf_opacity_factors.shape) != expected["opacity"])))
+        if bad:
+            self._initialize_tf_factors(count)
         super().training_setup(training_args)
         if self._tf_color_factors is not None:
             self.optimizer.add_param_group({
@@ -360,10 +375,16 @@ class GaussianModel(DGSModel):
             logit = logit + self.tf_lookup_opacity_scale * \
                 self._tf_lookup_gain[3] * delta[:, 3:4]
 
+        rest = self._features_rest
         if self.tf_condition_color:
-            color_delta = torch.einsum("ncr,r->nc", self._tf_color_factors, code)
-            dc = dc + self.tf_color_scale * torch.tanh(color_delta)
-        shs = torch.cat((dc[:, None, :], self._features_rest), dim=1)
+            color_delta = self.tf_color_scale * torch.tanh(
+                torch.einsum("nkcr,r->nkc", self._tf_color_factors, code))
+            dc = dc + color_delta[:, 0, :]
+            extra = self.tf_color_coeffs - 1
+            if extra > 0:
+                rest = torch.cat((rest[:, :extra, :] + color_delta[:, 1:, :],
+                                  rest[:, extra:, :]), dim=1)
+        shs = torch.cat((dc[:, None, :], rest), dim=1)
 
         if self.tf_condition_opacity:
             opacity_delta = torch.einsum("nr,r->n", self._tf_opacity_factors, code)
@@ -453,6 +474,7 @@ class GaussianModel(DGSModel):
             "tf_encoder_type": self.tf_encoder_type,
             "tf_condition_color": self.tf_condition_color,
             "tf_condition_opacity": self.tf_condition_opacity,
+            "tf_color_sh_degree": self.tf_color_sh_degree,
             "tf_use_lookup": self.tf_use_lookup,
             "tf_lookup_mode": self.tf_lookup_mode if self.tf_use_lookup else None,
         }
@@ -496,6 +518,14 @@ class GaussianModel(DGSModel):
             tensor = payload[key].to(device="cuda", dtype=torch.float32)
             if tensor.shape[0] != count:
                 raise ValueError("FactorSplat sidecar and PLY have different Gaussian counts")
+            if key == "color_factors":
+                if tensor.dim() == 3:      # legacy DC-only [N, 3, r]
+                    tensor = tensor[:, None, :, :]
+                if tensor.shape[1] != self.tf_color_coeffs:
+                    raise ValueError(
+                        f"sidecar conditions {tensor.shape[1]} SH color coeffs but "
+                        f"--tf_color_sh_degree {self.tf_color_sh_degree} expects "
+                        f"{self.tf_color_coeffs}")
             return nn.Parameter(tensor.requires_grad_(True))
 
         # v1 always stored both factors + encoder; v2 stores active ones only.

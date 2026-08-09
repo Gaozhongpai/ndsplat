@@ -115,6 +115,9 @@ class ModelParams(ParamGroup):
         self.tf_opacity_scale = 4.0
         self.tf_condition_color = True
         self.tf_condition_opacity = True
+        # SH degree of the conditioned color residual: 1 = DC + first-order
+        # band (the standard model at --sh_degree 1); 0 = DC-only ablation.
+        self.tf_color_sh_degree = 1
         # Local-lookup branch (Eq. 6): per-Gaussian label/intensity descriptors
         # predict the zeroth-order RGBA edit directly from the preset.
         # Prune on max-over-training-presets opacity so no preset-revealed

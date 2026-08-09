@@ -178,6 +178,7 @@ def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_
                 tf_opacity_scale=dataset.tf_opacity_scale,
                 tf_condition_color=dataset.tf_condition_color,
                 tf_condition_opacity=dataset.tf_condition_opacity,
+                tf_color_sh_degree=getattr(dataset, "tf_color_sh_degree", 1),
                 tf_encoder_type=getattr(dataset, "tf_encoder_type", "functional"),
                 tf_embedding_fallback=getattr(dataset, "tf_embedding_fallback", "nearest"),
                 tf_aware_prune=getattr(dataset, "tf_aware_prune", True),
