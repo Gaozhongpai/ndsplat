@@ -174,6 +174,7 @@ class OptimizationParams(ParamGroup):
         self.rgb_lr = 0.001
         self.tf_factor_lr = 0.0025
         self.tf_encoder_lr = 0.001
+        self.tf_veg_u_lr = 0.5  # adapted-VEG scalar step, in LUT-index units/iter
         self.scale_lr = 0.005
         self.l_triangle_lr = 0.001
 

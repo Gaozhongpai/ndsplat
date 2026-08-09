@@ -269,9 +269,11 @@ class GaussianModel(DGSModel):
         K = packed.shape[1]
         valid = np.arange(K)[None, :] < counts[:, None]
         mean_u = (packed * valid).sum(1) / np.maximum(counts, 1)
-        span = self._tf_bank_lookup.shape[1] * bins - 1
-        frac = np.clip(mean_u / span, 1e-4, 1 - 1e-4)
-        raw = np.log(frac / (1 - frac)).astype(np.float32)[:, None]
+        # u is stored directly in LUT-index units and clamped at read time.
+        # A sigmoid over the full span (3072 entries here) makes one optimizer
+        # step move u by a small fraction of a bin, which stalls learning on
+        # sparse LUTs (heart: 88% zero-alpha entries).
+        raw = mean_u.astype(np.float32)[:, None]
         self._tf_veg_u = nn.Parameter(
             torch.tensor(raw, device="cuda").requires_grad_(True))
         print(f"Initialized VEG packed scalars for {len(raw)} Gaussians from {path}")
@@ -280,7 +282,7 @@ class GaussianModel(DGSModel):
         """Linear interpolation of the packed 1D LUT at u_i. Returns [N,4]."""
         lut = self._tf_bank_lookup[tf_index].reshape(-1, 4)          # [L*B, 4]
         span = lut.shape[0] - 1
-        u = torch.sigmoid(self._tf_veg_u).squeeze(1) * span          # [N]
+        u = self._tf_veg_u.squeeze(1).clamp(0.0, float(span))        # [N]
         i0 = u.floor().long().clamp(0, span - 1)
         w = (u - i0.float()).unsqueeze(1)
         return lut[i0] * (1 - w) + lut[i0 + 1] * w
@@ -423,7 +425,9 @@ class GaussianModel(DGSModel):
         if self.tf_veg_packed and self._tf_veg_u is not None:
             self.optimizer.add_param_group({
                 "params": [self._tf_veg_u],
-                "lr": training_args.tf_factor_lr,
+                # u lives in LUT-index units, so its step size is set in bins
+                # per iteration rather than reusing the factor lr.
+                "lr": getattr(training_args, "tf_veg_u_lr", 0.5),
                 "name": "tf_veg_u",
                 "per_gaussian": True,
             })
