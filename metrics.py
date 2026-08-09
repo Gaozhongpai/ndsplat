@@ -34,8 +34,6 @@ def readImages(renders_dir, gt_dir):
     {idx:05d}.png). Files are sorted so per-view results are in a stable, frame
     order across runs; a missing GT for a render is a hard error (rather than a
     silent skip) so a truncated GT set cannot quietly bias the averages."""
-    renders = []
-    gts = []
     image_names = []
     png_files = sorted(f for f in os.listdir(renders_dir) if f.endswith('.png'))
 
@@ -45,13 +43,21 @@ def readImages(renders_dir, gt_dir):
             raise FileNotFoundError(
                 f"render '{fname}' has no matching GT in {gt_dir}; "
                 f"renders and GT must be name-aligned ({{idx:05d}}.png)")
-        render = Image.open(renders_dir / fname)
-        gt = Image.open(gt_file)
-        renders.append(tf.to_tensor(render).unsqueeze(0)[:, :3, :, :].cuda())
-        gts.append(tf.to_tensor(gt).unsqueeze(0)[:, :3, :, :].cuda())
         image_names.append(fname)
 
-    return renders, gts, image_names
+    class _LazyPairs:
+        """Load each render/GT pair on access. Pre-decoding every frame to
+        the GPU OOMs on full-study test sets (1,600 frames at 1600^2 need
+        >60 GB); metrics only ever touch one pair at a time."""
+        def __init__(self, directory):
+            self._dir = directory
+        def __len__(self):
+            return len(image_names)
+        def __getitem__(self, idx):
+            image = Image.open(self._dir / image_names[idx])
+            return tf.to_tensor(image).unsqueeze(0)[:, :3, :, :].cuda()
+
+    return _LazyPairs(renders_dir), _LazyPairs(gt_dir), image_names
 
 
 def evaluate(model_paths):
@@ -144,12 +150,14 @@ def evaluate(model_paths):
                 lpipss = []
 
                 for idx in tqdm(range(len(renders)), desc="Computing metrics"):
-                    ssims.append(fused_ssim(renders[idx], gts[idx]))
+                    render_t, gt_t = renders[idx], gts[idx]
+                    ssims.append(fused_ssim(render_t, gt_t))
                     # [1,3,H,W] joint PSNR (paper standard)
-                    psnrs.append(psnr(renders[idx], gts[idx]))
+                    psnrs.append(psnr(render_t, gt_t))
                     # [3,H,W] per-channel PSNR (matches training log)
-                    psnrs_train.append(psnr(renders[idx].squeeze(0), gts[idx].squeeze(0)).mean())
-                    lpipss.append(lpips(renders[idx], gts[idx], criterion))
+                    psnrs_train.append(psnr(render_t.squeeze(0), gt_t.squeeze(0)).mean())
+                    lpipss.append(lpips(render_t, gt_t, criterion))
+                    del render_t, gt_t
 
                 # Compute averages
                 ssim_mean = torch.tensor(ssims).mean().item()
