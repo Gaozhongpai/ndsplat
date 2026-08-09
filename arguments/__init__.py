@@ -37,6 +37,7 @@ class ParamGroup:
         'tf_condition_opacity',
         'tf_use_lookup',
         'tf_aware_prune',
+        'tf_veg_packed',
     }
 
     def __init__(self, parser: ArgumentParser, name : str, fill_none = False):
@@ -124,6 +125,8 @@ class ModelParams(ParamGroup):
         # anatomy is deleted for having a low shared/base opacity.
         self.tf_aware_prune = True
         self.tf_use_lookup = False
+        # Adapted VEG reference: per-Gaussian scalar + packed 1D LUT readout.
+        self.tf_veg_packed = False
         self.tf_lookup_mode = "joint"  # joint = packed empirical p(l,h); separable = p(l)q(h) ablation
         self.tf_lookup_bins = 64
         self.tf_lookup_color_scale = 1.0

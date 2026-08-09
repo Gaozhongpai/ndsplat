@@ -30,6 +30,7 @@ class GaussianModel(DGSModel):
                  tf_embedding_fallback: str = "nearest",
                  tf_aware_prune: bool = True,
                  tf_use_lookup: bool = False,
+                 tf_veg_packed: bool = False,
                  tf_lookup_mode: str = "joint",
                  tf_lookup_bins: int = 64,
                  tf_lookup_color_scale: float = 1.0,
@@ -69,6 +70,14 @@ class GaussianModel(DGSModel):
         self._tf_nearest_train = None
         self.tf_aware_prune = bool(tf_aware_prune)
         self.tf_use_lookup = bool(tf_use_lookup)
+        # Adapted VEG reference: one learnable scalar u_i per Gaussian; DC
+        # color and opacity are read from the packed 1D LUT T'(u)=bank[t]
+        # flattened over (label, bin). Excludes factors/encoder/lookup.
+        self.tf_veg_packed = bool(tf_veg_packed)
+        if self.tf_veg_packed and (tf_condition_color or tf_condition_opacity
+                                   or tf_use_lookup):
+            raise ValueError("tf_veg_packed excludes the FactorSplat branches")
+        self._tf_veg_u = None            # [N, 1] raw scalar (sigmoid -> LUT pos)
         if tf_lookup_mode not in ("joint", "separable"):
             raise ValueError(f"tf_lookup_mode must be joint|separable, got {tf_lookup_mode}")
         self.tf_lookup_mode = tf_lookup_mode
@@ -106,7 +115,7 @@ class GaussianModel(DGSModel):
         rgba = np.asarray(bank["rgba"], dtype=np.float32)
         if rgba.ndim != 4 or rgba.shape[-1] != 4:
             raise ValueError(f"expected TF bank rgba [T,L,K,4], got {rgba.shape}")
-        if self.tf_use_lookup:
+        if self.tf_use_lookup or self.tf_veg_packed:
             # The lookup consumes the bank as exported (raw RGB + alpha): color
             # deltas come from the RGB channels, opacity deltas from alpha, so
             # premultiplying here would double-count alpha edits in the color path.
@@ -233,6 +242,39 @@ class GaussianModel(DGSModel):
         print(f"Loaded lookup descriptors for {count} Gaussians "
               f"({covered:.1%} with foreground support, {samples}) from {path}")
 
+    def init_veg_scalar(self, path):
+        """Initialize u_i from the packed volume descriptor (majority id of
+        the window samples), mapped through the inverse sigmoid."""
+        if not self.tf_veg_packed:
+            return
+        payload = dict(np.load(path))
+        bins = self._tf_bank_lookup.shape[2]
+        native = int(payload["hu"].shape[0]) if "hu" in payload else 256
+        ids = np.asarray(payload["sample_ids"], dtype=np.int64)
+        counts = np.asarray(payload["sample_counts"], dtype=np.int64)
+        if ids.shape[0] != self.get_xyz.shape[0]:
+            raise ValueError("veg init descriptors do not match Gaussian count")
+        col, hu_bin = ids // native, ids % native
+        packed = col * bins + hu_bin // max(native // bins, 1)      # [N,K]
+        K = packed.shape[1]
+        valid = np.arange(K)[None, :] < counts[:, None]
+        mean_u = (packed * valid).sum(1) / np.maximum(counts, 1)
+        span = self._tf_bank_lookup.shape[1] * bins - 1
+        frac = np.clip(mean_u / span, 1e-4, 1 - 1e-4)
+        raw = np.log(frac / (1 - frac)).astype(np.float32)[:, None]
+        self._tf_veg_u = nn.Parameter(
+            torch.tensor(raw, device="cuda").requires_grad_(True))
+        print(f"Initialized VEG packed scalars for {len(raw)} Gaussians from {path}")
+
+    def _veg_rgba(self, tf_index):
+        """Linear interpolation of the packed 1D LUT at u_i. Returns [N,4]."""
+        lut = self._tf_bank_lookup[tf_index].reshape(-1, 4)          # [L*B, 4]
+        span = lut.shape[0] - 1
+        u = torch.sigmoid(self._tf_veg_u).squeeze(1) * span          # [N]
+        i0 = u.floor().long().clamp(0, span - 1)
+        w = (u - i0.float()).unsqueeze(1)
+        return lut[i0] * (1 - w) + lut[i0 + 1] * w
+
     def _lookup_delta(self, tf_index):
         """Eq. 6: locally relevant RGBA change of the preset relative to the
         base preset. joint mode averages R_T - R_T0 over the window's packed
@@ -274,6 +316,8 @@ class GaussianModel(DGSModel):
             raise RuntimeError("FactorSplat requires tf_bank.npz in the dataset root")
         if self.tf_factors_active and self.tf_encoder is None:
             raise RuntimeError("residual branch active but TF encoder was never built")
+        if self.tf_veg_packed and self._tf_veg_u is None:
+            raise RuntimeError("tf_veg_packed requires init_veg_scalar or a sidecar")
         if getattr(training_args, "densification_strategy", "standard") != "standard":
             raise ValueError("FactorSplat currently supports standard densification only")
         count = self.get_xyz.shape[0]
@@ -311,6 +355,13 @@ class GaussianModel(DGSModel):
                 "name": "tf_encoder",
                 "per_gaussian": False,
             })
+        if self.tf_veg_packed and self._tf_veg_u is not None:
+            self.optimizer.add_param_group({
+                "params": [self._tf_veg_u],
+                "lr": training_args.tf_factor_lr,
+                "name": "tf_veg_u",
+                "per_gaussian": True,
+            })
         if self.tf_use_lookup and self._tf_lookup_gain is not None:
             self.optimizer.add_param_group({
                 "params": [self._tf_lookup_gain],
@@ -336,6 +387,15 @@ class GaussianModel(DGSModel):
         A primitive that some training preset reveals must not be deleted
         because the shared/base logit alone falls below the threshold --
         that would permanently remove anatomy other presets need."""
+        if self.tf_veg_packed and self._tf_veg_u is not None:
+            if not self.tf_aware_prune or not self._tf_train_rows:
+                return self._veg_rgba(self._tf_base_index)[:, 3:4]
+            with torch.no_grad():
+                best = None
+                for row in self._tf_train_rows:
+                    alpha = self._veg_rgba(row)[:, 3:4]
+                    best = alpha if best is None else torch.maximum(best, alpha)
+                return best
         if (not self.tf_aware_prune or self._tf_descriptors is None
                 or not self._tf_train_rows):
             return self.get_opacity
@@ -361,6 +421,14 @@ class GaussianModel(DGSModel):
         if not 0 <= index < self._tf_descriptors.shape[0]:
             raise IndexError(f"tf_index={index} outside bank of size "
                              f"{self._tf_descriptors.shape[0]}")
+        if self.tf_veg_packed and self._tf_veg_u is not None:
+            rgba = self._veg_rgba(index)
+            C0 = 0.28209479177387814
+            dc = (rgba[:, :3] - 0.5) / C0
+            shs = torch.cat((dc[:, None, :], self._features_rest), dim=1)
+            opacity = rgba[:, 3:4].clamp(1e-5, 1 - 1e-5)
+            return shs, opacity * opacity_scale
+
         code = self._code_for_index(index) if self.tf_factors_active else None
 
         dc = self._features_dc[:, 0, :]
@@ -398,6 +466,8 @@ class GaussianModel(DGSModel):
             self._tf_color_factors = tensors["tf_color_factors"]
         if "tf_opacity_factors" in tensors:
             self._tf_opacity_factors = tensors["tf_opacity_factors"]
+        if "tf_veg_u" in tensors:
+            self._tf_veg_u = tensors["tf_veg_u"]
         for name in ("_tf_lookup_p", "_tf_lookup_q",
                      "_tf_lookup_ids", "_tf_lookup_counts"):
             tensor = getattr(self, name)
@@ -452,6 +522,11 @@ class GaussianModel(DGSModel):
                     "tf_opacity_factors", "_tf_opacity_factors",
                     self._tf_opacity_factors.detach()[nearest].clone(),
                 )
+            if self._tf_veg_u is not None:
+                self._append_factor(
+                    "tf_veg_u", "_tf_veg_u",
+                    self._tf_veg_u.detach()[nearest].clone(),
+                )
             for name in ("_tf_lookup_p", "_tf_lookup_q",
                          "_tf_lookup_ids", "_tf_lookup_counts"):
                 tensor = getattr(self, name)
@@ -476,6 +551,7 @@ class GaussianModel(DGSModel):
             "tf_condition_opacity": self.tf_condition_opacity,
             "tf_color_sh_degree": self.tf_color_sh_degree,
             "tf_use_lookup": self.tf_use_lookup,
+            "tf_veg_packed": self.tf_veg_packed,
             "tf_lookup_mode": self.tf_lookup_mode if self.tf_use_lookup else None,
         }
         # Only ACTIVE branches are stored: no residual factors or encoder for
@@ -487,6 +563,8 @@ class GaussianModel(DGSModel):
         if self.tf_encoder is not None:
             payload["encoder"] = {key: value.detach().cpu()
                                   for key, value in self.tf_encoder.state_dict().items()}
+        if self.tf_veg_packed and self._tf_veg_u is not None:
+            payload["veg_u"] = self._tf_veg_u.detach().cpu()
         if self.tf_use_lookup and self.tf_lookup_ready:
             payload["lookup_gain"] = self._tf_lookup_gain.detach().cpu()
             if self._tf_lookup_ids is not None:
@@ -533,6 +611,11 @@ class GaussianModel(DGSModel):
         self._tf_opacity_factors = _factor("opacity_factors") if self.tf_condition_opacity else None
         if self.tf_factors_active:
             self.tf_encoder.load_state_dict(payload["encoder"])
+        if self.tf_veg_packed:
+            if "veg_u" not in payload:
+                raise ValueError("tf_veg_packed set but sidecar has no veg_u")
+            self._tf_veg_u = nn.Parameter(
+                payload["veg_u"].to("cuda").requires_grad_(True))
         if self.tf_use_lookup:
             self._tf_lookup_gain = nn.Parameter(
                 payload["lookup_gain"].to("cuda").requires_grad_(True))

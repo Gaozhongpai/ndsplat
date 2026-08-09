@@ -133,6 +133,7 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
             tf_embedding_fallback=dataset.tf_embedding_fallback,
             tf_aware_prune=dataset.tf_aware_prune,
             tf_use_lookup=dataset.tf_use_lookup,
+            tf_veg_packed=dataset.tf_veg_packed,
             tf_lookup_mode=dataset.tf_lookup_mode,
             tf_lookup_bins=dataset.tf_lookup_bins,
             tf_lookup_color_scale=dataset.tf_lookup_color_scale,
@@ -189,6 +190,9 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
     # --start_checkpoint load and before densification changes the count).
     if getattr(dataset, "tf_use_lookup", False) and first_iter == 0:
         gaussians.load_lookup_descriptors(
+            os.path.join(dataset.source_path, "points3d_lookup.npz"))
+    if getattr(dataset, "tf_veg_packed", False) and first_iter == 0:
+        gaussians.init_veg_scalar(
             os.path.join(dataset.source_path, "points3d_lookup.npz"))
 
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
