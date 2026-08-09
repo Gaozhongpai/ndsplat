@@ -30,10 +30,11 @@ case "$VARIANT" in
     residual) TF_FLAGS="--tf_condition_color True --tf_condition_opacity True" ;;
     residual_dc) TF_FLAGS="--tf_condition_color True --tf_condition_opacity True --tf_color_sh_degree 0" ;;
     hybrid)   TF_FLAGS="--tf_condition_color True --tf_condition_opacity True"; LOOKUP=1 ;;
+    hybrid_dc) TF_FLAGS="--tf_condition_color True --tf_condition_opacity True --tf_color_sh_degree 0"; LOOKUP=1 ;;
     color)    TF_FLAGS="--tf_condition_color True --tf_condition_opacity False" ;;
     opacity)  TF_FLAGS="--tf_condition_color False --tf_condition_opacity True" ;;
     lookup)   TF_FLAGS="--tf_condition_color False --tf_condition_opacity False"; LOOKUP=1 ;;
-    *) echo "unknown FACTORSPLAT_VARIANT=$VARIANT (residual|residual_dc|hybrid|color|opacity|lookup)" >&2; exit 2 ;;
+    *) echo "unknown FACTORSPLAT_VARIANT=$VARIANT (residual|residual_dc|hybrid|hybrid_dc|color|opacity|lookup)" >&2; exit 2 ;;
 esac
 
 VARIANT_DIR="$VARIANT"
