@@ -15,6 +15,14 @@ from torch import nn
 from scene.gaussian_model_dgs import GaussianModel as DGSModel
 
 
+class _TFOnlyCamera:
+    """Minimal stand-in carrying just the preset index: the conditional
+    branches are view-independent, so no camera geometry is needed."""
+
+    def __init__(self, tf_index):
+        self.tf_index = tf_index
+
+
 class GaussianModel(DGSModel):
     def __init__(self, sh_degree: int, input_dim: int = 6,
                  use_view_dependent_pos: bool = False,
@@ -78,6 +86,8 @@ class GaussianModel(DGSModel):
                                    or tf_use_lookup):
             raise ValueError("tf_veg_packed excludes the FactorSplat branches")
         self._tf_veg_u = None            # [N, 1] raw scalar (sigmoid -> LUT pos)
+        self._tf_baked_state = None       # pre-bake tensors + branch flags
+        self._tf_baked_index = None       # preset currently baked in, if any
         if tf_lookup_mode not in ("joint", "separable"):
             raise ValueError(f"tf_lookup_mode must be joint|separable, got {tf_lookup_mode}")
         self.tf_lookup_mode = tf_lookup_mode
@@ -274,6 +284,61 @@ class GaussianModel(DGSModel):
         i0 = u.floor().long().clamp(0, span - 1)
         w = (u - i0.float()).unsqueeze(1)
         return lut[i0] * (1 - w) + lut[i0 + 1] * w
+
+    @torch.no_grad()
+    def bake_appearance(self, tf_index):
+        """Freeze the conditioned appearance of one preset into the base
+        tensors and disable the conditional branches.
+
+        The TF code z_T and the lookup delta depend on the PRESET only, so at a
+        fixed transfer function the conditioned DC color and opacity logit are
+        constants. Writing them into (_features_dc, _features_rest, _opacity)
+        yields a checkpoint that is structurally an ordinary dGS model and
+        renders bit-identically, moving the conditioning cost from once per
+        FRAME to once per preset SWITCH. Call again (after restoring) to switch
+        presets; `unbake()` puts the conditional branches back.
+        """
+        if self._tf_baked_state is None:
+            self._tf_baked_state = {
+                "features_dc": self._features_dc.detach().clone(),
+                "features_rest": self._features_rest.detach().clone(),
+                "opacity": self._opacity.detach().clone(),
+                "condition_color": self.tf_condition_color,
+                "condition_opacity": self.tf_condition_opacity,
+                "use_lookup": self.tf_use_lookup,
+                "veg_packed": self.tf_veg_packed,
+            }
+        else:
+            self._restore_pre_bake()
+        camera = _TFOnlyCamera(int(tf_index))
+        shs, opacity = self.conditioned_appearance(camera, 1.0)
+        clamped = opacity.clamp(1e-6, 1.0 - 1e-6)
+        self._features_dc = nn.Parameter(shs[:, :1, :].contiguous())
+        self._features_rest = nn.Parameter(shs[:, 1:, :].contiguous())
+        self._opacity = nn.Parameter(torch.log(clamped / (1.0 - clamped)))
+        self.tf_condition_color = False
+        self.tf_condition_opacity = False
+        self.tf_use_lookup = False
+        self.tf_veg_packed = False
+        self._tf_baked_index = int(tf_index)
+
+    def _restore_pre_bake(self):
+        state = self._tf_baked_state
+        self._features_dc = nn.Parameter(state["features_dc"].clone())
+        self._features_rest = nn.Parameter(state["features_rest"].clone())
+        self._opacity = nn.Parameter(state["opacity"].clone())
+        self.tf_condition_color = state["condition_color"]
+        self.tf_condition_opacity = state["condition_opacity"]
+        self.tf_use_lookup = state["use_lookup"]
+        self.tf_veg_packed = state["veg_packed"]
+
+    def unbake(self):
+        """Restore the pre-bake tensors and re-enable conditioning."""
+        if self._tf_baked_state is None:
+            return
+        self._restore_pre_bake()
+        self._tf_baked_state = None
+        self._tf_baked_index = None
 
     def _lookup_delta(self, tf_index):
         """Eq. 6: locally relevant RGBA change of the preset relative to the

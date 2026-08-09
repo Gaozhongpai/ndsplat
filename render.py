@@ -116,6 +116,14 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
             fps_path = os.path.join(model_path, name, "ours_{}".format(iteration), "fps.txt")
             with open(fps_path, 'w') as f:
                 f.write(f"{avg_fps:.2f}")
+            if bake:
+                ms = measure_tf_switch_latency(gaussians, views[0].tf_index)
+                print(f"TF-switch latency: {ms:.2f} ms "
+                      f"(amortized over the baked steady-state rate)")
+                with open(os.path.join(model_path, name,
+                                       "ours_{}".format(iteration),
+                                       "tf_switch_ms.txt"), 'w') as f:
+                    f.write(f"{ms:.3f}")
 
     print("Rendering all frames for saving...")
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
@@ -226,6 +234,20 @@ def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_
                       use_gsplat=use_gsplat)
 
 
+def measure_tf_switch_latency(gaussians, tf_index, repeats=50):
+    """Milliseconds to switch presets: one conditioned-appearance evaluation
+    written into the base tensors (the cost the baked FPS amortizes)."""
+    import time
+    for _ in range(5):
+        gaussians.bake_appearance(tf_index)
+    torch.cuda.synchronize()
+    start = time.time()
+    for _ in range(repeats):
+        gaussians.bake_appearance(tf_index)
+    torch.cuda.synchronize()
+    return (time.time() - start) / repeats * 1000.0
+
+
 if __name__ == "__main__":
     # Set up command line argument parser
     parser = ArgumentParser(description="Testing script parameters")
@@ -236,6 +258,11 @@ if __name__ == "__main__":
     parser.add_argument("--skip_test", action="store_true", help="Skip rendering test views")
     parser.add_argument("--measure_fps", action="store_true", help="Measure FPS instead of saving images")
     parser.add_argument("--quiet", action="store_true", help="Suppress output")
+    parser.add_argument("--tf_bake_appearance", action="store_true",
+                        help="FactorSplat: bake each preset's conditioned appearance "
+                             "into the base SH/opacity before FPS measurement, and "
+                             "report TF-switch latency. Steady-state rendering is then "
+                             "plain dGS -- the deployable configuration.")
 
     # Training-only parameters (accepted but ignored for convenience in scripts)
     parser.add_argument("--noise_lr", type=float, default=1.0, help="[Training only] Noise learning rate (ignored during rendering)")
@@ -256,5 +283,6 @@ if __name__ == "__main__":
     else:
         iteration = int(args.iteration)
 
+    _BAKE_APPEARANCE = bool(getattr(args, "tf_bake_appearance", False))
     render_sets(model.extract(args), iteration, pipeline.extract(args),
                 args.skip_train, args.skip_test, args.measure_fps)
