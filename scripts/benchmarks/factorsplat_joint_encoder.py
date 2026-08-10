@@ -43,6 +43,11 @@ def build(dataset, opt, source, model_path):
     scene = Scene(d, g, opt_params=opt)
     g.load_ply(os.path.join(source, "points3d.ply"))
     g.load_lookup_descriptors(os.path.join(source, "points3d_lookup.npz"))
+    grid = os.path.join(source, "points3d_refresh_grid.npz")
+    if os.path.exists(grid):
+        g.load_refresh_grid(grid)
+    with open(os.path.join(model_path, "cfg_args"), "w") as f:
+        f.write(str(d))
     g.training_setup(opt)
     g.background = torch.tensor([0., 0., 0.], device="cuda")
     return g, scene
@@ -84,6 +89,8 @@ if __name__ == "__main__":
         for name in args.scenes:                    # one batch per scene per step
             g = models[name]
             g.update_learning_rate(it)
+            if it % 1000 == 0:
+                g.oneupSHdegree()
             if not stacks[name]:
                 stacks[name] = cams[name].copy()
             cam = stacks[name].pop(randint(0, len(stacks[name]) - 1))
@@ -99,8 +106,14 @@ if __name__ == "__main__":
                         out["radii"][out["visibility_filter"]])
                     g.add_densification_stats(out["viewspace_points"], out["visibility_filter"])
                     if it > opt.densify_from_iter and it % opt.densification_interval == 0:
-                        g.densify_and_prune(opt.densify_grad_threshold, 0.005,
-                                            scenes[name].cameras_extent, 20, it)
+                        size_threshold = 20 if it > opt.opacity_reset_interval else None
+                        g.densify_and_prune(opt.densify_grad_threshold, 0.01,
+                                            scenes[name].cameras_extent,
+                                            size_threshold, it)
+                        if hasattr(g, "refresh_descriptors"):
+                            g.refresh_descriptors()
+                    if it % opt.opacity_reset_interval == 0:
+                        g.reset_opacity()
         for name in args.scenes:                    # step AFTER both backwards
             models[name].optimizer.step()
             models[name].optimizer.zero_grad(set_to_none=True)
