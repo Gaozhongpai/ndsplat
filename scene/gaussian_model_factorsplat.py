@@ -39,6 +39,7 @@ class GaussianModel(DGSModel):
                  tf_aware_prune: bool = True,
                  tf_use_lookup: bool = False,
                  tf_veg_packed: bool = False,
+                 tf_canonical_labels: str = "",
                  tf_lookup_mode: str = "joint",
                  tf_lookup_bins: int = 64,
                  tf_lookup_color_scale: float = 1.0,
@@ -90,6 +91,11 @@ class GaussianModel(DGSModel):
         self._tf_baked_index = None       # preset currently baked in, if any
         if tf_lookup_mode not in ("joint", "separable"):
             raise ValueError(f"tf_lookup_mode must be joint|separable, got {tf_lookup_mode}")
+        # Comma-separated union label ids. When set, descriptors are scattered
+        # onto this fixed axis (missing labels zero-filled) so a SHARED TF
+        # encoder sees the same anatomical slot in every scene.
+        self.tf_canonical_labels = [int(x) for x in tf_canonical_labels.split(",")
+                                    if x.strip()] if tf_canonical_labels else None
         self.tf_lookup_mode = tf_lookup_mode
         self.tf_lookup_bins = int(tf_lookup_bins)
         self.tf_lookup_color_scale = float(tf_lookup_color_scale)
@@ -149,7 +155,19 @@ class GaussianModel(DGSModel):
         rgba[..., :3] *= rgba[..., 3:4]
         sample_count = min(self.tf_samples, rgba.shape[2])
         sample_indices = np.linspace(0, rgba.shape[2] - 1, sample_count).round().astype(int)
-        descriptors = rgba[:, :, sample_indices, :].reshape(rgba.shape[0], -1)
+        sampled = rgba[:, :, sample_indices, :]                      # [T,L,S',4]
+        if self.tf_canonical_labels is not None:
+            ids = np.asarray(bank["label_ids"]).astype(int).tolist()
+            canon = np.zeros((sampled.shape[0], len(self.tf_canonical_labels),
+                              sampled.shape[2], 4), dtype=np.float32)
+            for col, lab in enumerate(ids):
+                if lab in self.tf_canonical_labels:
+                    canon[:, self.tf_canonical_labels.index(lab)] = sampled[:, col]
+            missing = [l for l in self.tf_canonical_labels if l not in ids]
+            print(f"Canonical TF axis: {len(self.tf_canonical_labels)} labels, "
+                  f"{len(missing)} zero-filled for this scene {missing}")
+            sampled = canon
+        descriptors = sampled.reshape(sampled.shape[0], -1)
         tf_ids = np.asarray(bank["tf_ids"]).astype(str).tolist()
         base_index = next((i for i, value in enumerate(tf_ids)
                            if value == "train_00_base"), 0)
