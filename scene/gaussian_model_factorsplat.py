@@ -40,6 +40,7 @@ class GaussianModel(DGSModel):
                  tf_use_lookup: bool = False,
                  tf_veg_packed: bool = False,
                  tf_encoder_pooled: bool = False,
+                 tf_encoder_local: bool = False,
                  tf_lookup_mode: str = "joint",
                  tf_lookup_bins: int = 64,
                  tf_lookup_color_scale: float = 1.0,
@@ -98,6 +99,18 @@ class GaussianModel(DGSModel):
         # curve to a region, and the packed lookup already does that routing.
         self.tf_encoder_pooled = bool(tf_encoder_pooled)
         self.tf_encoder_psi = None
+        # LOCAL functional encoder: phi is applied to the TF *delta table*
+        # (L x B x 4 -> L x B x r), then each Gaussian's packed (label, bin)
+        # samples gather and average those codes:
+        #   z_{i,T} = (1/K_i) sum_k phi(R_T(l_ik,h_ik) - R_T0(l_ik,h_ik)).
+        # phi never sees a label id, costs one small table pass per preset, and
+        # is bias-free so z_{i,T0} = 0 exactly. Shareable across scenes.
+        self.tf_encoder_local = bool(tf_encoder_local)
+        if self.tf_encoder_local and self.tf_encoder_pooled:
+            raise ValueError("tf_encoder_local and tf_encoder_pooled are exclusive")
+        if self.tf_encoder_local and not tf_use_lookup:
+            raise ValueError("tf_encoder_local needs the packed descriptors "
+                             "(--tf_use_lookup True)")
         self.tf_lookup_mode = tf_lookup_mode
         self.tf_lookup_bins = int(tf_lookup_bins)
         self.tf_lookup_color_scale = float(tf_lookup_color_scale)
@@ -192,6 +205,13 @@ class GaussianModel(DGSModel):
                 # base appearance unless the nearest-training fallback is used.
                 self.tf_encoder = nn.Embedding(len(tf_ids), self.tf_rank).cuda()
                 nn.init.zeros_(self.tf_encoder.weight)
+            elif self.tf_encoder_local:
+                # phi acts on one RGBA delta sample (4 channels) -> rank
+                self.tf_encoder = nn.Sequential(
+                    nn.Linear(4, self.tf_hidden, bias=False),
+                    nn.ReLU(inplace=False),
+                    nn.Linear(self.tf_hidden, self.tf_rank, bias=False),
+                ).cuda()
             elif self.tf_encoder_pooled:
                 self.tf_encoder = nn.Sequential(
                     nn.Linear(input_dim, self.tf_hidden, bias=False),
@@ -367,6 +387,23 @@ class GaussianModel(DGSModel):
         self._tf_baked_state = None
         self._tf_baked_index = None
 
+    def _local_tf_code(self, tf_index):
+        """Per-Gaussian TF code from the primitive's own (label, bin) samples.
+
+        phi is evaluated ONCE over the (L*B, 4) delta table for this preset, then
+        the packed descriptors gather and average the resulting codes, so the
+        cost is a gather -- not an MLP per sample. Returns [N, r]."""
+        bank = self._tf_bank_lookup
+        delta_r = (bank[tf_index] - bank[self._tf_base_index]).reshape(-1, 4)
+        table = self.tf_encoder(delta_r)                             # [L*B, r]
+        ids = self._tf_lookup_ids.long()                             # [N, K]
+        counts = self._tf_lookup_counts.long()                       # [N]
+        codes = table[ids]                                           # [N, K, r]
+        mask = (torch.arange(ids.shape[1], device=ids.device)[None, :]
+                < counts[:, None])
+        weights = (mask.float() / counts.clamp(min=1)[:, None].float())
+        return (codes * weights.unsqueeze(-1)).sum(dim=1)            # [N, r]
+
     def _lookup_delta(self, tf_index):
         """Eq. 6: locally relevant RGBA change of the preset relative to the
         base preset. joint mode averages R_T - R_T0 over the window's packed
@@ -507,8 +544,12 @@ class GaussianModel(DGSModel):
                     delta = self._lookup_delta(row)
                     logit = logit + self.tf_lookup_opacity_scale *                         self._tf_lookup_gain[3] * delta[:, 3:4]
                 if self.tf_condition_opacity:
-                    code = self._code_for_index(row)
-                    offset = torch.einsum("nr,r->n", self._tf_opacity_factors, code)
+                    if self.tf_encoder_local:
+                        offset = torch.einsum("nr,nr->n", self._tf_opacity_factors,
+                                              self._local_tf_code(row))
+                    else:
+                        code = self._code_for_index(row)
+                        offset = torch.einsum("nr,r->n", self._tf_opacity_factors, code)
                     logit = logit + self.tf_opacity_scale * offset[:, None]
                 best_logit = logit if best_logit is None                     else torch.maximum(best_logit, logit)
             return torch.sigmoid(best_logit)
@@ -529,7 +570,8 @@ class GaussianModel(DGSModel):
             opacity = rgba[:, 3:4].clamp(1e-5, 1 - 1e-5)
             return shs, opacity * opacity_scale
 
-        code = self._code_for_index(index) if self.tf_factors_active else None
+        code = (self._code_for_index(index)
+                if (self.tf_factors_active and not self.tf_encoder_local) else None)
 
         dc = self._features_dc[:, 0, :]
         logit = self._opacity
@@ -544,8 +586,12 @@ class GaussianModel(DGSModel):
                 self._tf_lookup_gain[3] * delta[:, 3:4]
 
         rest = self._features_rest
+        if self.tf_encoder_local:
+            zi = self._local_tf_code(index)                           # [N, r]
         if self.tf_condition_color:
             color_delta = self.tf_color_scale * torch.tanh(
+                torch.einsum("nkcr,nr->nkc", self._tf_color_factors, zi)
+                if self.tf_encoder_local else
                 torch.einsum("nkcr,r->nkc", self._tf_color_factors, code))
             dc = dc + color_delta[:, 0, :]
             extra = self.tf_color_coeffs - 1
@@ -555,7 +601,10 @@ class GaussianModel(DGSModel):
         shs = torch.cat((dc[:, None, :], rest), dim=1)
 
         if self.tf_condition_opacity:
-            opacity_delta = torch.einsum("nr,r->n", self._tf_opacity_factors, code)
+            opacity_delta = (
+                torch.einsum("nr,nr->n", self._tf_opacity_factors, zi)
+                if self.tf_encoder_local else
+                torch.einsum("nr,r->n", self._tf_opacity_factors, code))
             logit = logit + self.tf_opacity_scale * opacity_delta[:, None]
         opacity = torch.sigmoid(logit)
         return shs, opacity * opacity_scale

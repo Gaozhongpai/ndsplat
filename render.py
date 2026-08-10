@@ -205,6 +205,7 @@ def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_
                 tf_use_lookup=getattr(dataset, "tf_use_lookup", False),
                 tf_veg_packed=getattr(dataset, "tf_veg_packed", False),
                 tf_encoder_pooled=getattr(dataset, "tf_encoder_pooled", False),
+                tf_encoder_local=getattr(dataset, "tf_encoder_local", False),
                 tf_lookup_mode=getattr(dataset, "tf_lookup_mode", "joint"),
                 tf_lookup_bins=getattr(dataset, "tf_lookup_bins", 64),
                 tf_lookup_color_scale=getattr(dataset, "tf_lookup_color_scale", 1.0),

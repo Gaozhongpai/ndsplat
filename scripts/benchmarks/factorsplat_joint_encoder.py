@@ -4,11 +4,11 @@
 z_T = E_phi(T - T_0) is shared across scenes; geometry, base appearance,
 per-Gaussian factors, lookup descriptors, and lookup gains stay scene-specific.
 One batch per scene per step, so each scene keeps the same 30k-update budget as
-its independent-encoder counterpart. The encoder is label-order invariant: a bias-free
-phi encodes each TF curve, curve codes are mean-pooled over labels, and psi maps
-the pooled code to z_T. Numeric label ids and label counts therefore do not
-enter (heart has 12 curves, vascular 15); the packed local lookup still routes
-each curve to the right primitives.
+its independent-encoder counterpart. The encoder is LOCAL and label-order invariant:
+phi maps one RGBA delta sample to a code, evaluated once over the (L*B, 4) delta
+table per preset, and each primitive's packed (label, bin) samples gather and
+average those codes -> z_{i,T}. Numeric label ids never enter the network and
+label counts do not affect phi's width (heart 12 curves, vascular 15).
 """
 import os, sys, uuid, numpy as np, torch
 from argparse import ArgumentParser, Namespace
@@ -34,7 +34,7 @@ def build(dataset, opt, source, model_path):
         tf_condition_color=True, tf_condition_opacity=True,
         tf_color_sh_degree=0,                      # Hybrid (DC)
         tf_aware_prune=True, tf_use_lookup=True,
-        tf_encoder_pooled=True,
+        tf_encoder_local=True,
         tf_lookup_bins=dataset.tf_lookup_bins,
     )
     d = Namespace(**vars(dataset)); d.source_path = source; d.model_path = model_path
@@ -67,15 +67,12 @@ if __name__ == "__main__":
     # SHARE the encoder: one module, one optimizer group (kept in scene 0's
     # optimizer); every other scene points at the same parameters.
     first = args.scenes[0]
-    shared = models[first].tf_encoder
-    shared_psi = models[first].tf_encoder_psi
+    shared = models[first].tf_encoder          # phi only; no psi in local mode
     for name in args.scenes[1:]:
         models[name].tf_encoder = shared
-        models[name].tf_encoder_psi = shared_psi
         models[name].optimizer.param_groups = [
             gp for gp in models[name].optimizer.param_groups if gp["name"] != "tf_encoder"]
-    print(f"Shared TF encoder (phi+psi): "
-          f"{sum(p.numel() for p in shared.parameters()) + sum(p.numel() for p in shared_psi.parameters())} params "
+    print(f"Shared local phi: {sum(p.numel() for p in shared.parameters())} params "
           f"across {args.scenes}; per-scene factors kept separate", flush=True)
 
     cams = {n: scenes[n].getTrainCameras().copy() for n in args.scenes}
