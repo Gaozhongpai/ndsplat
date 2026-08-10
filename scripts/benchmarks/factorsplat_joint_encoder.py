@@ -75,6 +75,9 @@ if __name__ == "__main__":
     # give them a re-adaptation window before any densification resumes.
     parser.add_argument("--factor_warmup", type=int, default=0)
     parser.add_argument("--freeze_geometry", action="store_true")
+    # Control arm: identical warm start / budget / freezing, but each scene
+    # keeps its OWN phi.  Isolates sharing from the fine-tune itself.
+    parser.add_argument("--no_share", action="store_true")
     args = parser.parse_args()
     dataset = mp.extract(args); opt = op.extract(args)
 
@@ -94,13 +97,17 @@ if __name__ == "__main__":
     # SHARE the encoder: one module, one optimizer group (kept in scene 0's
     # optimizer); every other scene points at the same parameters.
     first = args.scenes[0]
-    shared = models[first].tf_encoder          # phi only; no psi in local mode
-    for name in args.scenes[1:]:
-        models[name].tf_encoder = shared
-        models[name].optimizer.param_groups = [
-            gp for gp in models[name].optimizer.param_groups if gp["name"] != "tf_encoder"]
-    print(f"Shared local phi: {sum(p.numel() for p in shared.parameters())} params "
-          f"across {args.scenes}; per-scene factors kept separate", flush=True)
+    if args.no_share:
+        print("CONTROL ARM: per-scene phi kept private (same warm start, budget, "
+              "and freezing as the shared arm)", flush=True)
+    else:
+        shared = models[first].tf_encoder      # phi only; no psi in local mode
+        for name in args.scenes[1:]:
+            models[name].tf_encoder = shared
+            models[name].optimizer.param_groups = [
+                gp for gp in models[name].optimizer.param_groups if gp["name"] != "tf_encoder"]
+        print(f"Shared local phi: {sum(p.numel() for p in shared.parameters())} params "
+              f"across {args.scenes}; per-scene factors kept separate", flush=True)
 
     cams = {n: scenes[n].getTrainCameras().copy() for n in args.scenes}
     stacks = {n: [] for n in args.scenes}
