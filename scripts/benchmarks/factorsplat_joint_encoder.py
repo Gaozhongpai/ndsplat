@@ -4,9 +4,11 @@
 z_T = E_phi(T - T_0) is shared across scenes; geometry, base appearance,
 per-Gaussian factors, lookup descriptors, and lookup gains stay scene-specific.
 One batch per scene per step, so each scene keeps the same 30k-update budget as
-its independent-encoder counterpart. Descriptors are scattered onto a canonical
-union label axis (--tf_canonical_labels) so an encoder input slot means the same
-anatomical label in both scenes.
+its independent-encoder counterpart. The encoder is label-order invariant: a bias-free
+phi encodes each TF curve, curve codes are mean-pooled over labels, and psi maps
+the pooled code to z_T. Numeric label ids and label counts therefore do not
+enter (heart has 12 curves, vascular 15); the packed local lookup still routes
+each curve to the right primitives.
 """
 import os, sys, uuid, numpy as np, torch
 from argparse import ArgumentParser, Namespace
@@ -21,7 +23,7 @@ from utils.image_utils import psnr
 from tqdm import tqdm
 
 
-def build(dataset, opt, source, model_path, canonical):
+def build(dataset, opt, source, model_path):
     GaussianModel = get_gaussian_model("factorsplat")
     g = GaussianModel(
         dataset.sh_degree, input_dim=dataset.input_dim,
@@ -32,7 +34,7 @@ def build(dataset, opt, source, model_path, canonical):
         tf_condition_color=True, tf_condition_opacity=True,
         tf_color_sh_degree=0,                      # Hybrid (DC)
         tf_aware_prune=True, tf_use_lookup=True,
-        tf_canonical_labels=canonical,
+        tf_encoder_pooled=True,
         tf_lookup_bins=dataset.tf_lookup_bins,
     )
     d = Namespace(**vars(dataset)); d.source_path = source; d.model_path = model_path
@@ -52,7 +54,6 @@ if __name__ == "__main__":
     parser.add_argument("--data_root", required=True)
     parser.add_argument("--out_root", required=True)
     parser.add_argument("--preset", default="full")
-    parser.add_argument("--canonical_labels", required=True)
     args = parser.parse_args()
     dataset = mp.extract(args); opt = op.extract(args)
 
@@ -61,17 +62,20 @@ if __name__ == "__main__":
         src = os.path.join(args.data_root, f"{name}_factorsplat_{args.preset}")
         out = os.path.join(args.out_root, "shared_encoder", f"rank{dataset.tf_rank}",
                            name, args.preset)
-        models[name], scenes[name] = build(dataset, opt, src, out, args.canonical_labels)
+        models[name], scenes[name] = build(dataset, opt, src, out)
 
     # SHARE the encoder: one module, one optimizer group (kept in scene 0's
     # optimizer); every other scene points at the same parameters.
     first = args.scenes[0]
     shared = models[first].tf_encoder
+    shared_psi = models[first].tf_encoder_psi
     for name in args.scenes[1:]:
         models[name].tf_encoder = shared
+        models[name].tf_encoder_psi = shared_psi
         models[name].optimizer.param_groups = [
             gp for gp in models[name].optimizer.param_groups if gp["name"] != "tf_encoder"]
-    print(f"Shared TF encoder: {sum(p.numel() for p in shared.parameters())} params "
+    print(f"Shared TF encoder (phi+psi): "
+          f"{sum(p.numel() for p in shared.parameters()) + sum(p.numel() for p in shared_psi.parameters())} params "
           f"across {args.scenes}; per-scene factors kept separate", flush=True)
 
     cams = {n: scenes[n].getTrainCameras().copy() for n in args.scenes}

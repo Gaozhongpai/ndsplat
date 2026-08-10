@@ -39,7 +39,7 @@ class GaussianModel(DGSModel):
                  tf_aware_prune: bool = True,
                  tf_use_lookup: bool = False,
                  tf_veg_packed: bool = False,
-                 tf_canonical_labels: str = "",
+                 tf_encoder_pooled: bool = False,
                  tf_lookup_mode: str = "joint",
                  tf_lookup_bins: int = 64,
                  tf_lookup_color_scale: float = 1.0,
@@ -91,11 +91,13 @@ class GaussianModel(DGSModel):
         self._tf_baked_index = None       # preset currently baked in, if any
         if tf_lookup_mode not in ("joint", "separable"):
             raise ValueError(f"tf_lookup_mode must be joint|separable, got {tf_lookup_mode}")
-        # Comma-separated union label ids. When set, descriptors are scattered
-        # onto this fixed axis (missing labels zero-filled) so a SHARED TF
-        # encoder sees the same anatomical slot in every scene.
-        self.tf_canonical_labels = [int(x) for x in tf_canonical_labels.split(",")
-                                    if x.strip()] if tf_canonical_labels else None
+        # Label-order-invariant encoder: bias-free phi per TF CURVE, mean pool
+        # over labels, then psi. Works for any label count without a positional
+        # code, and keeps z_{T0} = 0 exactly. Preferred over a fixed per-label
+        # axis: the numeric label carries no physical meaning, it only routes a
+        # curve to a region, and the packed lookup already does that routing.
+        self.tf_encoder_pooled = bool(tf_encoder_pooled)
+        self.tf_encoder_psi = None
         self.tf_lookup_mode = tf_lookup_mode
         self.tf_lookup_bins = int(tf_lookup_bins)
         self.tf_lookup_color_scale = float(tf_lookup_color_scale)
@@ -156,18 +158,10 @@ class GaussianModel(DGSModel):
         sample_count = min(self.tf_samples, rgba.shape[2])
         sample_indices = np.linspace(0, rgba.shape[2] - 1, sample_count).round().astype(int)
         sampled = rgba[:, :, sample_indices, :]                      # [T,L,S',4]
-        if self.tf_canonical_labels is not None:
-            ids = np.asarray(bank["label_ids"]).astype(int).tolist()
-            canon = np.zeros((sampled.shape[0], len(self.tf_canonical_labels),
-                              sampled.shape[2], 4), dtype=np.float32)
-            for col, lab in enumerate(ids):
-                if lab in self.tf_canonical_labels:
-                    canon[:, self.tf_canonical_labels.index(lab)] = sampled[:, col]
-            missing = [l for l in self.tf_canonical_labels if l not in ids]
-            print(f"Canonical TF axis: {len(self.tf_canonical_labels)} labels, "
-                  f"{len(missing)} zero-filled for this scene {missing}")
-            sampled = canon
-        descriptors = sampled.reshape(sampled.shape[0], -1)
+        if self.tf_encoder_pooled:
+            descriptors = sampled.reshape(sampled.shape[0], sampled.shape[1], -1)
+        else:
+            descriptors = sampled.reshape(sampled.shape[0], -1)
         tf_ids = np.asarray(bank["tf_ids"]).astype(str).tolist()
         base_index = next((i for i, value in enumerate(tf_ids)
                            if value == "train_00_base"), 0)
@@ -177,14 +171,17 @@ class GaussianModel(DGSModel):
         descriptors = descriptors - descriptors[base_index:base_index + 1]
         self._tf_descriptors = torch.tensor(descriptors, dtype=torch.float32, device="cuda")
         self._tf_ids = tf_ids
-        input_dim = int(descriptors.shape[1])
+        input_dim = int(descriptors.shape[-1])
         # Seen-only baseline bookkeeping: rows whose id marks a training preset,
         # and each row's nearest training row in descriptor space (used when the
         # embedding encoder must answer for an unseen preset).
         self._tf_train_rows = [i for i, t in enumerate(tf_ids) if t.startswith("train")]
         if self._tf_train_rows:
-            train = self._tf_descriptors[self._tf_train_rows]           # [Ttr, D]
-            dist = torch.cdist(self._tf_descriptors, train)             # [T, Ttr]
+            # flatten any label axis: this table only needs preset-to-preset
+            # distance (used by the seen-only embedding fallback).
+            flat = self._tf_descriptors.reshape(self._tf_descriptors.shape[0], -1)
+            train = flat[self._tf_train_rows]                           # [Ttr, D]
+            dist = torch.cdist(flat, train)                             # [T, Ttr]
             self._tf_nearest_train = torch.tensor(
                 [self._tf_train_rows[j] for j in dist.argmin(dim=1).tolist()],
                 device="cuda")
@@ -195,6 +192,16 @@ class GaussianModel(DGSModel):
                 # base appearance unless the nearest-training fallback is used.
                 self.tf_encoder = nn.Embedding(len(tf_ids), self.tf_rank).cuda()
                 nn.init.zeros_(self.tf_encoder.weight)
+            elif self.tf_encoder_pooled:
+                self.tf_encoder = nn.Sequential(
+                    nn.Linear(input_dim, self.tf_hidden, bias=False),
+                    nn.ReLU(inplace=False),
+                    nn.Linear(self.tf_hidden, self.tf_hidden, bias=False),
+                ).cuda()
+                self.tf_encoder_psi = nn.Sequential(
+                    nn.ReLU(inplace=False),
+                    nn.Linear(self.tf_hidden, self.tf_rank, bias=False),
+                ).cuda()
             else:
                 self.tf_encoder = nn.Sequential(
                     nn.Linear(input_dim, self.tf_hidden, bias=False),
@@ -434,8 +441,11 @@ class GaussianModel(DGSModel):
                 "per_gaussian": True,
             })
         if self.tf_encoder is not None:
+            enc_params = list(self.tf_encoder.parameters())
+            if self.tf_encoder_psi is not None:
+                enc_params += list(self.tf_encoder_psi.parameters())
             self.optimizer.add_param_group({
-                "params": list(self.tf_encoder.parameters()),
+                "params": enc_params,
                 "lr": training_args.tf_encoder_lr,
                 "name": "tf_encoder",
                 "per_gaussian": False,
@@ -466,7 +476,10 @@ class GaussianModel(DGSModel):
             return self.tf_encoder(
                 torch.tensor(index, device=self.tf_encoder.weight.device)
             )
-        return self.tf_encoder(self._tf_descriptors[index])
+        row = self._tf_descriptors[index]
+        if self.tf_encoder_pooled:
+            return self.tf_encoder_psi(self.tf_encoder(row).mean(dim=0))
+        return self.tf_encoder(row)
 
     def get_pruning_opacity(self):
         """TF-aware pruning opacity: max over TRAINING presets of the

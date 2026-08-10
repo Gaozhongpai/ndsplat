@@ -38,6 +38,7 @@ class ParamGroup:
         'tf_use_lookup',
         'tf_aware_prune',
         'tf_veg_packed',
+        'tf_encoder_pooled',
     }
 
     def __init__(self, parser: ArgumentParser, name : str, fill_none = False):
@@ -127,8 +128,8 @@ class ModelParams(ParamGroup):
         self.tf_use_lookup = False
         # Adapted VEG reference: per-Gaussian scalar + packed 1D LUT readout.
         self.tf_veg_packed = False
-        # Union label ids for a shared cross-scene TF encoder (empty = per-scene axis)
-        self.tf_canonical_labels = ""
+        # Label-order-invariant pooled TF encoder (per-curve phi + mean pool + psi)
+        self.tf_encoder_pooled = False
         self.tf_lookup_mode = "joint"  # joint = packed empirical p(l,h); separable = p(l)q(h) ablation
         self.tf_lookup_bins = 64
         self.tf_lookup_color_scale = 1.0
