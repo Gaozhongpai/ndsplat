@@ -40,6 +40,7 @@ class ParamGroup:
         'tf_veg_packed',
         'tf_encoder_pooled',
         'tf_encoder_local',
+        'tf_refresh_descriptors',
     }
 
     def __init__(self, parser: ArgumentParser, name : str, fill_none = False):
@@ -132,8 +133,13 @@ class ModelParams(ParamGroup):
         # Label-order-invariant pooled TF encoder (per-curve phi + mean pool + psi)
         self.tf_encoder_pooled = False
         # Local functional residual: z_{i,T} = mean_k phi(dR_T at the primitive's
-        # own (label, bin) samples). Requires --tf_use_lookup True.
+        # own (region, bin) samples). Uses the packed descriptor independently
+        # of whether the physical lookup branch is enabled.
         self.tf_encoder_local = False
+        # Re-sample descriptors (ids + density weights) after each densification
+        # step, from the current positions/covariances. Needs
+        # points3d_refresh_grid.npz in the dataset root.
+        self.tf_refresh_descriptors = False
         self.tf_lookup_mode = "joint"  # joint = packed empirical p(l,h); separable = p(l)q(h) ablation
         self.tf_lookup_bins = 64
         self.tf_lookup_color_scale = 1.0

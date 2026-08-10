@@ -108,10 +108,9 @@ class GaussianModel(DGSModel):
         self.tf_encoder_local = bool(tf_encoder_local)
         if self.tf_encoder_local and self.tf_encoder_pooled:
             raise ValueError("tf_encoder_local and tf_encoder_pooled are exclusive")
-        if self.tf_encoder_local and not tf_use_lookup:
-            raise ValueError("tf_encoder_local needs the packed descriptors "
-                             "(--tf_use_lookup True)")
         self.tf_lookup_mode = tf_lookup_mode
+        if self.tf_encoder_local and self.tf_lookup_mode != "joint":
+            raise ValueError("tf_encoder_local requires packed joint descriptors")
         self.tf_lookup_bins = int(tf_lookup_bins)
         self.tf_lookup_color_scale = float(tf_lookup_color_scale)
         self.tf_lookup_opacity_scale = float(tf_lookup_opacity_scale)
@@ -126,6 +125,9 @@ class GaussianModel(DGSModel):
         # uniform weights 1/count are reconstructed at lookup time.
         self._tf_lookup_ids = None       # [N, K] int16 flat (label, bin) ids
         self._tf_lookup_counts = None    # [N] uint8 valid-sample counts
+        self._tf_lookup_w = None         # [N, K] per-sample weights, or None
+        self._refresh_id_vol = None       # train-time refresh grid (label*S+bin)
+                                         # (None => uniform 1/K_i, legacy npz)
         self._tf_lookup_gain = None      # learned global RGBA gain (4,)
 
         self.tf_encoder = None
@@ -146,7 +148,7 @@ class GaussianModel(DGSModel):
         rgba = np.asarray(bank["rgba"], dtype=np.float32)
         if rgba.ndim != 4 or rgba.shape[-1] != 4:
             raise ValueError(f"expected TF bank rgba [T,L,K,4], got {rgba.shape}")
-        if self.tf_use_lookup or self.tf_veg_packed:
+        if self.tf_use_lookup or self.tf_encoder_local or self.tf_veg_packed:
             # The lookup consumes the bank as exported (raw RGB + alpha): color
             # deltas come from the RGB channels, opacity deltas from alpha, so
             # premultiplying here would double-count alpha edits in the color path.
@@ -161,7 +163,7 @@ class GaussianModel(DGSModel):
             self._tf_bank_lookup = torch.tensor(raw, dtype=torch.float32, device="cuda")
             self._tf_label_ids = np.asarray(bank["label_ids"]).astype(int).tolist() \
                 if "label_ids" in bank else None
-            if self._tf_lookup_gain is None:
+            if self.tf_use_lookup and self._tf_lookup_gain is None:
                 self._tf_lookup_gain = nn.Parameter(
                     torch.ones(4, device="cuda").requires_grad_(True))
         # RGB is irrelevant where the TF is transparent. Premultiplication keeps
@@ -237,7 +239,7 @@ class GaussianModel(DGSModel):
         (factorsplat_lookup_descriptors.py). Row order must match the loaded
         init PLY. joint mode loads the packed empirical joint p_i(l,h); the
         separable mode loads dense p_i(l), q_i(h) only."""
-        if not self.tf_use_lookup:
+        if not (self.tf_use_lookup or self.tf_encoder_local):
             return
         if self._tf_bank_lookup is None:
             raise RuntimeError("set_tf_bank must run before load_lookup_descriptors")
@@ -292,6 +294,17 @@ class GaussianModel(DGSModel):
                 packed.astype(np.int16), device="cuda")
             self._tf_lookup_counts = torch.tensor(
                 np.clip(counts, 0, 255).astype(np.uint8), device="cuda")
+            if "sample_weights" in payload:
+                # Stored uint8 (x255) density weights; renormalize so each
+                # primitive's valid samples sum to 1 after dequantization.
+                wq = np.asarray(payload["sample_weights"], dtype=np.float32) / 255.0
+                if wq.shape != col.shape:
+                    raise ValueError("sample_weights shape does not match sample_ids")
+                valid = np.arange(col.shape[1])[None, :] < counts[:, None]
+                wq = wq * valid
+                den = wq.sum(1, keepdims=True)
+                wq = np.divide(wq, den, out=np.zeros_like(wq), where=den > 0)
+                self._tf_lookup_w = torch.tensor(wq, device="cuda")
             covered = float((counts > 0).mean())
             samples = f"packed joint p(l,h), {col.shape[1]} slots/Gaussian"
         print(f"Loaded lookup descriptors for {count} Gaussians "
@@ -387,6 +400,107 @@ class GaussianModel(DGSModel):
         self._tf_baked_state = None
         self._tf_baked_index = None
 
+    def load_refresh_grid(self, path):
+        """Attach the label/HU id volume + box transform for train-time refresh.
+
+        Enables re-sampling each primitive's 3^3 window at its CURRENT position
+        after densification, so the samples describe where the primitive
+        actually is. Kept as a plain buffer (no grad): the refresh runs under
+        no_grad and its output is a constant, so the transfer function still
+        cannot move a Gaussian.
+        """
+        if not os.path.isfile(path):
+            print(f"[refresh] no grid at {path}; descriptors stay fixed at init")
+            return False
+        with np.load(path) as g:
+            self._refresh_id_vol = torch.tensor(
+                np.asarray(g["id_vol"], dtype=np.int32), device="cuda")
+            self._refresh_origin = torch.tensor(
+                np.asarray(g["origin"], dtype=np.float32), device="cuda")
+            self._refresh_spacing = torch.tensor(
+                np.asarray(g["spacing"], dtype=np.float32), device="cuda")
+            self._refresh_size = torch.tensor(
+                np.asarray(g["size"], dtype=np.int64), device="cuda")
+            self._refresh_center = torch.tensor(
+                np.asarray(g["volume_center"], dtype=np.float32), device="cuda")
+            self._refresh_hu_samples = int(g["hu_samples"])
+            self._refresh_centered = bool(g["centered_init"])
+        z, y, x = self._refresh_id_vol.shape
+        print(f"[refresh] grid {x}x{y}x{z} loaded "
+              f"({self._refresh_id_vol.numel()*4/2**20:.0f} MiB); "
+              f"centered_init={self._refresh_centered}")
+        return True
+
+    @torch.no_grad()
+    def refresh_descriptors(self):
+        """Re-sample the 3^3 window at current positions: reassign the (label,
+        HU-bin) ids and recompute density weights from the CURRENT covariance.
+
+        Detached by construction -- the ids and weights are constants, so no
+        gradient path is opened from appearance into geometry.
+        """
+        if getattr(self, "_refresh_id_vol", None) is None:
+            return False
+        xyz = self.get_xyz.detach()
+        if self._refresh_centered:
+            xyz = xyz + self._refresh_center[None, :]
+        idx = torch.round((xyz - self._refresh_origin[None, :])
+                          / self._refresh_spacing[None, :]).long()
+        size = self._refresh_size
+        idx = idx.clamp(torch.zeros_like(size)[None, :], (size - 1)[None, :])
+        rng = torch.arange(-1, 2, device=xyz.device)
+        offs = torch.stack(torch.meshgrid(rng, rng, rng, indexing="ij"),
+                           dim=-1).reshape(-1, 3)                    # [27,3]
+        nb = (idx[:, None, :] + offs[None, :, :]).clamp(
+            torch.zeros_like(size)[None, None, :], (size - 1)[None, None, :])
+        z, y, x = self._refresh_id_vol.shape
+        flat = (nb[..., 2] * y + nb[..., 1]) * x + nb[..., 0]
+        ids = self._refresh_id_vol.reshape(-1)[flat]                 # [N,27] or -1
+        valid = ids >= 0
+
+        # density weights from the CURRENT covariance, in the primitive frame
+        rel = (nb - idx[:, None, :]).float() * self._refresh_spacing[None, None, :]
+        sigma = self.get_scaling.detach().clamp_min(1e-6)             # [N,3]
+        q = torch.nn.functional.normalize(self.get_rotation.detach(), dim=1)
+        w0, x0, y0, z0 = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
+        R = torch.stack([
+            1 - 2*(y0**2 + z0**2), 2*(x0*y0 - w0*z0),     2*(x0*z0 + w0*y0),
+            2*(x0*y0 + w0*z0),     1 - 2*(x0**2 + z0**2), 2*(y0*z0 - w0*x0),
+            2*(x0*z0 - w0*y0),     2*(y0*z0 + w0*x0),     1 - 2*(x0**2 + y0**2),
+        ], dim=1).reshape(-1, 3, 3)
+        local = torch.einsum("nij,nkj->nki", R.transpose(1, 2), rel)
+        maha = ((local / sigma[:, None, :]) ** 2).sum(-1)
+        wts = torch.exp(-0.5 * maha) * valid.float()
+        # a primitive whose density underflows everywhere falls back to uniform
+        flat_w = (wts.sum(1) <= 1e-12) & (valid.any(1))
+        wts[flat_w] = valid[flat_w].float()
+        wts = wts / wts.sum(1, keepdim=True).clamp_min(1e-12)
+
+        # pack valid-first so counts remain the contract the gather expects
+        order = torch.argsort((~valid).to(torch.uint8), dim=1, stable=True)
+        ids_s = torch.gather(torch.where(valid, ids, torch.zeros_like(ids)), 1, order)
+        wts_s = torch.gather(wts, 1, order)
+        counts = valid.sum(1)
+        bins = self._tf_bank_lookup.shape[2]
+        S = self._refresh_hu_samples
+        col, hu_bin = ids_s // S, ids_s % S
+        packed = col * bins + hu_bin // max(S // bins, 1)
+        self._tf_lookup_ids = packed.to(torch.int16)
+        self._tf_lookup_counts = counts.clamp(0, 255).to(torch.uint8)
+        self._tf_lookup_w = wts_s
+        return True
+
+    def _sample_weights(self):
+        """Per-sample weights [N, K] used by both local branches: the stored
+        density weights when present, else uniform 1/K_i over valid samples."""
+        ids = self._tf_lookup_ids
+        counts = self._tf_lookup_counts.long()
+        if self._tf_lookup_w is not None:
+            return self._tf_lookup_w
+        mask = (torch.arange(ids.shape[1], device=ids.device)[None, :]
+                < counts[:, None])
+        return mask.float() / counts.clamp(min=1)[:, None].float()
+
     def _local_tf_code(self, tf_index):
         """Per-Gaussian TF code from the primitive's own (label, bin) samples.
 
@@ -394,14 +508,14 @@ class GaussianModel(DGSModel):
         the packed descriptors gather and average the resulting codes, so the
         cost is a gather -- not an MLP per sample. Returns [N, r]."""
         bank = self._tf_bank_lookup
+        if bank is None or self._tf_lookup_ids is None:
+            raise RuntimeError("local TF encoder requires packed descriptors")
         delta_r = (bank[tf_index] - bank[self._tf_base_index]).reshape(-1, 4)
         table = self.tf_encoder(delta_r)                             # [L*B, r]
         ids = self._tf_lookup_ids.long()                             # [N, K]
         counts = self._tf_lookup_counts.long()                       # [N]
         codes = table[ids]                                           # [N, K, r]
-        mask = (torch.arange(ids.shape[1], device=ids.device)[None, :]
-                < counts[:, None])
-        weights = (mask.float() / counts.clamp(min=1)[:, None].float())
+        weights = self._sample_weights()                             # [N, K]
         return (codes * weights.unsqueeze(-1)).sum(dim=1)            # [N, r]
 
     def _lookup_delta(self, tf_index):
@@ -415,9 +529,7 @@ class GaussianModel(DGSModel):
             ids = self._tf_lookup_ids.long()                            # [N,K]
             counts = self._tf_lookup_counts.long()                      # [N]
             vals = delta_r.reshape(-1, 4)[ids]                          # [N,K,4]
-            mask = (torch.arange(ids.shape[1], device=ids.device)[None, :]
-                    < counts[:, None])
-            weights = mask.float() / counts.clamp(min=1)[:, None].float()
+            weights = self._sample_weights()                            # [N,K]
             return (vals * weights.unsqueeze(-1)).sum(dim=1)
         per_label = torch.einsum("nb,lbc->nlc", self._tf_lookup_q, delta_r)
         return torch.einsum("nl,nlc->nc", self._tf_lookup_p, per_label)
@@ -626,7 +738,7 @@ class GaussianModel(DGSModel):
         if "tf_veg_u" in tensors:
             self._tf_veg_u = tensors["tf_veg_u"]
         for name in ("_tf_lookup_p", "_tf_lookup_q",
-                     "_tf_lookup_ids", "_tf_lookup_counts"):
+                     "_tf_lookup_ids", "_tf_lookup_counts", "_tf_lookup_w"):
             tensor = getattr(self, name)
             if tensor is not None and tensor.shape[0] == mask.shape[0]:
                 setattr(self, name, tensor[mask])
@@ -685,7 +797,7 @@ class GaussianModel(DGSModel):
                     self._tf_veg_u.detach()[nearest].clone(),
                 )
             for name in ("_tf_lookup_p", "_tf_lookup_q",
-                         "_tf_lookup_ids", "_tf_lookup_counts"):
+                         "_tf_lookup_ids", "_tf_lookup_counts", "_tf_lookup_w"):
                 tensor = getattr(self, name)
                 if tensor is not None:
                     setattr(self, name,
@@ -708,6 +820,7 @@ class GaussianModel(DGSModel):
             "tf_condition_opacity": self.tf_condition_opacity,
             "tf_color_sh_degree": self.tf_color_sh_degree,
             "tf_use_lookup": self.tf_use_lookup,
+            "tf_encoder_local": self.tf_encoder_local,
             "tf_veg_packed": self.tf_veg_packed,
             "tf_lookup_mode": self.tf_lookup_mode if self.tf_use_lookup else None,
         }
@@ -724,9 +837,12 @@ class GaussianModel(DGSModel):
             payload["veg_u"] = self._tf_veg_u.detach().cpu()
         if self.tf_use_lookup and self.tf_lookup_ready:
             payload["lookup_gain"] = self._tf_lookup_gain.detach().cpu()
+        if (self.tf_use_lookup or self.tf_encoder_local) and self.tf_lookup_ready:
             if self._tf_lookup_ids is not None:
                 payload["lookup_ids"] = self._tf_lookup_ids.detach().cpu()
                 payload["lookup_counts"] = self._tf_lookup_counts.detach().cpu()
+                if self._tf_lookup_w is not None:
+                    payload["lookup_w"] = self._tf_lookup_w.detach().cpu()
             else:
                 payload["lookup_p"] = self._tf_lookup_p.detach().cpu()
                 payload["lookup_q"] = self._tf_lookup_q.detach().cpu()
@@ -776,12 +892,15 @@ class GaussianModel(DGSModel):
         if self.tf_use_lookup:
             self._tf_lookup_gain = nn.Parameter(
                 payload["lookup_gain"].to("cuda").requires_grad_(True))
+        if self.tf_use_lookup or self.tf_encoder_local:
             if version >= 2:
                 if self.tf_lookup_mode == "joint":
                     if "lookup_ids" not in payload:
                         raise ValueError("joint mode but v2 sidecar has no packed lookup")
                     self._tf_lookup_ids = payload["lookup_ids"].to("cuda")
                     self._tf_lookup_counts = payload["lookup_counts"].to("cuda")
+                    if "lookup_w" in payload:
+                        self._tf_lookup_w = payload["lookup_w"].to("cuda")
                 else:
                     self._tf_lookup_p = payload["lookup_p"].to("cuda")
                     self._tf_lookup_q = payload["lookup_q"].to("cuda")
@@ -801,7 +920,8 @@ class GaussianModel(DGSModel):
                     self._tf_lookup_p = payload["lookup_p"].to("cuda")
                     self._tf_lookup_q = payload["lookup_q"].to("cuda")
                 else:
-                    raise ValueError("--tf_use_lookup set but sidecar has no lookup descriptors")
+                    raise ValueError("active local branch needs packed descriptors, "
+                                     "but the sidecar has none")
 
     def capture(self):
         state = {"base": super().capture(), "version": 2}
@@ -813,8 +933,10 @@ class GaussianModel(DGSModel):
             state["encoder"] = self.tf_encoder.state_dict()
         if self.tf_use_lookup and self.tf_lookup_ready:
             state["lookup_gain"] = self._tf_lookup_gain
+        if (self.tf_use_lookup or self.tf_encoder_local) and self.tf_lookup_ready:
             for key, name in (("lookup_ids", "_tf_lookup_ids"),
                               ("lookup_counts", "_tf_lookup_counts"),
+                              ("lookup_w", "_tf_lookup_w"),
                               ("lookup_p", "_tf_lookup_p"),
                               ("lookup_q", "_tf_lookup_q")):
                 tensor = getattr(self, name)
@@ -834,6 +956,7 @@ class GaussianModel(DGSModel):
         if self.tf_use_lookup and "lookup_gain" in model_args:
             self._tf_lookup_gain = nn.Parameter(
                 model_args["lookup_gain"].to("cuda").requires_grad_(True))
+        if self.tf_use_lookup or self.tf_encoder_local:
             for key, name in (("lookup_ids", "_tf_lookup_ids"),
                               ("lookup_counts", "_tf_lookup_counts"),
                               ("lookup_p", "_tf_lookup_p"),

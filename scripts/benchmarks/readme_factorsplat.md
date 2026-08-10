@@ -2,7 +2,7 @@
 
 ## Claim
 
-Train one Gaussian proxy for a volume from multiple label-aware transfer
+Train one Gaussian proxy for a volume from multiple region-specific transfer
 functions, then render an unseen transfer function without optimization or
 Gaussian regeneration. The first study is per scene; Render-FM is not required
 by the conditional representation.
@@ -10,7 +10,7 @@ by the conditional representation.
 The vengine condition is a function
 
 ```text
-T(label, intensity) -> RGBA
+T(region, intensity) -> RGBA
 ```
 
 rather than a scalar style code. Every TF is exported as its exact sampled LUT,
@@ -36,22 +36,24 @@ alpha_i(v,T) = sigmoid(o_i + delta_i^TF(T)) * s_i^view(v)   # logit OFFSET, can
 SH_i(T)      = SH_i^base + delta_SH_i^TF(T)                 # reveal AND suppress
 ```
 
-The TF branch is a physical local lookup (Eq. 6, joint p(l,h)) plus a low-rank
-functional residual. A learned `tf_id` embedding is a seen-TF baseline, not the
-proposed input.
+The region index only routes a sample to its authored curve; its numeric value
+is not an encoder input. The TF branch is a physical local lookup (joint
+`p(region,h)`) plus a low-rank local functional residual. A learned `tf_id`
+embedding is a seen-TF baseline, not the proposed input.
 
 ## Model (`--mode factorsplat`)
 
 Implemented in `scene/gaussian_model_factorsplat.py` on top of the opacity-only
-dGS class. Per TF `T`, the encoder consumes the bank's exact sampled RGBA
-curves (all labels, subsampled to `--tf_samples`, default 32 of the 256 bank
-samples) and produces a code `z_T` through a bias-free 2-layer MLP
-(`input -> tf_hidden=64 -> tf_rank`). Per-Gaussian low-rank factors then map
-the code to appearance offsets:
+dGS class. For each TF switch, a shared bias-free pointwise MLP maps every
+raw RGBA table difference to an `r`-vector. Each Gaussian gathers
+only the entries indexed by its packed local region--HU samples and averages
+them into its own code `z_{i,T}`. This is an empirical average over that
+Gaussian's support, not an average over scenes, Gaussians, or region curves.
+Per-Gaussian low-rank factors then map the local code to appearance offsets:
 
 ```text
-delta_SH_dc_i = A_i^c z_T          A_i^c: [N, 3, r]   (color factors)
-delta_logit_alpha_i = a_i^T z_T    a_i:   [N, r]      (opacity factors)
+delta_SH_dc_i = A_i^c z_{i,T}          A_i^c: [N, 3, r]
+delta_logit_alpha_i = a_i^T z_{i,T}    a_i:   [N, r]
 ```
 
 - `--tf_rank` r in {4, 8, 16, 32}; pilot default 8, smoke used 4.
@@ -192,17 +194,23 @@ Oracle datasets at smoke scale are 2-view floors, not ceilings.
 
 ## Main comparisons
 
+The learned FactorSplat variants use `FACTORSPLAT_ENCODER=local` (the launcher
+default) and receive a `_local` output suffix. Existing learned-variant
+directories without that suffix contain the earlier global flattened encoder
+and must not be reused as local-code results. Set
+`FACTORSPLAT_ENCODER=functional` only to reproduce that legacy ablation.
+
 Names correspond EXACTLY to enabled flags (FACTORSPLAT_VARIANT / output dir):
 
 | name | low-rank residual | local lookup | encoder | notes |
 |---|---|---|---|---|
 | `mixed_unconditioned` | -- | -- | -- | identity floor (one image for all TFs) |
-| `residual` | color+opacity | off | functional | the pilot model (was mislabeled "hybrid") |
+| `residual_local` | color+opacity | off | local functional | local-code residual |
 | `lookup` | off | on | (unused) | Eq. 6 alone, learned global gain only |
-| `hybrid` | color+opacity (deg-1) | on | functional | degree-one conditioning ablation |
-| `hybrid_dc` | color+opacity (DC) | on | functional | PRIMARY model: lookup + DC residual (183 B/G at r=8) |
+| `hybrid_local` | color+opacity (deg-1) | on | local functional | degree-one conditioning ablation |
+| `hybrid_dc_local` | color+opacity (DC) | on | local functional | PRIMARY method: lookup + DC residual (183 B/G at r=8) |
 | `residual_embedding` | color+opacity | off | embedding | seen-only baseline, nearest-train fallback |
-| `color` / `opacity` | one channel | off | functional | channel ablation |
+| `color_local` / `opacity_local` | one channel | off | local functional | channel ablation |
 | `specialist` | -- | -- | -- | one dGS per preset ("per-preset specialist", NOT a strict ceiling: each sees 1/6 of the images) |
 
 Plus: dense TF-conditioned appearance MLP (hypernetwork, TODO) and optional
@@ -299,16 +307,17 @@ Decides whether a factor GENERATOR G_psi(q_i) can replace stored factors.
 The factorization has latent-basis ambiguity (encoder and factors can rotate
 the rank dimension), so per-column R^2 on raw A_i is only supplementary.
 Primary protocol: regress the identifiable response signature
-Y_i = [A_i z_T1 ... A_i z_TM] from q_i with (a) spatially BLOCKED validation
+Y_i = [A_i z_{i,T1} ... A_i z_{i,TM}] from q_i with (a) spatially BLOCKED validation
 splits, not random; (b) variance-weighted R^2 reported separately for RGB and
 opacity responses; (c) the decisive test = substitute predicted factors into
 the checkpoint and re-render ALL TF tiers, scoring delta error, leak,
 PSNR/SSIM.
 
-### v2 ladder (only if hybrid stays weak on label-selective/OOD)
+### Further factor-generation ladder
 
 Preferred v2 = FACTOR GENERATOR, not a generic joint MLP:
-`A_i = G_psi(q_i)`, `delta_theta_i(T) = A_i z_T` -- linear in z_T preserves
+`A_i = G_psi(q_i)`, `delta_theta_i(T) = A_i z_{i,T}` -- linear in the local
+code preserves
 exact identity at T0; cache A_i after training so TF-switch cost is unchanged;
 ablation is surgical (stored vs generated factors, same rank). Input
 `q_i = q_physical (+) sg(q_canonical) (+) e_i`: physical = permutation-
@@ -322,16 +331,16 @@ accuracy. Compression at r=8 (128 B/G explicit FP32 factors): 4D FP32 code
 is additional fixed storage either way. QUALIFICATION: cross-scene transfer
 requires G_psi AND the TF encoder to be trained/shared across scenes; a
 per-scene generator compresses storage but provides no Render-FM transfer
-by itself. Also in the ladder: local functional residual
-`z_i(T) = sum_{l,h} p_i(l,h) phi(l, h, T(l,h)-T0(l,h))`. Explore before
-all-SH conditioning (entanglement risk) and never TF-dependent position
-shifts (TFs edit appearance/support, not anatomy).
+by itself. The local functional residual is now the primary method:
+`z_i(T) = sum_{m,h} p_i(m,h) phi(T(m,h)-T0(m,h))`; `phi` never consumes
+`m`. Never use TF-dependent position shifts (TFs edit appearance/support, not
+anatomy).
 
 ### Bank TODO before the six-scene study
 
 Add label-SELECTIVE mutations (per-label hue/alpha edits, show/hide of
 specific anatomy) to the bank families. The current bank is mostly global
-(hue/opacity/window/gamma), so the label-aware contribution of Eq. 6 is
+(hue/opacity/window/gamma), so the region-selective contribution of Eq. 6 is
 under-tested: on the pilot bank the joint p(l,h) and separable p(l)q(h)
 lookups agree to 1.6% relative -- selective presets are what separates them.
 

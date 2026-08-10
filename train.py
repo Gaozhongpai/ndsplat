@@ -151,6 +151,10 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
     # The adapted-VEG scalar must exist before the first training_setup (which
     # validates it); the later --start_checkpoint load_ply keeps it intact
     # because the init PLY has the same Gaussian count and row order.
+    if getattr(dataset, "tf_refresh_descriptors", False) and \
+            hasattr(gaussians, "load_refresh_grid"):
+        gaussians.load_refresh_grid(
+            os.path.join(dataset.source_path, "points3d_refresh_grid.npz"))
     if getattr(dataset, "tf_veg_packed", False):
         gaussians.init_veg_scalar(
             os.path.join(dataset.source_path, "points3d_lookup.npz"))
@@ -196,7 +200,8 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
     # FactorSplat local lookup: per-Gaussian volume/mask descriptors, sampled at
     # init and aligned to the init PLY row order (so this must run after any
     # --start_checkpoint load and before densification changes the count).
-    if getattr(dataset, "tf_use_lookup", False) and first_iter == 0:
+    if (getattr(dataset, "tf_use_lookup", False)
+            or getattr(dataset, "tf_encoder_local", False)) and first_iter == 0:
         gaussians.load_lookup_descriptors(
             os.path.join(dataset.source_path, "points3d_lookup.npz"))
 
@@ -456,6 +461,14 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
                         size_threshold = 20 if iteration > opt.opacity_reset_interval else None
                         min_opacity = 0.005 if "3dgs" in mode else 0.01 ## RSNA 0.005, paper 0.01
                         gaussians.densify_and_prune(opt.densify_grad_threshold, min_opacity, scene.cameras_extent, size_threshold, iteration)
+                        # Descriptors describe the voxels a primitive occupies,
+                        # so re-sample them right where they went stale: after
+                        # clone/split/prune. Runs under no_grad; the ids and
+                        # weights are constants, so no gradient path opens from
+                        # appearance into geometry.
+                        if getattr(dataset, "tf_refresh_descriptors", False) and \
+                                hasattr(gaussians, "refresh_descriptors"):
+                            gaussians.refresh_descriptors()
                         # Clear CUDA cache after densification to free memory from pruned Gaussians
                         torch.cuda.empty_cache()
 

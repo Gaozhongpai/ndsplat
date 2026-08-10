@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Joint two-scene training with ONE shared TF encoder.
 
-z_T = E_phi(T - T_0) is shared across scenes; geometry, base appearance,
+phi is shared across scenes and produces local z_{i,T} codes; geometry, base appearance,
 per-Gaussian factors, lookup descriptors, and lookup gains stay scene-specific.
 One batch per scene per step, so each scene keeps the same 30k-update budget as
 its independent-encoder counterpart. The encoder is LOCAL and label-order invariant:
-phi maps one RGBA delta sample to a code, evaluated once over the (L*B, 4) delta
+phi maps one raw-RGBA delta sample to a code, evaluated once over the
+(L*B, 4) delta
 table per preset, and each primitive's packed (label, bin) samples gather and
 average those codes -> z_{i,T}. Numeric label ids never enter the network and
 label counts do not affect phi's width (heart 12 curves, vascular 15).

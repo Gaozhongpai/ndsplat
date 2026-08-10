@@ -17,13 +17,19 @@ RANK="${FACTORSPLAT_RANK:-8}"
 #   hybrid   = local lookup + functional residual
 #   color / opacity = residual restricted to one channel (ablation)
 VARIANT="${FACTORSPLAT_VARIANT:-residual}"
-# functional (default) or embedding (seen-only per-preset codes baseline)
-ENCODER="${FACTORSPLAT_ENCODER:-functional}"
+# functional (legacy global code), local (per-Gaussian functional code), or
+# embedding (seen-only per-preset codes baseline).  Use a distinct suffix for
+# local reruns so completed global-code experiments are never silently reused.
+ENCODER="${FACTORSPLAT_ENCODER:-local}"
 
 ENCODER_FLAGS=""
-if [ "$ENCODER" != "functional" ]; then
-    ENCODER_FLAGS="--tf_encoder_type $ENCODER"
-fi
+ENCODER_SUFFIX=""
+case "$ENCODER" in
+    functional) ;;
+    local) ENCODER_FLAGS="--tf_encoder_local True"; ENCODER_SUFFIX="_local" ;;
+    embedding) ENCODER_FLAGS="--tf_encoder_type embedding"; ENCODER_SUFFIX="_embedding" ;;
+    *) echo "unknown FACTORSPLAT_ENCODER=$ENCODER (functional|local|embedding)" >&2; exit 2 ;;
+esac
 
 LOOKUP=0
 case "$VARIANT" in
@@ -42,7 +48,12 @@ VARIANT_DIR="$VARIANT"
 if [ "$LOOKUP" = "1" ]; then
     TF_FLAGS="$TF_FLAGS --tf_use_lookup True"
 fi
-[ "$ENCODER" != "functional" ] && VARIANT_DIR="${VARIANT_DIR}_${ENCODER}"
+if [ "$VARIANT" = "lookup" ] || [ "$VARIANT" = "veg" ]; then
+    [ "$ENCODER" = "functional" ] || \
+        echo "note: FACTORSPLAT_ENCODER=$ENCODER is unused by $VARIANT" >&2
+else
+    VARIANT_DIR="${VARIANT_DIR}${ENCODER_SUFFIX}"
+fi
 
 for scene in $SCENES; do
     dataset="${scene}_factorsplat_${PRESET}"
