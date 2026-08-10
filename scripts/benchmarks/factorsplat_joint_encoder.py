@@ -24,7 +24,7 @@ from utils.image_utils import psnr
 from tqdm import tqdm
 
 
-def build(dataset, opt, source, model_path):
+def build(dataset, opt, source, model_path, warm_ply=None):
     GaussianModel = get_gaussian_model("factorsplat")
     g = GaussianModel(
         dataset.sh_degree, input_dim=dataset.input_dim,
@@ -41,8 +41,15 @@ def build(dataset, opt, source, model_path):
     d = Namespace(**vars(dataset)); d.source_path = source; d.model_path = model_path
     os.makedirs(model_path, exist_ok=True)
     scene = Scene(d, g, opt_params=opt)
-    g.load_ply(os.path.join(source, "points3d.ply"))
-    g.load_lookup_descriptors(os.path.join(source, "points3d_lookup.npz"))
+    if warm_ply:
+        # Warm start from a converged per-scene FactorSplat checkpoint: the
+        # sidecar restores factors, encoder weights, and packed descriptors, so
+        # the joint phase changes exactly one thing -- phi becomes shared.
+        g.load_ply(warm_ply)
+        print(f"warm start: {warm_ply} ({g.get_xyz.shape[0]} Gaussians)", flush=True)
+    else:
+        g.load_ply(os.path.join(source, "points3d.ply"))
+        g.load_lookup_descriptors(os.path.join(source, "points3d_lookup.npz"))
     grid = os.path.join(source, "points3d_refresh_grid.npz")
     if os.path.exists(grid):
         g.load_refresh_grid(grid)
@@ -60,6 +67,14 @@ if __name__ == "__main__":
     parser.add_argument("--data_root", required=True)
     parser.add_argument("--out_root", required=True)
     parser.add_argument("--preset", default="full")
+    # Warm start: directory containing <scene>/<preset>/point_cloud/iteration_N
+    parser.add_argument("--warm_root", default=None)
+    parser.add_argument("--warm_iteration", type=int, default=30000)
+    # Iterations during which only the factors/encoder adapt (geometry frozen):
+    # sharing phi decalibrates factors that were fitted to a private phi, so
+    # give them a re-adaptation window before any densification resumes.
+    parser.add_argument("--factor_warmup", type=int, default=0)
+    parser.add_argument("--freeze_geometry", action="store_true")
     args = parser.parse_args()
     dataset = mp.extract(args); opt = op.extract(args)
 
@@ -68,7 +83,13 @@ if __name__ == "__main__":
         src = os.path.join(args.data_root, f"{name}_factorsplat_{args.preset}")
         out = os.path.join(args.out_root, "shared_encoder", f"rank{dataset.tf_rank}",
                            name, args.preset)
-        models[name], scenes[name] = build(dataset, opt, src, out)
+        warm = None
+        if args.warm_root:
+            warm = os.path.join(args.warm_root, name, args.preset, "point_cloud",
+                                f"iteration_{args.warm_iteration}", "point_cloud.ply")
+            if not os.path.isfile(warm):
+                raise SystemExit(f"missing warm-start checkpoint: {warm}")
+        models[name], scenes[name] = build(dataset, opt, src, out, warm_ply=warm)
 
     # SHARE the encoder: one module, one optimizer group (kept in scene 0's
     # optimizer); every other scene points at the same parameters.
@@ -100,7 +121,7 @@ if __name__ == "__main__":
             (loss / len(args.scenes)).backward()    # averaged objective
             losses[name] = float(loss)
             with torch.no_grad():
-                if it < opt.densify_until_iter:
+                if (not args.freeze_geometry) and it < opt.densify_until_iter:
                     g.max_radii2D[out["visibility_filter"]] = torch.max(
                         g.max_radii2D[out["visibility_filter"]],
                         out["radii"][out["visibility_filter"]])
@@ -115,6 +136,13 @@ if __name__ == "__main__":
                     if it % opt.opacity_reset_interval == 0:
                         g.reset_opacity()
         for name in args.scenes:                    # step AFTER both backwards
+            g = models[name]
+            if args.freeze_geometry or it <= args.factor_warmup:
+                for gp in g.optimizer.param_groups:
+                    if gp["name"] not in ("tf_color_factors", "tf_opacity_factors",
+                                          "tf_encoder", "tf_lookup_gain"):
+                        for p in gp["params"]:
+                            p.grad = None
             models[name].optimizer.step()
             models[name].optimizer.zero_grad(set_to_none=True)
         if it % 200 == 0:
