@@ -146,6 +146,10 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
 
     # XClipGS: select the clip operator (dgs mode); default 'analytic' (Ours).
     gaussians.clip_operator = getattr(dataset, "clip_operator", "analytic")
+    # Ablation: force uniform sample weights (drop the density-weighting
+    # component) without touching the dataset descriptors.
+    gaussians.tf_uniform_sample_weights = getattr(
+        dataset, "tf_uniform_sample_weights", False)
 
     scene = Scene(dataset, gaussians, opt_params=opt)
     # The adapted-VEG scalar must exist before the first training_setup (which

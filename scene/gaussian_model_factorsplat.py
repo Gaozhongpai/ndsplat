@@ -495,7 +495,8 @@ class GaussianModel(DGSModel):
         density weights when present, else uniform 1/K_i over valid samples."""
         ids = self._tf_lookup_ids
         counts = self._tf_lookup_counts.long()
-        if self._tf_lookup_w is not None:
+        if self._tf_lookup_w is not None and not getattr(
+                self, "tf_uniform_sample_weights", False):
             return self._tf_lookup_w
         mask = (torch.arange(ids.shape[1], device=ids.device)[None, :]
                 < counts[:, None])

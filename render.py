@@ -230,6 +230,8 @@ def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_
         # "analytic" reproduces the original render behavior. dgs/ndgs render_tcgs
         # reads self.clip_operator; 3dgs/clipgs ignore it (own paths).
         gaussians.clip_operator = getattr(dataset, "clip_operator", "analytic")
+        gaussians.tf_uniform_sample_weights = getattr(
+            dataset, "tf_uniform_sample_weights", False)
 
         # Set background color
         bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]

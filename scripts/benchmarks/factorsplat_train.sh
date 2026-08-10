@@ -39,9 +39,13 @@ case "$VARIANT" in
     hybrid_dc) TF_FLAGS="--tf_condition_color True --tf_condition_opacity True --tf_color_sh_degree 0"; LOOKUP=1 ;;
     color)    TF_FLAGS="--tf_condition_color True --tf_condition_opacity False" ;;
     opacity)  TF_FLAGS="--tf_condition_color False --tf_condition_opacity True" ;;
+    # One-component-out channel ablations of the full model: lookup + DC kept,
+    # only the residual's other channel removed.
+    hybrid_dc_color)   TF_FLAGS="--tf_condition_color True --tf_condition_opacity False --tf_color_sh_degree 0"; LOOKUP=1 ;;
+    hybrid_dc_opacity) TF_FLAGS="--tf_condition_color False --tf_condition_opacity True --tf_color_sh_degree 0"; LOOKUP=1 ;;
     lookup)   TF_FLAGS="--tf_condition_color False --tf_condition_opacity False"; LOOKUP=1 ;;
     veg)      TF_FLAGS="--tf_condition_color False --tf_condition_opacity False --tf_veg_packed True" ;;
-    *) echo "unknown FACTORSPLAT_VARIANT=$VARIANT (residual|residual_dc|hybrid|hybrid_dc|color|opacity|lookup|veg)" >&2; exit 2 ;;
+    *) echo "unknown FACTORSPLAT_VARIANT=$VARIANT (residual|residual_dc|hybrid|hybrid_dc|hybrid_dc_color|hybrid_dc_opacity|color|opacity|lookup|veg)" >&2; exit 2 ;;
 esac
 
 VARIANT_DIR="$VARIANT"

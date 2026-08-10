@@ -41,6 +41,7 @@ class ParamGroup:
         'tf_encoder_pooled',
         'tf_encoder_local',
         'tf_refresh_descriptors',
+        'tf_uniform_sample_weights',
     }
 
     def __init__(self, parser: ArgumentParser, name : str, fill_none = False):
@@ -140,6 +141,10 @@ class ModelParams(ParamGroup):
         # step, from the current positions/covariances. Needs
         # points3d_refresh_grid.npz in the dataset root.
         self.tf_refresh_descriptors = False
+        # Ablation: force uniform 1/K_i sample weights (ignore stored/refresh
+        # density weights) so the density-weighting component can be removed
+        # without regenerating datasets.
+        self.tf_uniform_sample_weights = False
         self.tf_lookup_mode = "joint"  # joint = packed empirical p(l,h); separable = p(l)q(h) ablation
         self.tf_lookup_bins = 64
         self.tf_lookup_color_scale = 1.0
