@@ -39,6 +39,17 @@ def build(dataset, opt, source, model_path, warm_ply=None):
         tf_lookup_bins=dataset.tf_lookup_bins,
     )
     d = Namespace(**vars(dataset)); d.source_path = source; d.model_path = model_path
+    # cfg_args must describe the model actually BUILT above (this trainer
+    # hardcodes the canonical Hybrid(DC) local configuration), not the raw CLI
+    # namespace -- render.py rebuilds from cfg_args and would otherwise
+    # mismatch the sidecar.
+    d.tf_color_sh_degree = 0
+    d.tf_condition_color = True
+    d.tf_condition_opacity = True
+    d.tf_aware_prune = True
+    d.tf_use_lookup = True
+    d.tf_encoder_local = True
+    d.tf_encoder_type = "functional"
     os.makedirs(model_path, exist_ok=True)
     scene = Scene(d, g, opt_params=opt)
     if warm_ply:
