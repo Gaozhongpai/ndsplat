@@ -38,6 +38,7 @@ class ParamGroup:
         'tf_use_lookup',
         'tf_aware_prune',
         'tf_veg_packed',
+        'use_jpeg_compression',
     }
 
     def __init__(self, parser: ArgumentParser, name : str, fill_none = False):
