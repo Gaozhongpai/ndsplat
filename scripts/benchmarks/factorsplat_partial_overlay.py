@@ -33,6 +33,8 @@ def main():
     parser.add_argument("--tf", action="append", required=True,
                         help="tf_id to evaluate (repeatable)")
     parser.add_argument("--epsilon", type=float, default=0.04)
+    parser.add_argument("--out", type=Path, default=None,
+                        help="output json path (default: <model>/factorsplat_partial_overlay.json)")
     args = parser.parse_args()
 
     frames = json.loads((args.dataset / "transforms_test.json").read_text())["frames"]
@@ -70,7 +72,7 @@ def main():
               "transfer_functions": {
                   tf: {m: float(np.mean(v)) for m, v in metrics.items()}
                   for tf, metrics in sorted(acc.items())}}
-    destination = args.model / "factorsplat_partial_overlay.json"
+    destination = args.out or (args.model / "factorsplat_partial_overlay.json")
     destination.write_text(json.dumps(result, indent=2) + "\n")
     for tf, m in result["transfer_functions"].items():
         print(f"  {tf}: PSNR={m['PSNR']:.2f} delta_changed={m.get('delta_l1_changed', float('nan')):.4f}")
