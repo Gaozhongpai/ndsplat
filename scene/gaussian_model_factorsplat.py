@@ -860,6 +860,13 @@ class GaussianModel(DGSModel):
             dc = (rgba[:, :3] - 0.5) / C0
             shs = torch.cat((dc[:, None, :], self._features_rest), dim=1)
             opacity = rgba[:, 3:4].clamp(1e-5, 1 - 1e-5)
+            # The gate reads authored visibility and the segmentation mask, not
+            # anything FactorSplat learns, so the adapted VEG reference gets it
+            # too: comparing a gated method against an ungated baseline would
+            # credit us for a TF-side computation available to both.
+            if self.tf_exact_visibility_gate and self.tf_lookup_ready \
+                    and self._tf_bank_lookup is not None:
+                opacity = opacity * self._authored_visibility(index)
             return shs, opacity * opacity_scale
 
         code = (self._code_for_index(index)
