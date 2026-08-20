@@ -138,6 +138,7 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
             tf_lookup_bins=dataset.tf_lookup_bins,
             tf_lookup_color_scale=dataset.tf_lookup_color_scale,
             tf_lookup_opacity_scale=dataset.tf_lookup_opacity_scale,
+            tf_exact_visibility_gate=getattr(dataset, "tf_exact_visibility_gate", False),
         )
     else:
         raise ValueError(f"Unknown mode: {mode}")
@@ -145,7 +146,13 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
     # XClipGS: select the clip operator (dgs mode); default 'analytic' (Ours).
     gaussians.clip_operator = getattr(dataset, "clip_operator", "analytic")
 
-    scene = Scene(dataset, gaussians, opt_params=opt)
+    # Test frames are only needed by render.py/metrics.py AFTER training; keeping
+    # all 1600 of them resident costs ~46 GiB at 1600^2 and is what forces
+    # --use_jpeg_compression on an 80 GB card. The in-training 'test' report is
+    # informational only (paper metrics come from the separate render/metrics
+    # chain), and training_report() skips empty camera lists.
+    scene = Scene(dataset, gaussians, opt_params=opt,
+                  load_test_cameras=not dataset.skip_test_cameras)
     # The adapted-VEG scalar must exist before the first training_setup (which
     # validates it); the later --start_checkpoint load_ply keeps it intact
     # because the init PLY has the same Gaussian count and row order.
@@ -442,6 +449,9 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
             # Densification
             # Use MCMC-specific densify_until_iter if MCMC strategy is chosen (default 25k vs standard 15k)
             densify_until = opt.mcmc_densify_until_iter if opt.densification_strategy == "mcmc" else opt.densify_until_iter
+            # Propagate the optional primitive budget (0 = unbounded) to the model,
+            # which enforces it inside densify_and_prune.
+            gaussians.max_primitives = getattr(opt, "max_primitives", 0)
 
             if iteration > opt.densify_from_iter and iteration < densify_until:
                 if opt.densification_strategy == "standard":

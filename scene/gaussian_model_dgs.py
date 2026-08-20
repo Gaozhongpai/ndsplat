@@ -1224,8 +1224,20 @@ class GaussianModel(MipFilterMixin):
         grads = self.xyz_gradient_accum / self.denom
         grads[grads.isnan()] = 0.0
 
-        self.densify_and_clone(grads, max_grad, extent)
-        self.densify_and_split(grads, max_grad, extent)
+        # Optional primitive budget. Densification is skipped once the count
+        # reaches max_primitives, while pruning below still runs, so the model
+        # can shrink but not grow past the cap. Needed because the adapted-VEG
+        # baseline grows unboundedly on dense inits (intestine reached ~1.05M
+        # primitives, whose 1600^2 rasterization exceeds 80 GB of device memory).
+        budget = getattr(self, "max_primitives", 0) or 0
+        if budget <= 0 or self.get_xyz.shape[0] < budget:
+            self.densify_and_clone(grads, max_grad, extent)
+            self.densify_and_split(grads, max_grad, extent)
+        elif not getattr(self, "_budget_logged", False):
+            print(f"[budget] primitive cap {budget} reached at iter {iteration} "
+                  f"({self.get_xyz.shape[0]} primitives); densification stopped, "
+                  f"pruning continues", flush=True)
+            self._budget_logged = True
 
         prune_mask = (self.get_pruning_opacity() < min_opacity).squeeze()
         if max_screen_size:
@@ -1233,6 +1245,24 @@ class GaussianModel(MipFilterMixin):
             big_points_ws = self.get_scaling.max(dim=1).values > 0.1 * extent
             prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
         self.prune_points(prune_mask)
+
+        # Enforce the budget downward too. Blocking densification alone is not
+        # enough when the INITIALIZATION already exceeds the cap (the adapted-VEG
+        # run on intestine starts at 1.79M primitives and never prunes below it),
+        # so drop the lowest-scoring primitives until the count fits. Ranking uses
+        # get_pruning_opacity(), i.e. the max conditioned opacity over training
+        # presets -- the same coverage-aware score the normal prune uses, so a
+        # primitive revealed by some preset outranks one no preset reveals.
+        if budget > 0 and self.get_xyz.shape[0] > budget:
+            n_before = self.get_xyz.shape[0]
+            score = self.get_pruning_opacity().squeeze().detach()
+            keep_idx = torch.topk(score, budget, largest=True).indices
+            over_mask = torch.ones_like(score, dtype=torch.bool)
+            over_mask[keep_idx] = False
+            self.prune_points(over_mask)
+            print(f"[budget] iter {iteration}: {n_before} -> "
+                  f"{self.get_xyz.shape[0]} primitives (cap {budget})", flush=True)
+
         torch.cuda.empty_cache()
 
     def add_densification_stats(self, viewspace_point_tensor, update_filter):

@@ -9,6 +9,7 @@
 # For inquiries contact  george.drettakis@inria.fr
 #
 
+import hashlib
 import os
 import time
 from argparse import ArgumentParser
@@ -52,7 +53,7 @@ def render_wrapper(view, gaussians, pipeline, background, mode, is_test=False, t
         raise ValueError(f"Unknown mode: {mode}.")
 
 
-def render_set(model_path, name, iteration, views, gaussians, pipeline, background, mode, measure_fps=False, use_gsplat=False, bake_appearance=False):
+def render_set(model_path, name, iteration, views, gaussians, pipeline, background, mode, measure_fps=False, use_gsplat=False, bake_appearance=False, source_path=None):
     """Render a set of views and save results.
 
     Args:
@@ -137,6 +138,26 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
     if getattr(gaussians, "_tf_baked_state", None) is not None:
         gaussians.unbake()
 
+    # GT frames are identical for every method trained on the same scene/split, but
+    # PNG-encoding one 1600^2 image costs ~300 ms, so re-encoding them per run is
+    # ~8 min of pure duplication (19 Table-1 runs per scan re-wrote the same GT).
+    # Encode once into a per-dataset cache, then hardlink. Byte-identical output,
+    # so metrics.py/group_metrics read exactly what they read before.
+    gt_cache = os.environ.get("FACTORSPLAT_GT_CACHE")
+    cache_dir = None
+    if gt_cache and source_path:
+        # Key on the FULL resolved dataset path, not its basename. Per-preset
+        # oracle datasets share basenames across scans
+        # (.../factorsplat_oracle/<scan>/full/test_comp_00_h30_a060), so a
+        # basename key made five different anatomies share one GT set and
+        # produced 8-15 dB specialist scores against the wrong images.
+        real = os.path.realpath(source_path)
+        digest = hashlib.sha1(real.encode()).hexdigest()[:12]
+        tag = f"{os.path.basename(os.path.dirname(os.path.dirname(real)))}" \
+              f"_{os.path.basename(real)}_{digest}"
+        cache_dir = os.path.join(gt_cache, tag, f"{name}_{iteration}")
+        makedirs(cache_dir, exist_ok=True)
+
     print("Rendering all frames for saving...")
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
         # Render with use_tcgs=False for quality-matched evaluation (same as training)
@@ -146,7 +167,19 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
 
         # Save images
         torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
-        torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
+        gt_out = os.path.join(gts_path, '{0:05d}'.format(idx) + ".png")
+        if cache_dir is None:
+            torchvision.utils.save_image(gt, gt_out)
+        else:
+            cached = os.path.join(cache_dir, '{0:05d}'.format(idx) + ".png")
+            if not os.path.exists(cached):
+                torchvision.utils.save_image(gt, cached)
+            if os.path.exists(gt_out):
+                os.remove(gt_out)
+            try:
+                os.link(cached, gt_out)
+            except OSError:
+                torchvision.utils.save_image(gt, gt_out)
 
 
 def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_train: bool, skip_test: bool, measure_fps: bool = False, bake_appearance: bool = False):
@@ -208,6 +241,7 @@ def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_
                 tf_lookup_bins=getattr(dataset, "tf_lookup_bins", 64),
                 tf_lookup_color_scale=getattr(dataset, "tf_lookup_color_scale", 1.0),
                 tf_lookup_opacity_scale=getattr(dataset, "tf_lookup_opacity_scale", 4.0),
+                tf_exact_visibility_gate=getattr(dataset, "tf_exact_visibility_gate", False),
             )
         else:
             raise ValueError(f"Unknown mode: {mode}")
@@ -239,13 +273,13 @@ def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_
             render_set(dataset.model_path, "train", scene.loaded_iter,
                       scene.getTrainCameras(), gaussians, pipeline, background, mode, measure_fps,
                       bake_appearance=bake_appearance,
-                      use_gsplat=use_gsplat)
+                      use_gsplat=use_gsplat, source_path=dataset.source_path)
 
         if not skip_test:
             render_set(dataset.model_path, "test", scene.loaded_iter,
                       scene.getTestCameras(), gaussians, pipeline, background, mode, measure_fps,
                       bake_appearance=bake_appearance,
-                      use_gsplat=use_gsplat)
+                      use_gsplat=use_gsplat, source_path=dataset.source_path)
 
 
 def measure_tf_switch_latency(gaussians, tf_index, repeats=50):

@@ -42,7 +42,8 @@ class GaussianModel(DGSModel):
                  tf_lookup_mode: str = "joint",
                  tf_lookup_bins: int = 64,
                  tf_lookup_color_scale: float = 1.0,
-                 tf_lookup_opacity_scale: float = 4.0):
+                 tf_lookup_opacity_scale: float = 4.0,
+                 tf_exact_visibility_gate: bool = False):
         super().__init__(
             sh_degree=sh_degree,
             input_dim=input_dim,
@@ -94,6 +95,7 @@ class GaussianModel(DGSModel):
         self.tf_lookup_bins = int(tf_lookup_bins)
         self.tf_lookup_color_scale = float(tf_lookup_color_scale)
         self.tf_lookup_opacity_scale = float(tf_lookup_opacity_scale)
+        self.tf_exact_visibility_gate = bool(tf_exact_visibility_gate)
         self._tf_bank_lookup = None      # [T, L, B, 4] raw RGBA, downsampled bins
         self._tf_base_index = 0
         self._tf_label_ids = None
@@ -106,6 +108,7 @@ class GaussianModel(DGSModel):
         self._tf_lookup_ids = None       # [N, K] int16 flat (label, bin) ids
         self._tf_lookup_counts = None    # [N] uint8 valid-sample counts
         self._tf_lookup_gain = None      # learned global RGBA gain (4,)
+        self._tf_label_visible = None    # [T, L] authored IsVisible flags
 
         self.tf_encoder = None
         self._tf_descriptors = None
@@ -140,6 +143,11 @@ class GaussianModel(DGSModel):
             self._tf_bank_lookup = torch.tensor(raw, dtype=torch.float32, device="cuda")
             self._tf_label_ids = np.asarray(bank["label_ids"]).astype(int).tolist() \
                 if "label_ids" in bank else None
+            # Authored per-preset label visibility (IsVisible in the bookmark),
+            # exported by the bank generator as visible[T, L].
+            self._tf_label_visible = (torch.tensor(
+                np.asarray(bank["visible"]).astype(bool), device="cuda")
+                if "visible" in bank else None)
             if self._tf_lookup_gain is None:
                 self._tf_lookup_gain = nn.Parameter(
                     torch.ones(4, device="cuda").requires_grad_(True))
@@ -342,6 +350,64 @@ class GaussianModel(DGSModel):
         self._tf_baked_state = None
         self._tf_baked_index = None
 
+    def _authored_visibility(self, tf_index):
+        """[N,1] float gate: 0 where the preset REMOVES the primitive's material
+        (authored alpha zero at every descriptor sample under `tf_index`, but
+        nonzero somewhere under the base preset), else 1.  This is exact renderer semantics -- material the preset assigns
+        zero opacity contributes nothing -- and unlike the additive logit offset
+        it cannot under-shoot on full visibility removal (`hide` presets), where
+        a saturated sigmoid leaves anatomy ghost-visible.  Primitives without
+        descriptor support (count 0) stay visible, matching the d_i = 0
+        convention of the lookup."""
+        if self._tf_label_visible is not None:
+            # Label-level rule: a label the preset toggles IsVisible=false on
+            # (but which is visible at base) is masked WHOLESALE, exactly matching
+            # the renderer's authored semantics. A primitive is gated only when
+            # every valid descriptor sample lies on a removed label, so
+            # boundary primitives spanning a surviving label keep contributing.
+            removed_lab = (~self._tf_label_visible[tf_index]) & \
+                self._tf_label_visible[self._tf_base_index]              # [L]
+            if not bool(removed_lab.any()):
+                n = self.get_xyz.shape[0]
+                return torch.ones(n, 1, device=self.get_xyz.device)
+            bins = self._tf_bank_lookup.shape[2]
+            if self._tf_lookup_ids is not None:
+                ids = self._tf_lookup_ids.long()                          # [N,K]
+                counts = self._tf_lookup_counts.long()                    # [N]
+                labs = ids // bins                                        # [N,K]
+                valid = (torch.arange(ids.shape[1], device=ids.device)[None, :]
+                         < counts[:, None])
+                on_kept = (~removed_lab[labs]) & valid
+                keep = on_kept.any(dim=1) | (counts == 0)
+                return keep.float().unsqueeze(1)
+            kept_mass = (self._tf_lookup_p * (~removed_lab).float()[None, :]).sum(1)
+            no_support = self._tf_lookup_p.sum(1) == 0
+            return ((kept_mass > 0) | no_support).float().unsqueeze(1)
+
+        alpha = self._tf_bank_lookup[tf_index][..., 3]                   # [L,B]
+        base = self._tf_bank_lookup[self._tf_base_index][..., 3]         # [L,B]
+        # Gate only material the preset REMOVED (visible at base, zero under T).
+        # Gating every authored-invisible primitive also killed always-invisible
+        # material that training legitimately uses as scaffolding (large fitted
+        # footprints exceed the 3^3 descriptor window), costing ~0.8 dB PSNR on
+        # near-distribution splits; the removed-only rule leaves the base render
+        # bit-identical and still zeroes hidden anatomy exactly.
+        if self._tf_lookup_ids is not None:
+            ids = self._tf_lookup_ids.long()                             # [N,K]
+            counts = self._tf_lookup_counts.long()                       # [N]
+            valid = (torch.arange(ids.shape[1], device=ids.device)[None, :]
+                     < counts[:, None]).float()
+            a_now = (alpha.reshape(-1)[ids] * valid).amax(dim=1)         # [N]
+            a_base = (base.reshape(-1)[ids] * valid).amax(dim=1)         # [N]
+            removed = (a_now == 0) & (a_base > 0) & (counts > 0)
+            return (~removed).float().unsqueeze(1)
+        p_pos = (self._tf_lookup_p > 0).float()
+        q_pos = (self._tf_lookup_q > 0).float()
+        now = torch.einsum("nl,lb,nb->n", p_pos, (alpha > 0).float(), q_pos)
+        was = torch.einsum("nl,lb,nb->n", p_pos, (base > 0).float(), q_pos)
+        removed = (now == 0) & (was > 0)
+        return (~removed).float().unsqueeze(1)
+
     def _lookup_delta(self, tf_index):
         """Eq. 6: locally relevant RGBA change of the preset relative to the
         base preset. joint mode averages R_T - R_T0 over the window's packed
@@ -527,6 +593,9 @@ class GaussianModel(DGSModel):
             opacity_delta = torch.einsum("nr,r->n", self._tf_opacity_factors, code)
             logit = logit + self.tf_opacity_scale * opacity_delta[:, None]
         opacity = torch.sigmoid(logit)
+        if self.tf_exact_visibility_gate and self.tf_lookup_ready \
+                and self._tf_bank_lookup is not None:
+            opacity = opacity * self._authored_visibility(index)
         return shs, opacity * opacity_scale
 
     def reset_opacity(self):
@@ -687,6 +756,24 @@ class GaussianModel(DGSModel):
         self._tf_color_factors = _factor("color_factors") if self.tf_condition_color else None
         self._tf_opacity_factors = _factor("opacity_factors") if self.tf_condition_opacity else None
         if self.tf_factors_active:
+            # Compatibility: older checkpoints (heart/vascular hybrid_dc_local)
+            # store the LOCAL pointwise encoder (Linear in_features=4), while
+            # set_tf_bank may already have built a global-descriptor encoder of
+            # in_features = L*samples*4. The sidecar is authoritative for the
+            # trained architecture, so rebuild to its shape before loading.
+            enc = payload["encoder"]
+            w_key = next((k for k in enc if k.endswith("0.weight")), None)
+            if (w_key is not None and self.tf_encoder is not None
+                    and hasattr(self.tf_encoder, "0")
+                    and self.tf_encoder[0].in_features != enc[w_key].shape[1]):
+                in_dim = int(enc[w_key].shape[1])
+                self.tf_encoder = nn.Sequential(
+                    nn.Linear(in_dim, self.tf_hidden, bias=False),
+                    nn.ReLU(inplace=False),
+                    nn.Linear(self.tf_hidden, self.tf_rank, bias=False),
+                ).cuda()
+                print(f"[factorsplat] rebuilt TF encoder to sidecar shape "
+                      f"(in_features={in_dim})", flush=True)
             self.tf_encoder.load_state_dict(payload["encoder"])
         if self.tf_veg_packed:
             if "veg_u" not in payload:

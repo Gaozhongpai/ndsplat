@@ -38,6 +38,7 @@ class ParamGroup:
         'tf_use_lookup',
         'tf_aware_prune',
         'tf_veg_packed',
+        'tf_exact_visibility_gate',
         'use_jpeg_compression',
     }
 
@@ -88,6 +89,9 @@ class ModelParams(ParamGroup):
         self.use_rot_scale_l_triangle = False  # If True: use rotation-scale-l_triangle (UBS-style), If False: use diagonal-l_triangle (NDGS-style)
         self.learnable_lambda_opc = False  # If True: make lambda_opc a learnable parameter per Gaussian
         self.use_jpeg_compression = False  # If True: use JPEG compression for images to save GPU memory (slower but memory-efficient)
+        # Skip loading held-out frames during training (see train.py); they are
+        # loaded by render.py afterwards, so paper metrics are unaffected.
+        self.skip_test_cameras = False
         # DGS view-dependent flags (only used when mode="dgs")
         self.use_view_dependent_pos = True  # Enable view-dependent position shift
         self.use_opacity_pos_decouple = False  # If True: decouple position and opacity by setting lambda_view=lambda_time=0 (not learnable)
@@ -126,6 +130,13 @@ class ModelParams(ParamGroup):
         # anatomy is deleted for having a low shared/base opacity.
         self.tf_aware_prune = True
         self.tf_use_lookup = False
+        # Exact visibility gating (fix A for the `hide` OOD regime): when the
+        # authored alpha of preset T is zero at EVERY (label, HU) sample in a
+        # primitive's descriptor support, multiply its opacity by zero instead
+        # of relying on the bounded logit offset, which saturates and leaves
+        # hidden anatomy ghost-visible. Opt-in: enabling it at render time
+        # changes numbers relative to the published runs.
+        self.tf_exact_visibility_gate = False
         # Adapted VEG reference: per-Gaussian scalar + packed 1D LUT readout.
         self.tf_veg_packed = False
         self.tf_lookup_mode = "joint"  # joint = packed empirical p(l,h); separable = p(l)q(h) ablation
@@ -197,6 +208,9 @@ class OptimizationParams(ParamGroup):
 
         # MCMC-specific parameters (only used when densification_strategy="mcmc")
         self.mcmc_cap_max = 300_000  # Maximum number of Gaussians
+        # Hard cap on primitive count for STANDARD densification (0 = unbounded).
+        # Distinct from mcmc_cap_max, which only applies in MCMC mode.
+        self.max_primitives = 0
         self.mcmc_refine_interval = 100  # Interval for MCMC refinement
         self.mcmc_densify_until_iter = 25_000  # MCMC densifies longer than standard (25k vs 15k)
         self.noise_lr = 1.0  # Noise learning rate for MCMC spatial perturbation
