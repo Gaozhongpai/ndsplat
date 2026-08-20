@@ -212,6 +212,7 @@ def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_
                 tf_lookup_bins=getattr(dataset, "tf_lookup_bins", 64),
                 tf_lookup_color_scale=getattr(dataset, "tf_lookup_color_scale", 1.0),
                 tf_lookup_opacity_scale=getattr(dataset, "tf_lookup_opacity_scale", 4.0),
+                tf_exact_visibility_gate=getattr(dataset, "tf_exact_visibility_gate", False),
             )
         else:
             raise ValueError(f"Unknown mode: {mode}")

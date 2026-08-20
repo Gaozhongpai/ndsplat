@@ -43,6 +43,7 @@ class ParamGroup:
         'tf_encoder_pooled',
         'tf_encoder_local',
         'tf_refresh_descriptors',
+        'tf_exact_visibility_gate',
         'use_jpeg_compression',
     }
 
@@ -154,6 +155,7 @@ class ModelParams(ParamGroup):
         self.tf_lookup_bins = 64
         self.tf_lookup_color_scale = 1.0
         self.tf_lookup_opacity_scale = 4.0
+        self.tf_exact_visibility_gate = False
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
