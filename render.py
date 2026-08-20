@@ -52,7 +52,7 @@ def render_wrapper(view, gaussians, pipeline, background, mode, is_test=False, t
         raise ValueError(f"Unknown mode: {mode}.")
 
 
-def render_set(model_path, name, iteration, views, gaussians, pipeline, background, mode, measure_fps=False, use_gsplat=False, bake_appearance=False):
+def render_set(model_path, name, iteration, views, gaussians, pipeline, background, mode, measure_fps=False, use_gsplat=False, bake_appearance=False, tf_indices=None):
     """Render a set of views and save results.
 
     Args:
@@ -139,6 +139,10 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
 
     print("Rendering all frames for saving...")
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
+        # Partial render: keep the global frame index (metrics address renders
+        # by transforms position) but skip TFs outside the requested set.
+        if tf_indices is not None and int(getattr(view, "tf_index", -1)) not in tf_indices:
+            continue
         # Render with use_tcgs=False for quality-matched evaluation (same as training)
         renderings = render_wrapper(view, gaussians, pipeline, background, mode, is_test=False, tight_snugbox=False, use_gsplat=use_gsplat)
         rendering = renderings["render"]
@@ -149,7 +153,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
 
 
-def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_train: bool, skip_test: bool, measure_fps: bool = False, bake_appearance: bool = False):
+def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_train: bool, skip_test: bool, measure_fps: bool = False, bake_appearance: bool = False, render_tf_indices=None):
     """Render train and/or test sets.
 
     Args:
@@ -251,7 +255,7 @@ def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_
             render_set(dataset.model_path, "test", scene.loaded_iter,
                       scene.getTestCameras(), gaussians, pipeline, background, mode, measure_fps,
                       bake_appearance=bake_appearance,
-                      use_gsplat=use_gsplat)
+                      use_gsplat=use_gsplat, tf_indices=render_tf_indices)
 
 
 def measure_tf_switch_latency(gaussians, tf_index, repeats=50):
@@ -278,6 +282,8 @@ if __name__ == "__main__":
     parser.add_argument("--skip_test", action="store_true", help="Skip rendering test views")
     parser.add_argument("--measure_fps", action="store_true", help="Measure FPS instead of saving images")
     parser.add_argument("--quiet", action="store_true", help="Suppress output")
+    parser.add_argument("--render_tf_indices", type=str, default="",
+                        help="Comma-separated tf_index values; when set, only test frames of these TFs are rendered (frame numbering preserved)")
     parser.add_argument("--tf_bake_appearance", action="store_true",
                         help="FactorSplat: bake each preset's conditioned appearance "
                              "into the base SH/opacity before FPS measurement, and "
@@ -305,4 +311,5 @@ if __name__ == "__main__":
 
     render_sets(model.extract(args), iteration, pipeline.extract(args),
                 args.skip_train, args.skip_test, args.measure_fps,
-                bake_appearance=bool(getattr(args, "tf_bake_appearance", False)))
+                bake_appearance=bool(getattr(args, "tf_bake_appearance", False)),
+                render_tf_indices=(set(int(x) for x in args.render_tf_indices.split(',')) if args.render_tf_indices else None))
