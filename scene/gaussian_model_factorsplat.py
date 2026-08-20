@@ -48,7 +48,8 @@ class GaussianModel(DGSModel):
                  tf_lookup_bins: int = 64,
                  tf_lookup_color_scale: float = 1.0,
                  tf_lookup_opacity_scale: float = 4.0,
-                 tf_exact_visibility_gate: bool = False):
+                 tf_exact_visibility_gate: bool = False,
+                 tf_gate_removed_mass: float = 1.0):
         super().__init__(
             sh_degree=sh_degree,
             input_dim=input_dim,
@@ -136,6 +137,10 @@ class GaussianModel(DGSModel):
         self.tf_lookup_color_scale = float(tf_lookup_color_scale)
         self.tf_lookup_opacity_scale = float(tf_lookup_opacity_scale)
         self.tf_exact_visibility_gate = bool(tf_exact_visibility_gate)
+        # Gate a primitive when >= this fraction of its descriptor mass lies on
+        # removed labels. 1.0 reproduces the keep-if-any-survives rule; 0.5 is
+        # a majority-mask rule; ~0 removes any primitive touching a hidden label.
+        self.tf_gate_removed_mass = float(tf_gate_removed_mass)
         self._tf_label_visible = None    # [T, L] authored IsVisible flags
         self._tf_bank_lookup = None      # [T, L, B, 4] raw RGBA, downsampled bins
         self._tf_bank_log_alpha = None   # [T, L, B] log(alpha + TF_ALPHA_EPS)
@@ -630,8 +635,20 @@ class GaussianModel(DGSModel):
                 labs = ids // bins                                        # [N,K]
                 valid = (torch.arange(ids.shape[1], device=ids.device)[None, :]
                          < counts[:, None])
-                on_kept = (~removed_lab[labs]) & valid
-                keep = on_kept.any(dim=1) | (counts == 0)
+                tau = self.tf_gate_removed_mass
+                if tau >= 1.0:  # keep-if-any-survives (exact original rule)
+                    on_kept = (~removed_lab[labs]) & valid
+                    keep = on_kept.any(dim=1) | (counts == 0)
+                    return keep.float().unsqueeze(1)
+                # Mass-threshold rule: descriptor weights (density-based after
+                # refresh, uniform otherwise) say how much of the primitive's
+                # material lies on removed labels.
+                if self._tf_lookup_w is not None:
+                    w = self._tf_lookup_w * valid.float()
+                else:
+                    w = valid.float() / counts.clamp(min=1)[:, None]
+                removed_mass = (removed_lab[labs].float() * w).sum(dim=1)
+                keep = (removed_mass < tau) | (counts == 0)
                 return keep.float().unsqueeze(1)
             kept_mass = (self._tf_lookup_p * (~removed_lab).float()[None, :]).sum(1)
             no_support = self._tf_lookup_p.sum(1) == 0

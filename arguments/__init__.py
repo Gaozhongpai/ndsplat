@@ -156,6 +156,7 @@ class ModelParams(ParamGroup):
         self.tf_lookup_color_scale = 1.0
         self.tf_lookup_opacity_scale = 4.0
         self.tf_exact_visibility_gate = False
+        self.tf_gate_removed_mass = 1.0
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):

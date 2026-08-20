@@ -143,6 +143,7 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
             tf_lookup_color_scale=dataset.tf_lookup_color_scale,
             tf_lookup_opacity_scale=dataset.tf_lookup_opacity_scale,
             tf_exact_visibility_gate=getattr(dataset, "tf_exact_visibility_gate", False),
+            tf_gate_removed_mass=getattr(dataset, "tf_gate_removed_mass", 1.0),
         )
     else:
         raise ValueError(f"Unknown mode: {mode}")
