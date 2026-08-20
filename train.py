@@ -136,6 +136,8 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
             tf_veg_packed=dataset.tf_veg_packed,
             tf_encoder_pooled=getattr(dataset, "tf_encoder_pooled", False),
             tf_encoder_local=getattr(dataset, "tf_encoder_local", False),
+            tf_opacity_log_ratio=getattr(dataset, "tf_opacity_log_ratio", False),
+            tf_log_ratio_encoder=getattr(dataset, "tf_log_ratio_encoder", False),
             tf_lookup_mode=dataset.tf_lookup_mode,
             tf_lookup_bins=dataset.tf_lookup_bins,
             tf_lookup_color_scale=dataset.tf_lookup_color_scale,
@@ -147,7 +149,10 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
     # XClipGS: select the clip operator (dgs mode); default 'analytic' (Ours).
     gaussians.clip_operator = getattr(dataset, "clip_operator", "analytic")
 
-    scene = Scene(dataset, gaussians, opt_params=opt)
+    scene = Scene(
+        dataset, gaussians, opt_params=opt,
+        load_test_cameras=not getattr(dataset, "skip_test_camera_loading", False),
+    )
     # The adapted-VEG scalar must exist before the first training_setup (which
     # validates it); the later --start_checkpoint load_ply keeps it intact
     # because the init PLY has the same Gaussian count and row order.

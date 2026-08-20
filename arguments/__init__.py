@@ -38,9 +38,12 @@ class ParamGroup:
         'tf_use_lookup',
         'tf_aware_prune',
         'tf_veg_packed',
+        'tf_opacity_log_ratio',
+        'tf_log_ratio_encoder',
         'tf_encoder_pooled',
         'tf_encoder_local',
         'tf_refresh_descriptors',
+        'use_jpeg_compression',
     }
 
     def __init__(self, parser: ArgumentParser, name : str, fill_none = False):
@@ -90,6 +93,9 @@ class ModelParams(ParamGroup):
         self.use_rot_scale_l_triangle = False  # If True: use rotation-scale-l_triangle (UBS-style), If False: use diagonal-l_triangle (NDGS-style)
         self.learnable_lambda_opc = False  # If True: make lambda_opc a learnable parameter per Gaussian
         self.use_jpeg_compression = False  # If True: use JPEG compression for images to save GPU memory (slower but memory-efficient)
+        # Training-only memory optimization: test images are loaded later by
+        # the separate rendering/evaluation process.
+        self.skip_test_camera_loading = False
         # DGS view-dependent flags (only used when mode="dgs")
         self.use_view_dependent_pos = True  # Enable view-dependent position shift
         self.use_opacity_pos_decouple = False  # If True: decouple position and opacity by setting lambda_view=lambda_time=0 (not learnable)
@@ -130,6 +136,10 @@ class ModelParams(ParamGroup):
         self.tf_use_lookup = False
         # Adapted VEG reference: per-Gaussian scalar + packed 1D LUT readout.
         self.tf_veg_packed = False
+        # Opacity lookup in log-ratio coordinates (see gaussian_model_factorsplat)
+        self.tf_opacity_log_ratio = False
+        # feed the log-ratio coordinate to the encoder too (width 4 -> 5)
+        self.tf_log_ratio_encoder = False
         # Label-order-invariant pooled TF encoder (per-curve phi + mean pool + psi)
         self.tf_encoder_pooled = False
         # Local functional residual: z_{i,T} = mean_k phi(dR_T at the primitive's

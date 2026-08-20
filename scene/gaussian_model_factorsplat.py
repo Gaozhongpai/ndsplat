@@ -24,6 +24,7 @@ class _TFOnlyCamera:
 
 
 class GaussianModel(DGSModel):
+    TF_ALPHA_EPS = 1.0 / 255.0     # floor for the log-ratio opacity coordinate
     def __init__(self, sh_degree: int, input_dim: int = 6,
                  use_view_dependent_pos: bool = False,
                  use_opacity_pos_decouple: bool = False,
@@ -41,6 +42,8 @@ class GaussianModel(DGSModel):
                  tf_veg_packed: bool = False,
                  tf_encoder_pooled: bool = False,
                  tf_encoder_local: bool = False,
+                 tf_opacity_log_ratio: bool = False,
+                 tf_log_ratio_encoder: bool = False,
                  tf_lookup_mode: str = "joint",
                  tf_lookup_bins: int = 64,
                  tf_lookup_color_scale: float = 1.0,
@@ -106,6 +109,23 @@ class GaussianModel(DGSModel):
         # phi never sees a label id, costs one small table pass per preset, and
         # is bias-free so z_{i,T0} = 0 exactly. Shareable across scenes.
         self.tf_encoder_local = bool(tf_encoder_local)
+        # Opacity conditioning in LOG-RATIO coordinates: the logit is log-odds,
+        # so ell = log((a_T+eps)/(a_T0+eps)) makes the authored family
+        # near-linear -- gamma becomes (gamma-1)*log a, scale becomes log s,
+        # hide becomes ~-6 (subsuming exact visibility gating), reveal ~+6.
+        # With the gain initialised at 1 the model STARTS at the exact
+        # multiplicative rule sigma(o+ell) ~ sigma(o)*(a_T/a_T0) (low-alpha
+        # regime) and learns deviations where the renderer's response is not
+        # proportional. The additive delta stays in use for the color channel.
+        self.tf_opacity_log_ratio = bool(tf_opacity_log_ratio)
+        # Feed the log-ratio coordinate to the ENCODER as well, so the learned
+        # residual reasons in the same coordinates as the physical lookup. Without
+        # it phi sees only the additive delta, whose opacity channel is ~0 exactly
+        # where the multiplicative change is large (a faint sample needing a 21x
+        # amplification has delta_alpha ~ 0.19), so the correction term is
+        # poorly conditioned in the regime the lookup was moved to log space to
+        # fix. Changes the encoder input width 4 -> 5.
+        self.tf_log_ratio_encoder = bool(tf_log_ratio_encoder)
         if self.tf_encoder_local and self.tf_encoder_pooled:
             raise ValueError("tf_encoder_local and tf_encoder_pooled are exclusive")
         self.tf_lookup_mode = tf_lookup_mode
@@ -115,6 +135,9 @@ class GaussianModel(DGSModel):
         self.tf_lookup_color_scale = float(tf_lookup_color_scale)
         self.tf_lookup_opacity_scale = float(tf_lookup_opacity_scale)
         self._tf_bank_lookup = None      # [T, L, B, 4] raw RGBA, downsampled bins
+        self._tf_bank_log_alpha = None   # [T, L, B] log(alpha + TF_ALPHA_EPS)
+        self._tf_gather_op = None        # cached sparse [N, L*B] contraction
+        self._tf_gather_sig = None       # fingerprint of the descriptors it encodes
         self._tf_base_index = 0
         self._tf_label_ids = None
         # Separable mode: dense label distribution + intensity histogram.
@@ -161,6 +184,12 @@ class GaussianModel(DGSModel):
                 keep = np.linspace(0, raw.shape[2] - 1, bins).round().astype(int)
                 raw = raw[:, :, keep, :]
             self._tf_bank_lookup = torch.tensor(raw, dtype=torch.float32, device="cuda")
+            # Precompute log(alpha + eps) for every preset once. The
+            # log-ratio opacity coordinate is a difference of two rows of
+            # this table, so recomputing the logs per call (per training
+            # iteration, and per TF switch at inference) is pure waste.
+            self._tf_bank_log_alpha = torch.log(
+                self._tf_bank_lookup[..., 3] + self.TF_ALPHA_EPS)     # [T,L,B]
             self._tf_label_ids = np.asarray(bank["label_ids"]).astype(int).tolist() \
                 if "label_ids" in bank else None
             if self.tf_use_lookup and self._tf_lookup_gain is None:
@@ -208,9 +237,12 @@ class GaussianModel(DGSModel):
                 self.tf_encoder = nn.Embedding(len(tf_ids), self.tf_rank).cuda()
                 nn.init.zeros_(self.tf_encoder.weight)
             elif self.tf_encoder_local:
-                # phi acts on one RGBA delta sample (4 channels) -> rank
+                # phi acts on one RGBA delta sample (4 channels) -> rank, plus
+                # the log-ratio opacity coordinate when tf_log_ratio_encoder is
+                # set, so the residual shares the lookup's coordinates.
                 self.tf_encoder = nn.Sequential(
-                    nn.Linear(4, self.tf_hidden, bias=False),
+                    nn.Linear(5 if self.tf_log_ratio_encoder else 4,
+                              self.tf_hidden, bias=False),
                     nn.ReLU(inplace=False),
                     nn.Linear(self.tf_hidden, self.tf_rank, bias=False),
                 ).cuda()
@@ -501,6 +533,49 @@ class GaussianModel(DGSModel):
                 < counts[:, None])
         return mask.float() / counts.clamp(min=1)[:, None].float()
 
+    def _gather_operator(self):
+        """Cached sparse [N, L*B] matrix S with S[i, u] = sum_k w_ik [u_ik = u].
+
+        Both local branches contract the SAME (ids, weights) against different
+        per-entry tables, so each is exactly S @ table.  Writing it as one
+        sparse product avoids materializing the [N, K, r] intermediate that the
+        gather form builds (231 MiB forward and again backward at N=280k, K=27,
+        r=8, to produce 8.5 MiB) and measured 15.45 vs 25.76 ms per fwd+bwd.
+
+        ids/counts/weights change only at load, descriptor refresh, pruning and
+        densification, so the operator is rebuilt on demand.  Invalidation keys
+        on a fingerprint of the descriptor tensors rather than on hooks at each
+        mutation site, so a missed site self-heals instead of silently training
+        against stale support.
+        """
+        ids = self._tf_lookup_ids
+        weights = self._sample_weights()
+        bins = self._tf_bank_lookup.shape[2]
+        n_entries = self._tf_bank_lookup.shape[1] * bins
+        sig = (ids.data_ptr(), ids.shape, weights.data_ptr(), weights.shape,
+               int(self._tf_lookup_counts.sum().item()), n_entries)
+        if self._tf_gather_op is not None and self._tf_gather_sig == sig:
+            return self._tf_gather_op
+        n = ids.shape[0]
+        k = ids.shape[1]
+        rows = torch.arange(n, device=ids.device).repeat_interleave(k)
+        cols = ids.long().reshape(-1)
+        vals = weights.reshape(-1)
+        op = torch.sparse_coo_tensor(torch.stack([rows, cols]), vals,
+                                     (n, n_entries)).coalesce()
+        self._tf_gather_op, self._tf_gather_sig = op, sig
+        return op
+
+    def _contract_local(self, tables):
+        """Apply the cached operator to a list of [L*B, c] tables at once.
+
+        Concatenating the tables costs one sparse product instead of one per
+        branch; the caller splits the [N, sum(c)] result.
+        """
+        op = self._gather_operator()
+        wide = torch.cat(tables, dim=1) if len(tables) > 1 else tables[0]
+        return torch.sparse.mm(op, wide)
+
     def _local_tf_code(self, tf_index):
         """Per-Gaussian TF code from the primitive's own (label, bin) samples.
 
@@ -511,12 +586,14 @@ class GaussianModel(DGSModel):
         if bank is None or self._tf_lookup_ids is None:
             raise RuntimeError("local TF encoder requires packed descriptors")
         delta_r = (bank[tf_index] - bank[self._tf_base_index]).reshape(-1, 4)
+        if self.tf_log_ratio_encoder:
+            la = self._tf_bank_log_alpha
+            if la is None:
+                la = torch.log(bank[..., 3] + self.TF_ALPHA_EPS)
+            lr = (la[tf_index] - la[self._tf_base_index]).reshape(-1, 1)
+            delta_r = torch.cat([delta_r, lr.clamp(-6.0, 6.0)], dim=1)  # [L*B,5]
         table = self.tf_encoder(delta_r)                             # [L*B, r]
-        ids = self._tf_lookup_ids.long()                             # [N, K]
-        counts = self._tf_lookup_counts.long()                       # [N]
-        codes = table[ids]                                           # [N, K, r]
-        weights = self._sample_weights()                             # [N, K]
-        return (codes * weights.unsqueeze(-1)).sum(dim=1)            # [N, r]
+        return self._contract_local([table])                         # [N, r]
 
     def _lookup_delta(self, tf_index):
         """Eq. 6: locally relevant RGBA change of the preset relative to the
@@ -526,13 +603,29 @@ class GaussianModel(DGSModel):
         bank = self._tf_bank_lookup
         delta_r = bank[tf_index] - bank[self._tf_base_index]            # [L,B,4]
         if self._tf_lookup_ids is not None:
-            ids = self._tf_lookup_ids.long()                            # [N,K]
-            counts = self._tf_lookup_counts.long()                      # [N]
-            vals = delta_r.reshape(-1, 4)[ids]                          # [N,K,4]
-            weights = self._sample_weights()                            # [N,K]
-            return (vals * weights.unsqueeze(-1)).sum(dim=1)
+            return self._contract_local([delta_r.reshape(-1, 4)])       # [N,4]
         per_label = torch.einsum("nb,lbc->nlc", self._tf_lookup_q, delta_r)
         return torch.einsum("nl,nlc->nc", self._tf_lookup_p, per_label)
+
+    def _log_ratio(self, tf_index, eps=None, clamp=6.0):
+        """[N,1] density-weighted log((a_T+eps)/(a_T0+eps)) over the packed
+        window samples (geometric-mean ratio), clamped to +-clamp.
+
+        Reads the log-alpha table cached at bank load; the per-call logs it
+        replaces cost two [L,B] transcendental passes per training iteration.
+        """
+        eps = self.TF_ALPHA_EPS if eps is None else eps
+        if self._tf_bank_log_alpha is not None:
+            la = self._tf_bank_log_alpha
+        else:                                    # legacy checkpoint path
+            la = torch.log(self._tf_bank_lookup[..., 3] + eps)
+        lr = la[tf_index] - la[self._tf_base_index]                     # [L,B]
+        if self._tf_lookup_ids is not None:
+            out = self._contract_local([lr.reshape(-1, 1)])             # [N,1]
+        else:
+            per_label = torch.einsum("nb,lb->nl", self._tf_lookup_q, lr)
+            out = torch.einsum("nl,nl->n", self._tf_lookup_p, per_label).unsqueeze(1)
+        return out.clamp(-clamp, clamp)
 
     def _initialize_tf_factors(self, count):
         # Only the ACTIVE branches carry parameters: lookup-only runs allocate
@@ -653,8 +746,11 @@ class GaussianModel(DGSModel):
             for row in self._tf_train_rows:
                 logit = self._opacity
                 if self.tf_use_lookup and self.tf_lookup_ready:
-                    delta = self._lookup_delta(row)
-                    logit = logit + self.tf_lookup_opacity_scale *                         self._tf_lookup_gain[3] * delta[:, 3:4]
+                    if self.tf_opacity_log_ratio:
+                        logit = logit + self._tf_lookup_gain[3] * self._log_ratio(row)
+                    else:
+                        delta = self._lookup_delta(row)
+                        logit = logit + self.tf_lookup_opacity_scale * self._tf_lookup_gain[3] * delta[:, 3:4]
                 if self.tf_condition_opacity:
                     if self.tf_encoder_local:
                         offset = torch.einsum("nr,nr->n", self._tf_opacity_factors,
@@ -694,8 +790,12 @@ class GaussianModel(DGSModel):
             C0 = 0.28209479177387814
             dc = dc + (self.tf_lookup_color_scale / C0) * \
                 self._tf_lookup_gain[:3] * delta[:, :3]
-            logit = logit + self.tf_lookup_opacity_scale * \
-                self._tf_lookup_gain[3] * delta[:, 3:4]
+            if self.tf_opacity_log_ratio:
+                # gain init 1 => exact multiplicative prior at the start
+                logit = logit + self._tf_lookup_gain[3] * self._log_ratio(index)
+            else:
+                logit = logit + self.tf_lookup_opacity_scale * \
+                    self._tf_lookup_gain[3] * delta[:, 3:4]
 
         rest = self._features_rest
         if self.tf_encoder_local:
