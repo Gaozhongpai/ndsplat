@@ -8,7 +8,9 @@ on pixels whose reference appearance actually changes.
 
 import argparse
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -16,7 +18,8 @@ from PIL import Image
 
 
 def image(path):
-    return np.asarray(Image.open(path).convert("RGB"), dtype=np.float32) / 255.0
+    with Image.open(path) as handle:
+        return np.asarray(handle.convert("RGB"), dtype=np.float32) / 255.0
 
 
 def mean_or_none(values):
@@ -30,6 +33,8 @@ def main():
     parser.add_argument("--iteration", required=True)
     parser.add_argument("--epsilon", type=float, default=0.04,
                         help="reference RGB max-delta threshold defining changed pixels")
+    parser.add_argument("--workers", type=int, default=min(8, os.cpu_count() or 1),
+                        help="parallel image-pair workers (default: min(8, CPU count))")
     args = parser.parse_args()
 
     frames = json.loads((args.dataset / "transforms_test.json").read_text())["frames"]
@@ -43,19 +48,29 @@ def main():
     if not base_by_camera:
         raise ValueError("no train_00_base test frames found")
 
-    groups = defaultdict(lambda: defaultdict(list))
-    per_tf = defaultdict(lambda: defaultdict(list))
-    pair_count = 0
-    for index, frame in enumerate(frames):
-        if frame["tf_id"] == "train_00_base":
-            continue
-        base_index = base_by_camera.get(frame["source_config"])
-        if base_index is None:
-            raise ValueError(f"no base pair for {frame['source_config']}")
+    # Every base view is reused by all non-base TFs. Loading it once avoids
+    # 40 redundant reads per camera (roughly 24 GB of PNG decode traffic at
+    # 1600^2), while a bounded thread pool parallelizes the independent target
+    # decodes and NumPy reductions. executor.map preserves manifest order, so
+    # aggregation and JSON output remain deterministic.
+    base_images = {
+        index: (image(renders / f"{index:05d}.png"),
+                image(gt / f"{index:05d}.png"))
+        for index in sorted(set(base_by_camera.values()))
+    }
+    jobs = [(index, frame, base_by_camera.get(frame["source_config"]))
+            for index, frame in enumerate(frames)
+            if frame["tf_id"] != "train_00_base"]
+    missing = [frame["source_config"] for _, frame, base_index in jobs
+               if base_index is None]
+    if missing:
+        raise ValueError(f"no base pair for {missing[0]}")
+
+    def measure(job):
+        index, frame, base_index = job
         pred_t = image(renders / f"{index:05d}.png")
-        pred_b = image(renders / f"{base_index:05d}.png")
         gt_t = image(gt / f"{index:05d}.png")
-        gt_b = image(gt / f"{base_index:05d}.png")
+        pred_b, gt_b = base_images[base_index]
         reference_delta = gt_t - gt_b
         predicted_delta = pred_t - pred_b
         mask = np.max(np.abs(reference_delta), axis=-1) > args.epsilon
@@ -68,15 +83,23 @@ def main():
             "unchanged_delta_leak": (float(np.abs(predicted_delta)[unchanged].mean())
                                      if unchanged.any() else None),
         }
-        keys = (f"split:{frame['tf_split']}", f"family:{frame['tf_family']}")
-        for key in keys:
+        return frame, values
+
+    groups = defaultdict(lambda: defaultdict(list))
+    per_tf = defaultdict(lambda: defaultdict(list))
+    workers = max(1, args.workers)
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        measurements = executor.map(measure, jobs)
+        for frame, values in measurements:
+            keys = (f"split:{frame['tf_split']}", f"family:{frame['tf_family']}")
+            for key in keys:
+                for metric, value in values.items():
+                    if value is not None:
+                        groups[key][metric].append(value)
             for metric, value in values.items():
                 if value is not None:
-                    groups[key][metric].append(value)
-        for metric, value in values.items():
-            if value is not None:
-                per_tf[frame["tf_id"]][metric].append(value)
-        pair_count += 1
+                    per_tf[frame["tf_id"]][metric].append(value)
+    pair_count = len(jobs)
 
     metric_names = ("affected_fraction", "delta_l1_full", "delta_l1_changed",
                     "unchanged_delta_leak")

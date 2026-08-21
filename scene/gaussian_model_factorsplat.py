@@ -40,16 +40,23 @@ class GaussianModel(DGSModel):
                  tf_aware_prune: bool = True,
                  tf_use_lookup: bool = False,
                  tf_veg_packed: bool = False,
+                 tf_veg_max_gaussians: int = 0,
                  tf_encoder_pooled: bool = False,
                  tf_encoder_local: bool = False,
+                 tf_global_context_rank: int = 0,
+                 tf_opacity_alpha_only: bool = False,
+                 tf_opacity_alpha_identity_gate: bool = True,
+                 tf_opacity_train_envelope: bool = False,
+                 tf_opacity_residual_clip: float = 0.0,
                  tf_opacity_log_ratio: bool = False,
                  tf_log_ratio_encoder: bool = False,
                  tf_lookup_mode: str = "joint",
                  tf_lookup_bins: int = 64,
                  tf_lookup_color_scale: float = 1.0,
                  tf_lookup_opacity_scale: float = 4.0,
-                 tf_exact_visibility_gate: bool = False,
-                 tf_gate_removed_mass: float = 1.0):
+                 tf_exact_visibility_gate: bool = True,
+                 tf_soft_visibility_gate: bool = False,
+                 tf_gate_removed_mass: float = 0.5):
         super().__init__(
             sh_degree=sh_degree,
             input_dim=input_dim,
@@ -85,14 +92,21 @@ class GaussianModel(DGSModel):
         self._tf_nearest_train = None
         self.tf_aware_prune = bool(tf_aware_prune)
         self.tf_use_lookup = bool(tf_use_lookup)
-        # Adapted VEG reference: one learnable scalar u_i per Gaussian; DC
-        # color and opacity are read from the packed 1D LUT T'(u)=bank[t]
-        # flattened over (label, bin). Excludes factors/encoder/lookup.
+        # Adapted VEG reference.  Each Gaussian keeps a fixed categorical
+        # region and learns one bounded within-region intensity coordinate;
+        # DC color and opacity are read from that region's TF curve.  Fixing
+        # the region prevents optimization from crossing discontinuous packed
+        # label blocks.  This excludes factors/encoder/lookup.
         self.tf_veg_packed = bool(tf_veg_packed)
+        self.tf_veg_max_gaussians = int(tf_veg_max_gaussians)
+        if self.tf_veg_max_gaussians < 0:
+            raise ValueError("tf_veg_max_gaussians must be >= 0")
         if self.tf_veg_packed and (tf_condition_color or tf_condition_opacity
                                    or tf_use_lookup):
             raise ValueError("tf_veg_packed excludes the FactorSplat branches")
-        self._tf_veg_u = None            # [N, 1] raw scalar (sigmoid -> LUT pos)
+        self._tf_veg_v = None            # [N,1] raw logit -> within-region bin
+        self._tf_veg_label = None        # [N] fixed TF-bank region column
+        self._tf_veg_has_support = None  # [N] descriptor contains foreground
         self._tf_baked_state = None       # pre-bake tensors + branch flags
         self._tf_baked_index = None       # preset currently baked in, if any
         if tf_lookup_mode not in ("joint", "separable"):
@@ -111,6 +125,28 @@ class GaussianModel(DGSModel):
         # phi never sees a label id, costs one small table pass per preset, and
         # is bias-free so z_{i,T0} = 0 exactly. Shareable across scenes.
         self.tf_encoder_local = bool(tf_encoder_local)
+        # Concatenate a local material code with a compact global TF summary
+        # while keeping the total factor rank fixed. This tests non-local
+        # context without increasing per-Gaussian factor storage.
+        self.tf_global_context_rank = int(tf_global_context_rank)
+        if not 0 <= self.tf_global_context_rank < self.tf_rank:
+            raise ValueError("tf_global_context_rank must be in [0, tf_rank)")
+        if self.tf_global_context_rank and not self.tf_encoder_local:
+            raise ValueError("tf_global_context_rank requires tf_encoder_local")
+        if self.tf_global_context_rank and self.tf_encoder_type != "functional":
+            raise ValueError("global TF context requires the functional encoder")
+        self.tf_local_rank = self.tf_rank - self.tf_global_context_rank
+        self.tf_context_encoder = None
+        self.tf_context_encoder_psi = None
+        self._tf_context_descriptors = None
+        self.tf_opacity_alpha_only = bool(tf_opacity_alpha_only)
+        self.tf_opacity_alpha_identity_gate = bool(
+            tf_opacity_alpha_identity_gate)
+        self.tf_opacity_train_envelope = bool(tf_opacity_train_envelope)
+        self._tf_opacity_envelope = None
+        self.tf_opacity_residual_clip = float(tf_opacity_residual_clip)
+        if self.tf_opacity_residual_clip < 0:
+            raise ValueError("tf_opacity_residual_clip must be >= 0")
         # Opacity conditioning in LOG-RATIO coordinates: the logit is log-odds,
         # so ell = log((a_T+eps)/(a_T0+eps)) makes the authored family
         # near-linear -- gamma becomes (gamma-1)*log a, scale becomes log s,
@@ -130,6 +166,8 @@ class GaussianModel(DGSModel):
         self.tf_log_ratio_encoder = bool(tf_log_ratio_encoder)
         if self.tf_encoder_local and self.tf_encoder_pooled:
             raise ValueError("tf_encoder_local and tf_encoder_pooled are exclusive")
+        if self.tf_opacity_alpha_only and not self.tf_encoder_local:
+            raise ValueError("tf_opacity_alpha_only requires tf_encoder_local")
         self.tf_lookup_mode = tf_lookup_mode
         if self.tf_encoder_local and self.tf_lookup_mode != "joint":
             raise ValueError("tf_encoder_local requires packed joint descriptors")
@@ -137,6 +175,7 @@ class GaussianModel(DGSModel):
         self.tf_lookup_color_scale = float(tf_lookup_color_scale)
         self.tf_lookup_opacity_scale = float(tf_lookup_opacity_scale)
         self.tf_exact_visibility_gate = bool(tf_exact_visibility_gate)
+        self.tf_soft_visibility_gate = bool(tf_soft_visibility_gate)
         # Gate a primitive when >= this fraction of its descriptor mass lies on
         # removed labels. 1.0 reproduces the keep-if-any-survives rule; 0.5 is
         # a majority-mask rule; ~0 removes any primitive touching a hidden label.
@@ -215,6 +254,11 @@ class GaussianModel(DGSModel):
         sample_count = min(self.tf_samples, rgba.shape[2])
         sample_indices = np.linspace(0, rgba.shape[2] - 1, sample_count).round().astype(int)
         sampled = rgba[:, :, sample_indices, :]                      # [T,L,S',4]
+        # Preserve intensity order within each curve, then pool across curves.
+        # This makes the global summary independent of region ordering and
+        # compatible with different label counts.
+        context_descriptors = sampled.reshape(sampled.shape[0],
+                                               sampled.shape[1], -1)
         if self.tf_encoder_pooled:
             descriptors = sampled.reshape(sampled.shape[0], sampled.shape[1], -1)
         else:
@@ -226,7 +270,12 @@ class GaussianModel(DGSModel):
         # Centering gives the authored base TF an exact zero code. Bias-free
         # layers consequently preserve the input dGS checkpoint at T_base.
         descriptors = descriptors - descriptors[base_index:base_index + 1]
+        context_descriptors = (
+            context_descriptors
+            - context_descriptors[base_index:base_index + 1])
         self._tf_descriptors = torch.tensor(descriptors, dtype=torch.float32, device="cuda")
+        self._tf_context_descriptors = torch.tensor(
+            context_descriptors, dtype=torch.float32, device="cuda")
         self._tf_ids = tf_ids
         input_dim = int(descriptors.shape[-1])
         # Seen-only baseline bookkeeping: rows whose id marks a training preset,
@@ -257,8 +306,20 @@ class GaussianModel(DGSModel):
                     nn.Linear(5 if self.tf_log_ratio_encoder else 4,
                               self.tf_hidden, bias=False),
                     nn.ReLU(inplace=False),
-                    nn.Linear(self.tf_hidden, self.tf_rank, bias=False),
+                    nn.Linear(self.tf_hidden, self.tf_local_rank, bias=False),
                 ).cuda()
+                if self.tf_global_context_rank:
+                    curve_dim = int(context_descriptors.shape[-1])
+                    self.tf_context_encoder = nn.Sequential(
+                        nn.Linear(curve_dim, self.tf_hidden, bias=False),
+                        nn.ReLU(inplace=False),
+                        nn.Linear(self.tf_hidden, self.tf_hidden, bias=False),
+                    ).cuda()
+                    self.tf_context_encoder_psi = nn.Sequential(
+                        nn.ReLU(inplace=False),
+                        nn.Linear(self.tf_hidden,
+                                  self.tf_global_context_rank, bias=False),
+                    ).cuda()
             elif self.tf_encoder_pooled:
                 self.tf_encoder = nn.Sequential(
                     nn.Linear(input_dim, self.tf_hidden, bias=False),
@@ -356,8 +417,13 @@ class GaussianModel(DGSModel):
               f"({covered:.1%} with foreground support, {samples}) from {path}")
 
     def init_veg_scalar(self, path):
-        """Initialize u_i from the packed volume descriptor (majority id of
-        the window samples), mapped through the inverse sigmoid."""
+        """Initialize a fixed region and bounded intensity for adapted VEG.
+
+        The region is the density-weighted majority label in the primitive's
+        initialization window.  Only the intensity coordinate inside that
+        region is learnable.  This preserves categorical material identity and
+        forbids interpolation across adjacent packed region curves.
+        """
         if not self.tf_veg_packed:
             return
         payload = dict(np.load(path))
@@ -368,27 +434,73 @@ class GaussianModel(DGSModel):
         if ids.shape[0] != self.get_xyz.shape[0]:
             raise ValueError("veg init descriptors do not match Gaussian count")
         col, hu_bin = ids // native, ids % native
-        packed = col * bins + hu_bin // max(native // bins, 1)      # [N,K]
-        K = packed.shape[1]
+        K = ids.shape[1]
         valid = np.arange(K)[None, :] < counts[:, None]
-        mean_u = (packed * valid).sum(1) / np.maximum(counts, 1)
-        # u is stored directly in LUT-index units and clamped at read time.
-        # A sigmoid over the full span (3072 entries here) makes one optimizer
-        # step move u by a small fraction of a bin, which stalls learning on
-        # sparse LUTs (heart: 88% zero-alpha entries).
-        raw = mean_u.astype(np.float32)[:, None]
-        self._tf_veg_u = nn.Parameter(
+        if "sample_weights" in payload:
+            weights = np.asarray(payload["sample_weights"], dtype=np.float32) / 255.0
+            if weights.shape != ids.shape:
+                raise ValueError("sample_weights shape does not match sample_ids")
+            weights *= valid
+            den = weights.sum(1, keepdims=True)
+            weights = np.divide(weights, den, out=np.zeros_like(weights),
+                                where=den > 0)
+        else:
+            weights = valid.astype(np.float32) / np.maximum(counts, 1)[:, None]
+
+        label_count = self._tf_bank_lookup.shape[1]
+        if np.any(col[valid] < 0) or np.any(col[valid] >= label_count):
+            raise ValueError("VEG descriptor label column lies outside TF bank")
+        mass = np.zeros((ids.shape[0], label_count), dtype=np.float32)
+        rows = np.arange(ids.shape[0])
+        for k in range(K):
+            np.add.at(mass, (rows, np.clip(col[:, k], 0, label_count - 1)),
+                      weights[:, k])
+        label = mass.argmax(axis=1).astype(np.int64)
+        has_support = counts > 0
+
+        on_label = valid & (col == label[:, None])
+        label_weights = weights * on_label
+        label_den = label_weights.sum(1)
+        native_position = (hu_bin.astype(np.float32) * (bins - 1)
+                           / max(native - 1, 1))
+        local_bin = np.divide(
+            (native_position * label_weights).sum(1), label_den,
+            out=np.zeros(ids.shape[0], dtype=np.float32), where=label_den > 0)
+        fraction = np.clip(local_bin / max(bins - 1, 1), 1e-3, 1.0 - 1e-3)
+        raw = np.log(fraction / (1.0 - fraction)).astype(np.float32)[:, None]
+        self._tf_veg_v = nn.Parameter(
             torch.tensor(raw, device="cuda").requires_grad_(True))
-        print(f"Initialized VEG packed scalars for {len(raw)} Gaussians from {path}")
+        self._tf_veg_label = torch.tensor(label, dtype=torch.int16, device="cuda")
+        self._tf_veg_has_support = torch.tensor(
+            has_support, dtype=torch.bool, device="cuda")
+        print(f"Initialized region-constrained VEG coordinates for {len(raw)} "
+              f"Gaussians from {path}")
 
     def _veg_rgba(self, tf_index):
-        """Linear interpolation of the packed 1D LUT at u_i. Returns [N,4]."""
-        lut = self._tf_bank_lookup[tf_index].reshape(-1, 4)          # [L*B, 4]
-        span = lut.shape[0] - 1
-        u = self._tf_veg_u.squeeze(1).clamp(0.0, float(span))        # [N]
-        i0 = u.floor().long().clamp(0, span - 1)
-        w = (u - i0.float()).unsqueeze(1)
-        return lut[i0] * (1 - w) + lut[i0 + 1] * w
+        """Interpolate within each Gaussian's fixed region curve. Returns [N,4]."""
+        if self._tf_veg_v is None or self._tf_veg_label is None:
+            raise RuntimeError("region-constrained VEG coordinates are uninitialized")
+        lut = self._tf_bank_lookup[tf_index]                         # [L,B,4]
+        bins = lut.shape[1]
+        if bins < 2:
+            raise ValueError("adapted VEG requires at least two intensity bins")
+        local = torch.sigmoid(self._tf_veg_v.squeeze(1)) * (bins - 1)
+        b0 = local.floor().long().clamp(0, bins - 2)
+        w = (local - b0.float()).unsqueeze(1)
+        label = self._tf_veg_label.long()
+        return lut[label, b0] * (1 - w) + lut[label, b0 + 1] * w
+
+    def _veg_visibility(self, tf_index):
+        """Exact authored visibility for the fixed adapted-VEG region label."""
+        n = self.get_xyz.shape[0]
+        if self._tf_label_visible is None or self._tf_veg_label is None:
+            return torch.ones(n, 1, device=self.get_xyz.device)
+        removed = ((~self._tf_label_visible[tf_index])
+                   & self._tf_label_visible[self._tf_base_index])
+        suppress = removed[self._tf_veg_label.long()]
+        if self._tf_veg_has_support is not None:
+            suppress = suppress & self._tf_veg_has_support
+        return (~suppress).float().unsqueeze(1)
 
     @torch.no_grad()
     def bake_appearance(self, tf_index):
@@ -589,7 +701,7 @@ class GaussianModel(DGSModel):
         wide = torch.cat(tables, dim=1) if len(tables) > 1 else tables[0]
         return torch.sparse.mm(op, wide)
 
-    def _local_tf_code(self, tf_index):
+    def _local_tf_code(self, tf_index, opacity_only=False):
         """Per-Gaussian TF code from the primitive's own (label, bin) samples.
 
         phi is evaluated ONCE over the (L*B, 4) delta table for this preset, then
@@ -599,6 +711,12 @@ class GaussianModel(DGSModel):
         if bank is None or self._tf_lookup_ids is None:
             raise RuntimeError("local TF encoder requires packed descriptors")
         delta_r = (bank[tf_index] - bank[self._tf_base_index]).reshape(-1, 4)
+        if opacity_only:
+            # A color-only authored edit must not alter extinction. Keeping the
+            # alpha coordinate and zeroing RGB before the bias-free encoder
+            # gives that invariant exactly without another encoder or factors.
+            delta_r = torch.cat((torch.zeros_like(delta_r[:, :3]),
+                                 delta_r[:, 3:4]), dim=1)
         if self.tf_log_ratio_encoder:
             la = self._tf_bank_log_alpha
             if la is None:
@@ -607,6 +725,58 @@ class GaussianModel(DGSModel):
             delta_r = torch.cat([delta_r, lr.clamp(-6.0, 6.0)], dim=1)  # [L*B,5]
         table = self.tf_encoder(delta_r)                             # [L*B, r]
         return self._contract_local([table])                         # [N, r]
+
+    def _alpha_curve_changed(self, tf_index):
+        """Return whether the authored alpha table differs from the base TF."""
+        bank = self._tf_bank_lookup
+        if bank is None:
+            raise RuntimeError("alpha-identity gating requires a loaded TF bank")
+        return bool(torch.any(
+            bank[tf_index, ..., 3] != bank[self._tf_base_index, ..., 3]))
+
+    def _bounded_opacity_offset(self, opacity_delta):
+        """Convert the factor response to a bounded opacity-logit offset."""
+        offset = self.tf_opacity_scale * opacity_delta
+        if self.tf_opacity_residual_clip > 0:
+            offset = offset.clamp(-self.tf_opacity_residual_clip,
+                                  self.tf_opacity_residual_clip)
+        return offset
+
+    def _opacity_factor_offset(self, tf_index):
+        """Learned opacity-logit correction for one TF, before envelopes."""
+        if self.tf_encoder_local:
+            code = self._local_context_code(
+                tf_index, opacity_only=self.tf_opacity_alpha_only)
+            delta = torch.einsum("nr,nr->n", self._tf_opacity_factors, code)
+        else:
+            code = self._code_for_index(tf_index)
+            delta = torch.einsum("nr,r->n", self._tf_opacity_factors, code)
+        return self._bounded_opacity_offset(delta)
+
+    @torch.no_grad()
+    def _opacity_training_envelope(self):
+        """Per-Gaussian min/max learned correction over training TFs.
+
+        The cache is intended for a frozen checkpoint at inference. It adds no
+        fitted parameter and leaves every training-preset response unchanged.
+        """
+        cached = self._tf_opacity_envelope
+        if cached is not None and cached[0].shape[0] == self.get_xyz.shape[0]:
+            return cached
+        if not self._tf_train_rows:
+            raise RuntimeError("opacity training envelope needs TF split metadata")
+        lower = upper = None
+        for row in self._tf_train_rows:
+            if (self.tf_opacity_alpha_identity_gate
+                    and not self._alpha_curve_changed(row)):
+                offset = torch.zeros(
+                    self.get_xyz.shape[0], device=self.get_xyz.device)
+            else:
+                offset = self._opacity_factor_offset(row)
+            lower = offset if lower is None else torch.minimum(lower, offset)
+            upper = offset if upper is None else torch.maximum(upper, offset)
+        self._tf_opacity_envelope = (lower, upper)
+        return self._tf_opacity_envelope
 
     def _authored_visibility(self, tf_index):
         """[N,1] float gate: 0 where the preset REMOVES the primitive's material
@@ -636,6 +806,15 @@ class GaussianModel(DGSModel):
                 valid = (torch.arange(ids.shape[1], device=ids.device)[None, :]
                          < counts[:, None])
                 tau = self.tf_gate_removed_mass
+                if self.tf_soft_visibility_gate:
+                    if self._tf_lookup_w is not None:
+                        w = self._tf_lookup_w * valid.float()
+                    else:
+                        w = valid.float() / counts.clamp(min=1)[:, None]
+                    removed_mass = (removed_lab[labs].float() * w).sum(dim=1)
+                    surviving = (1.0 - removed_mass).clamp(0.0, 1.0)
+                    return torch.where(counts > 0, surviving,
+                                       torch.ones_like(surviving)).unsqueeze(1)
                 if tau >= 1.0:  # keep-if-any-survives (exact original rule)
                     on_kept = (~removed_lab[labs]) & valid
                     keep = on_kept.any(dim=1) | (counts == 0)
@@ -652,6 +831,11 @@ class GaussianModel(DGSModel):
                 return keep.float().unsqueeze(1)
             kept_mass = (self._tf_lookup_p * (~removed_lab).float()[None, :]).sum(1)
             no_support = self._tf_lookup_p.sum(1) == 0
+            if self.tf_soft_visibility_gate:
+                total_mass = self._tf_lookup_p.sum(1).clamp(min=1e-12)
+                surviving = (kept_mass / total_mass).clamp(0.0, 1.0)
+                return torch.where(no_support, torch.ones_like(surviving),
+                                   surviving).unsqueeze(1)
             return ((kept_mass > 0) | no_support).float().unsqueeze(1)
 
         alpha = self._tf_bank_lookup[tf_index][..., 3]                   # [L,B]
@@ -734,7 +918,8 @@ class GaussianModel(DGSModel):
             raise RuntimeError("FactorSplat requires tf_bank.npz in the dataset root")
         if self.tf_factors_active and self.tf_encoder is None:
             raise RuntimeError("residual branch active but TF encoder was never built")
-        if self.tf_veg_packed and self._tf_veg_u is None:
+        if (self.tf_veg_packed
+                and (self._tf_veg_v is None or self._tf_veg_label is None)):
             raise RuntimeError("tf_veg_packed requires init_veg_scalar or a sidecar")
         if getattr(training_args, "densification_strategy", "standard") != "standard":
             raise ValueError("FactorSplat currently supports standard densification only")
@@ -770,19 +955,20 @@ class GaussianModel(DGSModel):
             enc_params = list(self.tf_encoder.parameters())
             if self.tf_encoder_psi is not None:
                 enc_params += list(self.tf_encoder_psi.parameters())
+            if self.tf_context_encoder is not None:
+                enc_params += list(self.tf_context_encoder.parameters())
+                enc_params += list(self.tf_context_encoder_psi.parameters())
             self.optimizer.add_param_group({
                 "params": enc_params,
                 "lr": training_args.tf_encoder_lr,
                 "name": "tf_encoder",
                 "per_gaussian": False,
             })
-        if self.tf_veg_packed and self._tf_veg_u is not None:
+        if self.tf_veg_packed and self._tf_veg_v is not None:
             self.optimizer.add_param_group({
-                "params": [self._tf_veg_u],
-                # u lives in LUT-index units, so its step size is set in bins
-                # per iteration rather than reusing the factor lr.
-                "lr": getattr(training_args, "tf_veg_u_lr", 0.5),
-                "name": "tf_veg_u",
+                "params": [self._tf_veg_v],
+                "lr": getattr(training_args, "tf_veg_v_lr", 0.01),
+                "name": "tf_veg_v",
                 "per_gaussian": True,
             })
         if self.tf_use_lookup and self._tf_lookup_gain is not None:
@@ -807,19 +993,38 @@ class GaussianModel(DGSModel):
             return self.tf_encoder_psi(self.tf_encoder(row).mean(dim=0))
         return self.tf_encoder(row)
 
+    def _context_code_for_index(self, index):
+        """Permutation-invariant scene-wide summary of all authored curves."""
+        if not self.tf_global_context_rank:
+            return None
+        curves = self._tf_context_descriptors[index]                 # [L,4S]
+        return self.tf_context_encoder_psi(
+            self.tf_context_encoder(curves).mean(dim=0))             # [r_g]
+
+    def _local_context_code(self, index, opacity_only=False):
+        """Concatenate local and global codes without increasing tf_rank."""
+        local = self._local_tf_code(index, opacity_only=opacity_only)
+        if not self.tf_global_context_rank:
+            return local
+        context = self._context_code_for_index(index)
+        context = context.unsqueeze(0).expand(local.shape[0], -1)
+        return torch.cat((local, context), dim=1)                     # [N,r]
+
     def get_pruning_opacity(self):
         """TF-aware pruning opacity: max over TRAINING presets of the
         conditioned opacity (view gate excluded; it is TF-independent).
         A primitive that some training preset reveals must not be deleted
         because the shared/base logit alone falls below the threshold --
         that would permanently remove anatomy other presets need."""
-        if self.tf_veg_packed and self._tf_veg_u is not None:
+        if self.tf_veg_packed and self._tf_veg_v is not None:
             if not self.tf_aware_prune or not self._tf_train_rows:
-                return self._veg_rgba(self._tf_base_index)[:, 3:4]
+                alpha = self._veg_rgba(self._tf_base_index)[:, 3:4]
+                return alpha * self._veg_visibility(self._tf_base_index)
             with torch.no_grad():
                 best = None
                 for row in self._tf_train_rows:
-                    alpha = self._veg_rgba(row)[:, 3:4]
+                    alpha = (self._veg_rgba(row)[:, 3:4]
+                             * self._veg_visibility(row))
                     best = alpha if best is None else torch.maximum(best, alpha)
                 return best
         if (not self.tf_aware_prune or self._tf_descriptors is None
@@ -836,15 +1041,38 @@ class GaussianModel(DGSModel):
                         delta = self._lookup_delta(row)
                         logit = logit + self.tf_lookup_opacity_scale * self._tf_lookup_gain[3] * delta[:, 3:4]
                 if self.tf_condition_opacity:
-                    if self.tf_encoder_local:
-                        offset = torch.einsum("nr,nr->n", self._tf_opacity_factors,
-                                              self._local_tf_code(row))
-                    else:
-                        code = self._code_for_index(row)
-                        offset = torch.einsum("nr,r->n", self._tf_opacity_factors, code)
-                    logit = logit + self.tf_opacity_scale * offset[:, None]
+                    if (not self.tf_opacity_alpha_identity_gate
+                            or self._alpha_curve_changed(row)):
+                        if self.tf_encoder_local:
+                            offset = torch.einsum(
+                                "nr,nr->n", self._tf_opacity_factors,
+                                self._local_context_code(
+                                    row,
+                                    opacity_only=self.tf_opacity_alpha_only))
+                        else:
+                            code = self._code_for_index(row)
+                            offset = torch.einsum(
+                                "nr,r->n", self._tf_opacity_factors, code)
+                        logit = logit + self._bounded_opacity_offset(
+                            offset)[:, None]
                 best_logit = logit if best_logit is None                     else torch.maximum(best_logit, logit)
             return torch.sigmoid(best_logit)
+
+    def densify_and_prune(self, max_grad, min_opacity, extent,
+                          max_screen_size, iteration):
+        super().densify_and_prune(
+            max_grad, min_opacity, extent, max_screen_size, iteration)
+        cap = self.tf_veg_max_gaussians if self.tf_veg_packed else 0
+        count = self.get_xyz.shape[0]
+        if cap > 0 and count > cap:
+            # Use the same max-over-training-TFs opacity that drives semantic
+            # pruning, retaining the most visible primitives under the budget.
+            score = self.get_pruning_opacity().squeeze(1)
+            keep = torch.topk(score, cap, sorted=False).indices
+            prune = torch.ones(count, dtype=torch.bool, device=score.device)
+            prune[keep] = False
+            self.prune_points(prune)
+            print(f"[ITER {iteration}] capped adapted VEG at {cap} Gaussians")
 
     def conditioned_appearance(self, viewpoint_camera, opacity_scale):
         index = getattr(viewpoint_camera, "tf_index", None)
@@ -854,12 +1082,14 @@ class GaussianModel(DGSModel):
         if not 0 <= index < self._tf_descriptors.shape[0]:
             raise IndexError(f"tf_index={index} outside bank of size "
                              f"{self._tf_descriptors.shape[0]}")
-        if self.tf_veg_packed and self._tf_veg_u is not None:
+        if self.tf_veg_packed and self._tf_veg_v is not None:
             rgba = self._veg_rgba(index)
             C0 = 0.28209479177387814
             dc = (rgba[:, :3] - 0.5) / C0
             shs = torch.cat((dc[:, None, :], self._features_rest), dim=1)
             opacity = rgba[:, 3:4].clamp(1e-5, 1 - 1e-5)
+            if self.tf_exact_visibility_gate:
+                opacity = opacity * self._veg_visibility(index)
             return shs, opacity * opacity_scale
 
         code = (self._code_for_index(index)
@@ -883,7 +1113,7 @@ class GaussianModel(DGSModel):
 
         rest = self._features_rest
         if self.tf_encoder_local:
-            zi = self._local_tf_code(index)                           # [N, r]
+            zi = self._local_context_code(index)                      # [N, r]
         if self.tf_condition_color:
             color_delta = self.tf_color_scale * torch.tanh(
                 torch.einsum("nkcr,nr->nkc", self._tf_color_factors, zi)
@@ -897,11 +1127,23 @@ class GaussianModel(DGSModel):
         shs = torch.cat((dc[:, None, :], rest), dim=1)
 
         if self.tf_condition_opacity:
-            opacity_delta = (
-                torch.einsum("nr,nr->n", self._tf_opacity_factors, zi)
-                if self.tf_encoder_local else
-                torch.einsum("nr,r->n", self._tf_opacity_factors, code))
-            logit = logit + self.tf_opacity_scale * opacity_delta[:, None]
+            if (not self.tf_opacity_alpha_identity_gate
+                    or self._alpha_curve_changed(index)):
+                if self.tf_encoder_local:
+                    opacity_code = (
+                        self._local_context_code(index, opacity_only=True)
+                        if self.tf_opacity_alpha_only else zi)
+                    opacity_delta = torch.einsum(
+                        "nr,nr->n", self._tf_opacity_factors, opacity_code)
+                else:
+                    opacity_delta = torch.einsum(
+                        "nr,r->n", self._tf_opacity_factors, code)
+                opacity_offset = self._bounded_opacity_offset(opacity_delta)
+                if self.tf_opacity_train_envelope:
+                    lower, upper = self._opacity_training_envelope()
+                    opacity_offset = torch.maximum(
+                        lower, torch.minimum(upper, opacity_offset))
+                logit = logit + opacity_offset[:, None]
         opacity = torch.sigmoid(logit)
         if self.tf_exact_visibility_gate and self.tf_lookup_ready \
                 and self._tf_bank_lookup is not None:
@@ -909,7 +1151,7 @@ class GaussianModel(DGSModel):
         return shs, opacity * opacity_scale
 
     def reset_opacity(self):
-        # Adapted VEG: opacity is read from the LUT at u_i; the shared logit
+        # Adapted VEG: opacity is read from the LUT at (label_i, v_i); the shared logit
         # is unused and receives no gradients, so it has no optimizer state to
         # rewrite (and resetting it would do nothing anyway).
         if self.tf_veg_packed:
@@ -922,8 +1164,12 @@ class GaussianModel(DGSModel):
             self._tf_color_factors = tensors["tf_color_factors"]
         if "tf_opacity_factors" in tensors:
             self._tf_opacity_factors = tensors["tf_opacity_factors"]
-        if "tf_veg_u" in tensors:
-            self._tf_veg_u = tensors["tf_veg_u"]
+        if "tf_veg_v" in tensors:
+            self._tf_veg_v = tensors["tf_veg_v"]
+        for name in ("_tf_veg_label", "_tf_veg_has_support"):
+            tensor = getattr(self, name)
+            if tensor is not None and tensor.shape[0] == mask.shape[0]:
+                setattr(self, name, tensor[mask])
         for name in ("_tf_lookup_p", "_tf_lookup_q",
                      "_tf_lookup_ids", "_tf_lookup_counts", "_tf_lookup_w"):
             tensor = getattr(self, name)
@@ -978,11 +1224,16 @@ class GaussianModel(DGSModel):
                     "tf_opacity_factors", "_tf_opacity_factors",
                     self._tf_opacity_factors.detach()[nearest].clone(),
                 )
-            if self._tf_veg_u is not None:
+            if self._tf_veg_v is not None:
                 self._append_factor(
-                    "tf_veg_u", "_tf_veg_u",
-                    self._tf_veg_u.detach()[nearest].clone(),
+                    "tf_veg_v", "_tf_veg_v",
+                    self._tf_veg_v.detach()[nearest].clone(),
                 )
+                self._tf_veg_label = torch.cat(
+                    (self._tf_veg_label, self._tf_veg_label[nearest]), dim=0)
+                self._tf_veg_has_support = torch.cat(
+                    (self._tf_veg_has_support,
+                     self._tf_veg_has_support[nearest]), dim=0)
             for name in ("_tf_lookup_p", "_tf_lookup_q",
                          "_tf_lookup_ids", "_tf_lookup_counts", "_tf_lookup_w"):
                 tensor = getattr(self, name)
@@ -997,7 +1248,7 @@ class GaussianModel(DGSModel):
     def save_ply(self, path):
         super().save_ply(path)
         payload = {
-            "version": 2,
+            "version": 3,
             "tf_rank": self.tf_rank,
             "tf_hidden": self.tf_hidden,
             "tf_samples": self.tf_samples,
@@ -1008,7 +1259,14 @@ class GaussianModel(DGSModel):
             "tf_color_sh_degree": self.tf_color_sh_degree,
             "tf_use_lookup": self.tf_use_lookup,
             "tf_encoder_local": self.tf_encoder_local,
+            "tf_global_context_rank": self.tf_global_context_rank,
+            "tf_opacity_alpha_only": self.tf_opacity_alpha_only,
+            "tf_opacity_alpha_identity_gate": self.tf_opacity_alpha_identity_gate,
+            "tf_opacity_train_envelope": self.tf_opacity_train_envelope,
+            "tf_opacity_residual_clip": self.tf_opacity_residual_clip,
+            "tf_soft_visibility_gate": self.tf_soft_visibility_gate,
             "tf_veg_packed": self.tf_veg_packed,
+            "tf_veg_max_gaussians": self.tf_veg_max_gaussians,
             "tf_lookup_mode": self.tf_lookup_mode if self.tf_use_lookup else None,
         }
         # Only ACTIVE branches are stored: no residual factors or encoder for
@@ -1020,8 +1278,18 @@ class GaussianModel(DGSModel):
         if self.tf_encoder is not None:
             payload["encoder"] = {key: value.detach().cpu()
                                   for key, value in self.tf_encoder.state_dict().items()}
-        if self.tf_veg_packed and self._tf_veg_u is not None:
-            payload["veg_u"] = self._tf_veg_u.detach().cpu()
+        if self.tf_context_encoder is not None:
+            payload["context_encoder"] = {
+                key: value.detach().cpu()
+                for key, value in self.tf_context_encoder.state_dict().items()}
+            payload["context_encoder_psi"] = {
+                key: value.detach().cpu()
+                for key, value in self.tf_context_encoder_psi.state_dict().items()}
+        if self.tf_veg_packed and self._tf_veg_v is not None:
+            payload["veg_coordinate_mode"] = "fixed_label_logit_v1"
+            payload["veg_v"] = self._tf_veg_v.detach().cpu()
+            payload["veg_label"] = self._tf_veg_label.detach().cpu()
+            payload["veg_has_support"] = self._tf_veg_has_support.detach().cpu()
         if self.tf_use_lookup and self.tf_lookup_ready:
             payload["lookup_gain"] = self._tf_lookup_gain.detach().cpu()
         if (self.tf_use_lookup or self.tf_encoder_local) and self.tf_lookup_ready:
@@ -1045,6 +1313,8 @@ class GaussianModel(DGSModel):
         version = int(payload.get("version", 1))
         if int(payload["tf_rank"]) != self.tf_rank:
             raise ValueError("FactorSplat sidecar rank does not match --tf_rank")
+        if int(payload.get("tf_global_context_rank", 0)) != self.tf_global_context_rank:
+            raise ValueError("sidecar global-context rank does not match configuration")
         saved_type = payload.get("tf_encoder_type", "functional")
         if saved_type != self.tf_encoder_type:
             raise ValueError(f"sidecar encoder type {saved_type} != --tf_encoder_type {self.tf_encoder_type}")
@@ -1071,11 +1341,32 @@ class GaussianModel(DGSModel):
         self._tf_opacity_factors = _factor("opacity_factors") if self.tf_condition_opacity else None
         if self.tf_factors_active:
             self.tf_encoder.load_state_dict(payload["encoder"])
+            if self.tf_context_encoder is not None:
+                self.tf_context_encoder.load_state_dict(
+                    payload["context_encoder"])
+                self.tf_context_encoder_psi.load_state_dict(
+                    payload["context_encoder_psi"])
         if self.tf_veg_packed:
-            if "veg_u" not in payload:
-                raise ValueError("tf_veg_packed set but sidecar has no veg_u")
-            self._tf_veg_u = nn.Parameter(
-                payload["veg_u"].to("cuda").requires_grad_(True))
+            mode = payload.get("veg_coordinate_mode")
+            if mode != "fixed_label_logit_v1":
+                raise ValueError(
+                    "incompatible adapted-VEG sidecar: expected "
+                    "veg_coordinate_mode='fixed_label_logit_v1'; legacy "
+                    "sigmoid/direct-index checkpoints must be retrained")
+            required = ("veg_v", "veg_label", "veg_has_support")
+            if any(key not in payload for key in required):
+                raise ValueError("region-constrained VEG sidecar is incomplete")
+            veg_v = payload["veg_v"].to(device="cuda", dtype=torch.float32)
+            veg_label = payload["veg_label"].to(
+                device="cuda", dtype=torch.int16)
+            veg_has_support = payload["veg_has_support"].to(
+                device="cuda", dtype=torch.bool)
+            if any(tensor.shape[0] != count for tensor in
+                   (veg_v, veg_label, veg_has_support)):
+                raise ValueError("adapted-VEG sidecar and PLY counts differ")
+            self._tf_veg_v = nn.Parameter(veg_v.requires_grad_(True))
+            self._tf_veg_label = veg_label
+            self._tf_veg_has_support = veg_has_support
         if self.tf_use_lookup:
             self._tf_lookup_gain = nn.Parameter(
                 payload["lookup_gain"].to("cuda").requires_grad_(True))
@@ -1111,13 +1402,21 @@ class GaussianModel(DGSModel):
                                      "but the sidecar has none")
 
     def capture(self):
-        state = {"base": super().capture(), "version": 2}
+        state = {"base": super().capture(), "version": 3}
         if self._tf_color_factors is not None:
             state["color_factors"] = self._tf_color_factors
         if self._tf_opacity_factors is not None:
             state["opacity_factors"] = self._tf_opacity_factors
         if self.tf_encoder is not None:
             state["encoder"] = self.tf_encoder.state_dict()
+        if self.tf_context_encoder is not None:
+            state["context_encoder"] = self.tf_context_encoder.state_dict()
+            state["context_encoder_psi"] = self.tf_context_encoder_psi.state_dict()
+        if self.tf_veg_packed and self._tf_veg_v is not None:
+            state["veg_coordinate_mode"] = "fixed_label_logit_v1"
+            state["veg_v"] = self._tf_veg_v
+            state["veg_label"] = self._tf_veg_label
+            state["veg_has_support"] = self._tf_veg_has_support
         if self.tf_use_lookup and self.tf_lookup_ready:
             state["lookup_gain"] = self._tf_lookup_gain
         if (self.tf_use_lookup or self.tf_encoder_local) and self.tf_lookup_ready:
@@ -1140,6 +1439,21 @@ class GaussianModel(DGSModel):
                 model_args["opacity_factors"].to("cuda").requires_grad_(True))
         if self.tf_factors_active:
             self.tf_encoder.load_state_dict(model_args["encoder"])
+            if self.tf_context_encoder is not None:
+                self.tf_context_encoder.load_state_dict(
+                    model_args["context_encoder"])
+                self.tf_context_encoder_psi.load_state_dict(
+                    model_args["context_encoder_psi"])
+        if self.tf_veg_packed:
+            if model_args.get("veg_coordinate_mode") != "fixed_label_logit_v1":
+                raise ValueError(
+                    "incompatible adapted-VEG checkpoint coordinate mode")
+            self._tf_veg_v = nn.Parameter(
+                model_args["veg_v"].to("cuda").requires_grad_(True))
+            self._tf_veg_label = model_args["veg_label"].to(
+                device="cuda", dtype=torch.int16)
+            self._tf_veg_has_support = model_args["veg_has_support"].to(
+                device="cuda", dtype=torch.bool)
         if self.tf_use_lookup and "lookup_gain" in model_args:
             self._tf_lookup_gain = nn.Parameter(
                 model_args["lookup_gain"].to("cuda").requires_grad_(True))

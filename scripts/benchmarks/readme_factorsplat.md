@@ -293,6 +293,19 @@ load_ply truncates higher-degree PLYs on the coefficient axis, so the SH-3
 init warm-starts degree-1 models. DC-residual pilot results are LEGACY
 (labeled so in the paper) until retrained.
 
+### Region-constrained VEG adaptation
+
+The multi-region VEG comparison keeps a categorical region `m_i` fixed for
+each Gaussian and learns only a bounded intensity coordinate within that
+region, `h_i = (B-1) sigmoid(v_i)`.  RGBA is interpolated between adjacent
+bins of `R_T(m_i, h)`; it is never interpolated across packed region blocks.
+The region and initial intensity are obtained from the density-weighted local
+descriptor samples, and children inherit both values during densification.
+Authored region removal uses the same exact visibility gate as FactorSplat.
+Sidecars record this coordinate convention and reject the incompatible legacy
+global-packed-scalar representation.  The seven-scene launcher is
+`factorsplat_veg_region_fixed_7scene_173.sh`.
+
 ### Densification factor inheritance (fixed pre-sweep)
 
 Children inherit their nearest pre-existing Gaussian's TF FACTORS as well as

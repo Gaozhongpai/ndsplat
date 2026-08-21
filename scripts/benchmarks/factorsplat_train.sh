@@ -40,9 +40,22 @@ case "$VARIANT" in
     color)    TF_FLAGS="--tf_condition_color True --tf_condition_opacity False" ;;
     opacity)  TF_FLAGS="--tf_condition_color False --tf_condition_opacity True" ;;
     lookup)   TF_FLAGS="--tf_condition_color False --tf_condition_opacity False"; LOOKUP=1 ;;
-    veg)      TF_FLAGS="--tf_condition_color False --tf_condition_opacity False --tf_veg_packed True" ;;
+    veg)      TF_FLAGS="--tf_condition_color False --tf_condition_opacity False --tf_veg_packed True --tf_exact_visibility_gate True --tf_veg_v_lr 0.01" ;;
     *) echo "unknown FACTORSPLAT_VARIANT=$VARIANT (residual|residual_dc|hybrid|hybrid_dc|color|opacity|lookup|veg)" >&2; exit 2 ;;
 esac
+
+# A transfer function that changes RGB but leaves every authored alpha curve
+# unchanged must not repurpose the learned opacity residual. This invariant is
+# part of the primary FactorSplat method; spell it out in every residual-bearing
+# run so archived cfg_args remain self-describing if defaults later change.
+case "$VARIANT" in
+    residual|residual_dc|hybrid|hybrid_dc|opacity)
+        TF_FLAGS="$TF_FLAGS --tf_opacity_alpha_identity_gate True" ;;
+esac
+
+if [ "$VARIANT" = "hybrid_dc" ]; then
+    TF_FLAGS="$TF_FLAGS --tf_exact_visibility_gate True --tf_gate_removed_mass 0.5"
+fi
 
 VARIANT_DIR="$VARIANT"
 if [ "$LOOKUP" = "1" ]; then

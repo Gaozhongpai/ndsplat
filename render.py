@@ -52,7 +52,7 @@ def render_wrapper(view, gaussians, pipeline, background, mode, is_test=False, t
         raise ValueError(f"Unknown mode: {mode}.")
 
 
-def render_set(model_path, name, iteration, views, gaussians, pipeline, background, mode, measure_fps=False, use_gsplat=False, bake_appearance=False, tf_indices=None):
+def render_set(model_path, name, iteration, views, gaussians, pipeline, background, mode, measure_fps=False, skip_fps=False, use_gsplat=False, bake_appearance=False, tf_indices=None):
     """Render a set of views and save results.
 
     Args:
@@ -73,7 +73,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
     makedirs(gts_path, exist_ok=True)
 
     # FPS measurement at iteration 30000 (final) or best
-    if iteration == 30000 or iteration == "best":
+    if not skip_fps and (iteration == 30000 or iteration == "best"):
         # Report training time only at iteration 30000
         if iteration == 30000:
             training_time_path = os.path.join(model_path, "training_time.txt")
@@ -153,7 +153,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
 
 
-def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_train: bool, skip_test: bool, measure_fps: bool = False, bake_appearance: bool = False, render_tf_indices=None):
+def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_train: bool, skip_test: bool, measure_fps: bool = False, skip_fps: bool = False, bake_appearance: bool = False, render_tf_indices=None):
     """Render train and/or test sets.
 
     Args:
@@ -208,8 +208,19 @@ def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_
                 tf_aware_prune=getattr(dataset, "tf_aware_prune", True),
                 tf_use_lookup=getattr(dataset, "tf_use_lookup", False),
                 tf_veg_packed=getattr(dataset, "tf_veg_packed", False),
+                tf_veg_max_gaussians=getattr(
+                    dataset, "tf_veg_max_gaussians", 0),
                 tf_encoder_pooled=getattr(dataset, "tf_encoder_pooled", False),
                 tf_encoder_local=getattr(dataset, "tf_encoder_local", False),
+                tf_global_context_rank=getattr(
+                    dataset, "tf_global_context_rank", 0),
+                tf_opacity_alpha_only=getattr(dataset, "tf_opacity_alpha_only", False),
+                tf_opacity_alpha_identity_gate=getattr(
+                    dataset, "tf_opacity_alpha_identity_gate", False),
+                tf_opacity_train_envelope=getattr(
+                    dataset, "tf_opacity_train_envelope", False),
+                tf_opacity_residual_clip=getattr(
+                    dataset, "tf_opacity_residual_clip", 0.0),
                 tf_opacity_log_ratio=getattr(dataset, "tf_opacity_log_ratio", False),
                 tf_log_ratio_encoder=getattr(dataset, "tf_log_ratio_encoder", False),
                 tf_lookup_mode=getattr(dataset, "tf_lookup_mode", "joint"),
@@ -217,6 +228,7 @@ def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_
                 tf_lookup_color_scale=getattr(dataset, "tf_lookup_color_scale", 1.0),
                 tf_lookup_opacity_scale=getattr(dataset, "tf_lookup_opacity_scale", 4.0),
                 tf_exact_visibility_gate=getattr(dataset, "tf_exact_visibility_gate", False),
+                tf_soft_visibility_gate=getattr(dataset, "tf_soft_visibility_gate", False),
                 tf_gate_removed_mass=getattr(dataset, "tf_gate_removed_mass", 1.0),
             )
         else:
@@ -248,12 +260,14 @@ def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_
         if not skip_train:
             render_set(dataset.model_path, "train", scene.loaded_iter,
                       scene.getTrainCameras(), gaussians, pipeline, background, mode, measure_fps,
+                      skip_fps=skip_fps,
                       bake_appearance=bake_appearance,
                       use_gsplat=use_gsplat)
 
         if not skip_test:
             render_set(dataset.model_path, "test", scene.loaded_iter,
                       scene.getTestCameras(), gaussians, pipeline, background, mode, measure_fps,
+                      skip_fps=skip_fps,
                       bake_appearance=bake_appearance,
                       use_gsplat=use_gsplat, tf_indices=render_tf_indices)
 
@@ -281,6 +295,8 @@ if __name__ == "__main__":
     parser.add_argument("--skip_train", action="store_true", help="Skip rendering training views")
     parser.add_argument("--skip_test", action="store_true", help="Skip rendering test views")
     parser.add_argument("--measure_fps", action="store_true", help="Measure FPS instead of saving images")
+    parser.add_argument("--skip_fps", action="store_true",
+                        help="Skip the automatic final-checkpoint FPS benchmark")
     parser.add_argument("--quiet", action="store_true", help="Suppress output")
     parser.add_argument("--render_tf_indices", type=str, default="",
                         help="Comma-separated tf_index values; when set, only test frames of these TFs are rendered (frame numbering preserved)")
@@ -311,5 +327,6 @@ if __name__ == "__main__":
 
     render_sets(model.extract(args), iteration, pipeline.extract(args),
                 args.skip_train, args.skip_test, args.measure_fps,
+                skip_fps=args.skip_fps,
                 bake_appearance=bool(getattr(args, "tf_bake_appearance", False)),
                 render_tf_indices=(set(int(x) for x in args.render_tf_indices.split(',')) if args.render_tf_indices else None))

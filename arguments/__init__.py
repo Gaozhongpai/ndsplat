@@ -42,8 +42,12 @@ class ParamGroup:
         'tf_log_ratio_encoder',
         'tf_encoder_pooled',
         'tf_encoder_local',
+        'tf_opacity_alpha_only',
+        'tf_opacity_alpha_identity_gate',
+        'tf_opacity_train_envelope',
         'tf_refresh_descriptors',
         'tf_exact_visibility_gate',
+        'tf_soft_visibility_gate',
         'use_jpeg_compression',
     }
 
@@ -135,8 +139,10 @@ class ModelParams(ParamGroup):
         # anatomy is deleted for having a low shared/base opacity.
         self.tf_aware_prune = True
         self.tf_use_lookup = False
-        # Adapted VEG reference: per-Gaussian scalar + packed 1D LUT readout.
+        # Adapted VEG reference: fixed region + learnable within-region scalar.
         self.tf_veg_packed = False
+        # Optional adapted-VEG resource cap; zero disables it.
+        self.tf_veg_max_gaussians = 0
         # Opacity lookup in log-ratio coordinates (see gaussian_model_factorsplat)
         self.tf_opacity_log_ratio = False
         # feed the log-ratio coordinate to the encoder too (width 4 -> 5)
@@ -147,6 +153,22 @@ class ModelParams(ParamGroup):
         # own (region, bin) samples). Uses the packed descriptor independently
         # of whether the physical lookup branch is enabled.
         self.tf_encoder_local = False
+        # Matched-budget dual code: reserve this many of tf_rank dimensions
+        # for a permutation-invariant global TF summary. The remaining
+        # dimensions retain the per-Gaussian local code.
+        self.tf_global_context_rank = 0
+        # For the local residual, derive the opacity code from authored alpha
+        # changes only. This makes color-only TF edits opacity-invariant by
+        # construction while leaving the color code free to consume RGBA.
+        self.tf_opacity_alpha_only = False
+        # Minimal channel-separation alternative: retain the full learned code
+        # when alpha changes, but suppress opacity residuals for RGB-only TFs.
+        self.tf_opacity_alpha_identity_gate = True
+        # At inference, constrain each Gaussian's learned opacity correction to
+        # the min/max response observed over the training TFs.
+        self.tf_opacity_train_envelope = False
+        # Bound the learned opacity correction in logit units; <= 0 disables.
+        self.tf_opacity_residual_clip = 0.0
         # Re-sample descriptors (ids + density weights) after each densification
         # step, from the current positions/covariances. Needs
         # points3d_refresh_grid.npz in the dataset root.
@@ -155,8 +177,12 @@ class ModelParams(ParamGroup):
         self.tf_lookup_bins = 64
         self.tf_lookup_color_scale = 1.0
         self.tf_lookup_opacity_scale = 4.0
-        self.tf_exact_visibility_gate = False
-        self.tf_gate_removed_mass = 1.0
+        self.tf_exact_visibility_gate = True
+        # Replace the hard removed-mass threshold with the surviving descriptor
+        # mass. Pure removed material still maps to zero; mixed primitives are
+        # attenuated continuously instead of being deleted wholesale.
+        self.tf_soft_visibility_gate = False
+        self.tf_gate_removed_mass = 0.5
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
@@ -200,7 +226,9 @@ class OptimizationParams(ParamGroup):
         self.rgb_lr = 0.001
         self.tf_factor_lr = 0.0025
         self.tf_encoder_lr = 0.001
-        self.tf_veg_u_lr = 0.5  # adapted-VEG scalar step, in LUT-index units/iter
+        # Adapted-VEG within-region coordinate logit.  The categorical region
+        # is fixed; only a bounded intensity coordinate is optimized.
+        self.tf_veg_v_lr = 0.01
         self.scale_lr = 0.005
         self.l_triangle_lr = 0.001
 

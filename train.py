@@ -134,8 +134,18 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
             tf_aware_prune=dataset.tf_aware_prune,
             tf_use_lookup=dataset.tf_use_lookup,
             tf_veg_packed=dataset.tf_veg_packed,
+            tf_veg_max_gaussians=getattr(dataset, "tf_veg_max_gaussians", 0),
             tf_encoder_pooled=getattr(dataset, "tf_encoder_pooled", False),
             tf_encoder_local=getattr(dataset, "tf_encoder_local", False),
+            tf_global_context_rank=getattr(
+                dataset, "tf_global_context_rank", 0),
+            tf_opacity_alpha_only=getattr(dataset, "tf_opacity_alpha_only", False),
+            tf_opacity_alpha_identity_gate=getattr(
+                dataset, "tf_opacity_alpha_identity_gate", False),
+            tf_opacity_train_envelope=getattr(
+                dataset, "tf_opacity_train_envelope", False),
+            tf_opacity_residual_clip=getattr(
+                dataset, "tf_opacity_residual_clip", 0.0),
             tf_opacity_log_ratio=getattr(dataset, "tf_opacity_log_ratio", False),
             tf_log_ratio_encoder=getattr(dataset, "tf_log_ratio_encoder", False),
             tf_lookup_mode=dataset.tf_lookup_mode,
@@ -143,6 +153,7 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
             tf_lookup_color_scale=dataset.tf_lookup_color_scale,
             tf_lookup_opacity_scale=dataset.tf_lookup_opacity_scale,
             tf_exact_visibility_gate=getattr(dataset, "tf_exact_visibility_gate", False),
+            tf_soft_visibility_gate=getattr(dataset, "tf_soft_visibility_gate", False),
             tf_gate_removed_mass=getattr(dataset, "tf_gate_removed_mass", 1.0),
         )
     else:
