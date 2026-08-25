@@ -136,6 +136,8 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
             tf_veg_packed=dataset.tf_veg_packed,
             tf_encoder_pooled=getattr(dataset, "tf_encoder_pooled", False),
             tf_encoder_local=getattr(dataset, "tf_encoder_local", False),
+            tf_global_context_rank=getattr(
+                dataset, "tf_global_context_rank", 0),
             tf_opacity_log_ratio=getattr(dataset, "tf_opacity_log_ratio", False),
             tf_log_ratio_encoder=getattr(dataset, "tf_log_ratio_encoder", False),
             tf_lookup_mode=dataset.tf_lookup_mode,

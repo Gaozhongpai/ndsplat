@@ -210,6 +210,8 @@ def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_
                 tf_veg_packed=getattr(dataset, "tf_veg_packed", False),
                 tf_encoder_pooled=getattr(dataset, "tf_encoder_pooled", False),
                 tf_encoder_local=getattr(dataset, "tf_encoder_local", False),
+                tf_global_context_rank=getattr(
+                    dataset, "tf_global_context_rank", 0),
                 tf_opacity_log_ratio=getattr(dataset, "tf_opacity_log_ratio", False),
                 tf_log_ratio_encoder=getattr(dataset, "tf_log_ratio_encoder", False),
                 tf_lookup_mode=getattr(dataset, "tf_lookup_mode", "joint"),

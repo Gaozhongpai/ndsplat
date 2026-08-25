@@ -147,6 +147,10 @@ class ModelParams(ParamGroup):
         # own (region, bin) samples). Uses the packed descriptor independently
         # of whether the physical lookup branch is enabled.
         self.tf_encoder_local = False
+        # Matched-budget dual code: reserve this many of tf_rank dimensions
+        # for a permutation-invariant scene-wide TF summary; the remainder
+        # comes from the per-Gaussian local encoder.
+        self.tf_global_context_rank = 0
         # Re-sample descriptors (ids + density weights) after each densification
         # step, from the current positions/covariances. Needs
         # points3d_refresh_grid.npz in the dataset root.

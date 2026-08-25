@@ -42,6 +42,7 @@ class GaussianModel(DGSModel):
                  tf_veg_packed: bool = False,
                  tf_encoder_pooled: bool = False,
                  tf_encoder_local: bool = False,
+                 tf_global_context_rank: int = 0,
                  tf_opacity_log_ratio: bool = False,
                  tf_log_ratio_encoder: bool = False,
                  tf_lookup_mode: str = "joint",
@@ -111,6 +112,21 @@ class GaussianModel(DGSModel):
         # phi never sees a label id, costs one small table pass per preset, and
         # is bias-free so z_{i,T0} = 0 exactly. Shareable across scenes.
         self.tf_encoder_local = bool(tf_encoder_local)
+        # Matched-budget dual code: concatenate a local code with a compact,
+        # permutation-invariant summary of all TF curves.  Factors retain the
+        # original tf_rank, so this changes information flow rather than the
+        # per-Gaussian parameter count.
+        self.tf_global_context_rank = int(tf_global_context_rank)
+        if not 0 <= self.tf_global_context_rank < self.tf_rank:
+            raise ValueError("tf_global_context_rank must be in [0, tf_rank)")
+        if self.tf_global_context_rank and not self.tf_encoder_local:
+            raise ValueError("tf_global_context_rank requires tf_encoder_local")
+        if self.tf_global_context_rank and self.tf_encoder_type != "functional":
+            raise ValueError("global TF context requires the functional encoder")
+        self.tf_local_rank = self.tf_rank - self.tf_global_context_rank
+        self.tf_context_encoder = None
+        self.tf_context_encoder_psi = None
+        self._tf_context_descriptors = None
         # Opacity conditioning in LOG-RATIO coordinates: the logit is log-odds,
         # so ell = log((a_T+eps)/(a_T0+eps)) makes the authored family
         # near-linear -- gamma becomes (gamma-1)*log a, scale becomes log s,
@@ -215,6 +231,11 @@ class GaussianModel(DGSModel):
         sample_count = min(self.tf_samples, rgba.shape[2])
         sample_indices = np.linspace(0, rgba.shape[2] - 1, sample_count).round().astype(int)
         sampled = rgba[:, :, sample_indices, :]                      # [T,L,S',4]
+        # Preserve intensity order within each curve, but pool across curves.
+        # This is invariant to region ordering and works with different label
+        # counts while retaining the shape of every intensity-to-RGBA mapping.
+        context_descriptors = sampled.reshape(sampled.shape[0],
+                                               sampled.shape[1], -1)
         if self.tf_encoder_pooled:
             descriptors = sampled.reshape(sampled.shape[0], sampled.shape[1], -1)
         else:
@@ -226,7 +247,12 @@ class GaussianModel(DGSModel):
         # Centering gives the authored base TF an exact zero code. Bias-free
         # layers consequently preserve the input dGS checkpoint at T_base.
         descriptors = descriptors - descriptors[base_index:base_index + 1]
+        context_descriptors = (
+            context_descriptors
+            - context_descriptors[base_index:base_index + 1])
         self._tf_descriptors = torch.tensor(descriptors, dtype=torch.float32, device="cuda")
+        self._tf_context_descriptors = torch.tensor(
+            context_descriptors, dtype=torch.float32, device="cuda")
         self._tf_ids = tf_ids
         input_dim = int(descriptors.shape[-1])
         # Seen-only baseline bookkeeping: rows whose id marks a training preset,
@@ -257,8 +283,20 @@ class GaussianModel(DGSModel):
                     nn.Linear(5 if self.tf_log_ratio_encoder else 4,
                               self.tf_hidden, bias=False),
                     nn.ReLU(inplace=False),
-                    nn.Linear(self.tf_hidden, self.tf_rank, bias=False),
+                    nn.Linear(self.tf_hidden, self.tf_local_rank, bias=False),
                 ).cuda()
+                if self.tf_global_context_rank:
+                    curve_dim = int(context_descriptors.shape[-1])
+                    self.tf_context_encoder = nn.Sequential(
+                        nn.Linear(curve_dim, self.tf_hidden, bias=False),
+                        nn.ReLU(inplace=False),
+                        nn.Linear(self.tf_hidden, self.tf_hidden, bias=False),
+                    ).cuda()
+                    self.tf_context_encoder_psi = nn.Sequential(
+                        nn.ReLU(inplace=False),
+                        nn.Linear(self.tf_hidden,
+                                  self.tf_global_context_rank, bias=False),
+                    ).cuda()
             elif self.tf_encoder_pooled:
                 self.tf_encoder = nn.Sequential(
                     nn.Linear(input_dim, self.tf_hidden, bias=False),
@@ -770,6 +808,9 @@ class GaussianModel(DGSModel):
             enc_params = list(self.tf_encoder.parameters())
             if self.tf_encoder_psi is not None:
                 enc_params += list(self.tf_encoder_psi.parameters())
+            if self.tf_context_encoder is not None:
+                enc_params += list(self.tf_context_encoder.parameters())
+                enc_params += list(self.tf_context_encoder_psi.parameters())
             self.optimizer.add_param_group({
                 "params": enc_params,
                 "lr": training_args.tf_encoder_lr,
@@ -807,6 +848,23 @@ class GaussianModel(DGSModel):
             return self.tf_encoder_psi(self.tf_encoder(row).mean(dim=0))
         return self.tf_encoder(row)
 
+    def _context_code_for_index(self, index):
+        """Permutation-invariant scene-wide summary of the authored curves."""
+        if not self.tf_global_context_rank:
+            return None
+        curves = self._tf_context_descriptors[index]                 # [L,4S]
+        return self.tf_context_encoder_psi(
+            self.tf_context_encoder(curves).mean(dim=0))             # [r_g]
+
+    def _local_context_code(self, index):
+        """Concatenate local and global codes without increasing tf_rank."""
+        local = self._local_tf_code(index)                            # [N,r_l]
+        if not self.tf_global_context_rank:
+            return local
+        context = self._context_code_for_index(index)
+        context = context.unsqueeze(0).expand(local.shape[0], -1)
+        return torch.cat((local, context), dim=1)                     # [N,r]
+
     def get_pruning_opacity(self):
         """TF-aware pruning opacity: max over TRAINING presets of the
         conditioned opacity (view gate excluded; it is TF-independent).
@@ -838,7 +896,7 @@ class GaussianModel(DGSModel):
                 if self.tf_condition_opacity:
                     if self.tf_encoder_local:
                         offset = torch.einsum("nr,nr->n", self._tf_opacity_factors,
-                                              self._local_tf_code(row))
+                                              self._local_context_code(row))
                     else:
                         code = self._code_for_index(row)
                         offset = torch.einsum("nr,r->n", self._tf_opacity_factors, code)
@@ -883,7 +941,7 @@ class GaussianModel(DGSModel):
 
         rest = self._features_rest
         if self.tf_encoder_local:
-            zi = self._local_tf_code(index)                           # [N, r]
+            zi = self._local_context_code(index)                      # [N, r]
         if self.tf_condition_color:
             color_delta = self.tf_color_scale * torch.tanh(
                 torch.einsum("nkcr,nr->nkc", self._tf_color_factors, zi)
@@ -1008,6 +1066,7 @@ class GaussianModel(DGSModel):
             "tf_color_sh_degree": self.tf_color_sh_degree,
             "tf_use_lookup": self.tf_use_lookup,
             "tf_encoder_local": self.tf_encoder_local,
+            "tf_global_context_rank": self.tf_global_context_rank,
             "tf_veg_packed": self.tf_veg_packed,
             "tf_lookup_mode": self.tf_lookup_mode if self.tf_use_lookup else None,
         }
@@ -1020,6 +1079,13 @@ class GaussianModel(DGSModel):
         if self.tf_encoder is not None:
             payload["encoder"] = {key: value.detach().cpu()
                                   for key, value in self.tf_encoder.state_dict().items()}
+        if self.tf_context_encoder is not None:
+            payload["context_encoder"] = {
+                key: value.detach().cpu()
+                for key, value in self.tf_context_encoder.state_dict().items()}
+            payload["context_encoder_psi"] = {
+                key: value.detach().cpu()
+                for key, value in self.tf_context_encoder_psi.state_dict().items()}
         if self.tf_veg_packed and self._tf_veg_u is not None:
             payload["veg_u"] = self._tf_veg_u.detach().cpu()
         if self.tf_use_lookup and self.tf_lookup_ready:
@@ -1045,6 +1111,8 @@ class GaussianModel(DGSModel):
         version = int(payload.get("version", 1))
         if int(payload["tf_rank"]) != self.tf_rank:
             raise ValueError("FactorSplat sidecar rank does not match --tf_rank")
+        if int(payload.get("tf_global_context_rank", 0)) != self.tf_global_context_rank:
+            raise ValueError("sidecar global-context rank does not match configuration")
         saved_type = payload.get("tf_encoder_type", "functional")
         if saved_type != self.tf_encoder_type:
             raise ValueError(f"sidecar encoder type {saved_type} != --tf_encoder_type {self.tf_encoder_type}")
@@ -1071,6 +1139,11 @@ class GaussianModel(DGSModel):
         self._tf_opacity_factors = _factor("opacity_factors") if self.tf_condition_opacity else None
         if self.tf_factors_active:
             self.tf_encoder.load_state_dict(payload["encoder"])
+            if self.tf_context_encoder is not None:
+                self.tf_context_encoder.load_state_dict(
+                    payload["context_encoder"])
+                self.tf_context_encoder_psi.load_state_dict(
+                    payload["context_encoder_psi"])
         if self.tf_veg_packed:
             if "veg_u" not in payload:
                 raise ValueError("tf_veg_packed set but sidecar has no veg_u")
@@ -1118,6 +1191,9 @@ class GaussianModel(DGSModel):
             state["opacity_factors"] = self._tf_opacity_factors
         if self.tf_encoder is not None:
             state["encoder"] = self.tf_encoder.state_dict()
+        if self.tf_context_encoder is not None:
+            state["context_encoder"] = self.tf_context_encoder.state_dict()
+            state["context_encoder_psi"] = self.tf_context_encoder_psi.state_dict()
         if self.tf_use_lookup and self.tf_lookup_ready:
             state["lookup_gain"] = self._tf_lookup_gain
         if (self.tf_use_lookup or self.tf_encoder_local) and self.tf_lookup_ready:
@@ -1140,6 +1216,11 @@ class GaussianModel(DGSModel):
                 model_args["opacity_factors"].to("cuda").requires_grad_(True))
         if self.tf_factors_active:
             self.tf_encoder.load_state_dict(model_args["encoder"])
+            if self.tf_context_encoder is not None:
+                self.tf_context_encoder.load_state_dict(
+                    model_args["context_encoder"])
+                self.tf_context_encoder_psi.load_state_dict(
+                    model_args["context_encoder_psi"])
         if self.tf_use_lookup and "lookup_gain" in model_args:
             self._tf_lookup_gain = nn.Parameter(
                 model_args["lookup_gain"].to("cuda").requires_grad_(True))
