@@ -134,6 +134,7 @@ def training(dataset, opt, pipe, viewer_params, testing_iterations, saving_itera
             tf_aware_prune=dataset.tf_aware_prune,
             tf_use_lookup=dataset.tf_use_lookup,
             tf_veg_packed=dataset.tf_veg_packed,
+            tf_veg_max_gaussians=getattr(dataset, "tf_veg_max_gaussians", 0),
             tf_lookup_mode=dataset.tf_lookup_mode,
             tf_lookup_bins=dataset.tf_lookup_bins,
             tf_lookup_color_scale=dataset.tf_lookup_color_scale,

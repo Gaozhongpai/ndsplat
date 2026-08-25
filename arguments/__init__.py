@@ -137,8 +137,10 @@ class ModelParams(ParamGroup):
         # hidden anatomy ghost-visible. Opt-in: enabling it at render time
         # changes numbers relative to the published runs.
         self.tf_exact_visibility_gate = False
-        # Adapted VEG reference: per-Gaussian scalar + packed 1D LUT readout.
+        # Adapted VEG reference: fixed region + learnable within-region scalar.
         self.tf_veg_packed = False
+        # Optional adapted-VEG resource cap; zero disables it.
+        self.tf_veg_max_gaussians = 0
         self.tf_lookup_mode = "joint"  # joint = packed empirical p(l,h); separable = p(l)q(h) ablation
         self.tf_lookup_bins = 64
         self.tf_lookup_color_scale = 1.0
@@ -186,7 +188,9 @@ class OptimizationParams(ParamGroup):
         self.rgb_lr = 0.001
         self.tf_factor_lr = 0.0025
         self.tf_encoder_lr = 0.001
-        self.tf_veg_u_lr = 0.5  # adapted-VEG scalar step, in LUT-index units/iter
+        # Adapted-VEG within-region coordinate logit. The categorical region
+        # is fixed; only a bounded intensity coordinate is optimized.
+        self.tf_veg_v_lr = 0.01
         self.scale_lr = 0.005
         self.l_triangle_lr = 0.001
 

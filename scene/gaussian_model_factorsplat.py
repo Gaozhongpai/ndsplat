@@ -39,6 +39,7 @@ class GaussianModel(DGSModel):
                  tf_aware_prune: bool = True,
                  tf_use_lookup: bool = False,
                  tf_veg_packed: bool = False,
+                 tf_veg_max_gaussians: int = 0,
                  tf_lookup_mode: str = "joint",
                  tf_lookup_bins: int = 64,
                  tf_lookup_color_scale: float = 1.0,
@@ -79,14 +80,20 @@ class GaussianModel(DGSModel):
         self._tf_nearest_train = None
         self.tf_aware_prune = bool(tf_aware_prune)
         self.tf_use_lookup = bool(tf_use_lookup)
-        # Adapted VEG reference: one learnable scalar u_i per Gaussian; DC
-        # color and opacity are read from the packed 1D LUT T'(u)=bank[t]
-        # flattened over (label, bin). Excludes factors/encoder/lookup.
+        # Adapted VEG reference. Each Gaussian keeps a fixed categorical region
+        # and learns one bounded within-region intensity coordinate. DC color
+        # and opacity are read from that region's TF curve, so interpolation
+        # can never cross a material boundary. Excludes factors/encoder/lookup.
         self.tf_veg_packed = bool(tf_veg_packed)
+        self.tf_veg_max_gaussians = int(tf_veg_max_gaussians)
+        if self.tf_veg_max_gaussians < 0:
+            raise ValueError("tf_veg_max_gaussians must be >= 0")
         if self.tf_veg_packed and (tf_condition_color or tf_condition_opacity
                                    or tf_use_lookup):
             raise ValueError("tf_veg_packed excludes the FactorSplat branches")
-        self._tf_veg_u = None            # [N, 1] raw scalar (sigmoid -> LUT pos)
+        self._tf_veg_v = None            # [N,1] raw logit -> within-region bin
+        self._tf_veg_label = None        # [N] fixed TF-bank region column
+        self._tf_veg_has_support = None  # [N] descriptor contains foreground
         self._tf_baked_state = None       # pre-bake tensors + branch flags
         self._tf_baked_index = None       # preset currently baked in, if any
         if tf_lookup_mode not in ("joint", "separable"):
@@ -261,8 +268,13 @@ class GaussianModel(DGSModel):
               f"({covered:.1%} with foreground support, {samples}) from {path}")
 
     def init_veg_scalar(self, path):
-        """Initialize u_i from the packed volume descriptor (majority id of
-        the window samples), mapped through the inverse sigmoid."""
+        """Initialize a fixed region and bounded intensity for adapted VEG.
+
+        The region is the density-weighted majority label in the primitive's
+        initialization window. Only the intensity coordinate inside that
+        region is learnable. This preserves categorical material identity and
+        forbids interpolation across adjacent packed region curves.
+        """
         if not self.tf_veg_packed:
             return
         payload = dict(np.load(path))
@@ -273,27 +285,83 @@ class GaussianModel(DGSModel):
         if ids.shape[0] != self.get_xyz.shape[0]:
             raise ValueError("veg init descriptors do not match Gaussian count")
         col, hu_bin = ids // native, ids % native
-        packed = col * bins + hu_bin // max(native // bins, 1)      # [N,K]
-        K = packed.shape[1]
+        K = ids.shape[1]
         valid = np.arange(K)[None, :] < counts[:, None]
-        mean_u = (packed * valid).sum(1) / np.maximum(counts, 1)
-        # u is stored directly in LUT-index units and clamped at read time.
-        # A sigmoid over the full span (3072 entries here) makes one optimizer
-        # step move u by a small fraction of a bin, which stalls learning on
-        # sparse LUTs (heart: 88% zero-alpha entries).
-        raw = mean_u.astype(np.float32)[:, None]
-        self._tf_veg_u = nn.Parameter(
+        if "sample_weights" in payload:
+            weights = np.asarray(
+                payload["sample_weights"], dtype=np.float32) / 255.0
+            if weights.shape != ids.shape:
+                raise ValueError("sample_weights shape does not match sample_ids")
+            weights *= valid
+            denominator = weights.sum(1, keepdims=True)
+            weights = np.divide(
+                weights, denominator, out=np.zeros_like(weights),
+                where=denominator > 0)
+        else:
+            weights = (valid.astype(np.float32)
+                       / np.maximum(counts, 1)[:, None])
+
+        label_count = self._tf_bank_lookup.shape[1]
+        if np.any(col[valid] < 0) or np.any(col[valid] >= label_count):
+            raise ValueError("VEG descriptor label column lies outside TF bank")
+        mass = np.zeros((ids.shape[0], label_count), dtype=np.float32)
+        rows = np.arange(ids.shape[0])
+        for sample in range(K):
+            np.add.at(
+                mass,
+                (rows, np.clip(col[:, sample], 0, label_count - 1)),
+                weights[:, sample],
+            )
+        label = mass.argmax(axis=1).astype(np.int64)
+        has_support = counts > 0
+
+        on_label = valid & (col == label[:, None])
+        label_weights = weights * on_label
+        label_denominator = label_weights.sum(1)
+        native_position = (hu_bin.astype(np.float32) * (bins - 1)
+                           / max(native - 1, 1))
+        local_bin = np.divide(
+            (native_position * label_weights).sum(1), label_denominator,
+            out=np.zeros(ids.shape[0], dtype=np.float32),
+            where=label_denominator > 0,
+        )
+        fraction = np.clip(
+            local_bin / max(bins - 1, 1), 1e-3, 1.0 - 1e-3)
+        raw = np.log(fraction / (1.0 - fraction)).astype(np.float32)[:, None]
+        self._tf_veg_v = nn.Parameter(
             torch.tensor(raw, device="cuda").requires_grad_(True))
-        print(f"Initialized VEG packed scalars for {len(raw)} Gaussians from {path}")
+        self._tf_veg_label = torch.tensor(
+            label, dtype=torch.int16, device="cuda")
+        self._tf_veg_has_support = torch.tensor(
+            has_support, dtype=torch.bool, device="cuda")
+        print(f"Initialized region-constrained VEG coordinates for {len(raw)} "
+              f"Gaussians from {path}")
 
     def _veg_rgba(self, tf_index):
-        """Linear interpolation of the packed 1D LUT at u_i. Returns [N,4]."""
-        lut = self._tf_bank_lookup[tf_index].reshape(-1, 4)          # [L*B, 4]
-        span = lut.shape[0] - 1
-        u = self._tf_veg_u.squeeze(1).clamp(0.0, float(span))        # [N]
-        i0 = u.floor().long().clamp(0, span - 1)
-        w = (u - i0.float()).unsqueeze(1)
-        return lut[i0] * (1 - w) + lut[i0 + 1] * w
+        """Interpolate within each Gaussian's fixed region curve. Returns [N,4]."""
+        if self._tf_veg_v is None or self._tf_veg_label is None:
+            raise RuntimeError("region-constrained VEG coordinates are uninitialized")
+        lut = self._tf_bank_lookup[tf_index]                         # [L,B,4]
+        bins = lut.shape[1]
+        if bins < 2:
+            raise ValueError("adapted VEG requires at least two intensity bins")
+        local = torch.sigmoid(self._tf_veg_v.squeeze(1)) * (bins - 1)
+        b0 = local.floor().long().clamp(0, bins - 2)
+        weight = (local - b0.float()).unsqueeze(1)
+        label = self._tf_veg_label.long()
+        return lut[label, b0] * (1 - weight) + lut[label, b0 + 1] * weight
+
+    def _veg_visibility(self, tf_index):
+        """Exact authored visibility for the fixed adapted-VEG region label."""
+        count = self.get_xyz.shape[0]
+        if self._tf_label_visible is None or self._tf_veg_label is None:
+            return torch.ones(count, 1, device=self.get_xyz.device)
+        removed = ((~self._tf_label_visible[tf_index])
+                   & self._tf_label_visible[self._tf_base_index])
+        suppress = removed[self._tf_veg_label.long()]
+        if self._tf_veg_has_support is not None:
+            suppress = suppress & self._tf_veg_has_support
+        return (~suppress).float().unsqueeze(1)
 
     @torch.no_grad()
     def bake_appearance(self, tf_index):
@@ -449,7 +517,8 @@ class GaussianModel(DGSModel):
             raise RuntimeError("FactorSplat requires tf_bank.npz in the dataset root")
         if self.tf_factors_active and self.tf_encoder is None:
             raise RuntimeError("residual branch active but TF encoder was never built")
-        if self.tf_veg_packed and self._tf_veg_u is None:
+        if (self.tf_veg_packed
+                and (self._tf_veg_v is None or self._tf_veg_label is None)):
             raise RuntimeError("tf_veg_packed requires init_veg_scalar or a sidecar")
         if getattr(training_args, "densification_strategy", "standard") != "standard":
             raise ValueError("FactorSplat currently supports standard densification only")
@@ -488,13 +557,11 @@ class GaussianModel(DGSModel):
                 "name": "tf_encoder",
                 "per_gaussian": False,
             })
-        if self.tf_veg_packed and self._tf_veg_u is not None:
+        if self.tf_veg_packed and self._tf_veg_v is not None:
             self.optimizer.add_param_group({
-                "params": [self._tf_veg_u],
-                # u lives in LUT-index units, so its step size is set in bins
-                # per iteration rather than reusing the factor lr.
-                "lr": getattr(training_args, "tf_veg_u_lr", 0.5),
-                "name": "tf_veg_u",
+                "params": [self._tf_veg_v],
+                "lr": getattr(training_args, "tf_veg_v_lr", 0.01),
+                "name": "tf_veg_v",
                 "per_gaussian": True,
             })
         if self.tf_use_lookup and self._tf_lookup_gain is not None:
@@ -522,13 +589,15 @@ class GaussianModel(DGSModel):
         A primitive that some training preset reveals must not be deleted
         because the shared/base logit alone falls below the threshold --
         that would permanently remove anatomy other presets need."""
-        if self.tf_veg_packed and self._tf_veg_u is not None:
+        if self.tf_veg_packed and self._tf_veg_v is not None:
             if not self.tf_aware_prune or not self._tf_train_rows:
-                return self._veg_rgba(self._tf_base_index)[:, 3:4]
+                alpha = self._veg_rgba(self._tf_base_index)[:, 3:4]
+                return alpha * self._veg_visibility(self._tf_base_index)
             with torch.no_grad():
                 best = None
                 for row in self._tf_train_rows:
-                    alpha = self._veg_rgba(row)[:, 3:4]
+                    alpha = (self._veg_rgba(row)[:, 3:4]
+                             * self._veg_visibility(row))
                     best = alpha if best is None else torch.maximum(best, alpha)
                 return best
         if (not self.tf_aware_prune or self._tf_descriptors is None
@@ -548,6 +617,23 @@ class GaussianModel(DGSModel):
                 best_logit = logit if best_logit is None                     else torch.maximum(best_logit, logit)
             return torch.sigmoid(best_logit)
 
+    def densify_and_prune(self, max_grad, min_opacity, extent,
+                          max_screen_size, iteration):
+        super().densify_and_prune(
+            max_grad, min_opacity, extent, max_screen_size, iteration)
+        cap = self.tf_veg_max_gaussians if self.tf_veg_packed else 0
+        count = self.get_xyz.shape[0]
+        if cap > 0 and count > cap:
+            # Match the paper protocol: retain the primitives with the largest
+            # max-over-training-TFs authored visibility under the resource cap.
+            score = self.get_pruning_opacity().squeeze(1)
+            keep = torch.topk(score, cap, sorted=False).indices
+            prune = torch.ones(
+                count, dtype=torch.bool, device=score.device)
+            prune[keep] = False
+            self.prune_points(prune)
+            print(f"[ITER {iteration}] capped adapted VEG at {cap} Gaussians")
+
     def conditioned_appearance(self, viewpoint_camera, opacity_scale):
         index = getattr(viewpoint_camera, "tf_index", None)
         if index is None:
@@ -556,12 +642,14 @@ class GaussianModel(DGSModel):
         if not 0 <= index < self._tf_descriptors.shape[0]:
             raise IndexError(f"tf_index={index} outside bank of size "
                              f"{self._tf_descriptors.shape[0]}")
-        if self.tf_veg_packed and self._tf_veg_u is not None:
+        if self.tf_veg_packed and self._tf_veg_v is not None:
             rgba = self._veg_rgba(index)
             C0 = 0.28209479177387814
             dc = (rgba[:, :3] - 0.5) / C0
             shs = torch.cat((dc[:, None, :], self._features_rest), dim=1)
             opacity = rgba[:, 3:4].clamp(1e-5, 1 - 1e-5)
+            if self.tf_exact_visibility_gate:
+                opacity = opacity * self._veg_visibility(index)
             return shs, opacity * opacity_scale
 
         code = self._code_for_index(index) if self.tf_factors_active else None
@@ -599,7 +687,7 @@ class GaussianModel(DGSModel):
         return shs, opacity * opacity_scale
 
     def reset_opacity(self):
-        # Adapted VEG: opacity is read from the LUT at u_i; the shared logit
+        # Adapted VEG: opacity is read from the LUT at (label_i, v_i); the shared logit
         # is unused and receives no gradients, so it has no optimizer state to
         # rewrite (and resetting it would do nothing anyway).
         if self.tf_veg_packed:
@@ -612,8 +700,12 @@ class GaussianModel(DGSModel):
             self._tf_color_factors = tensors["tf_color_factors"]
         if "tf_opacity_factors" in tensors:
             self._tf_opacity_factors = tensors["tf_opacity_factors"]
-        if "tf_veg_u" in tensors:
-            self._tf_veg_u = tensors["tf_veg_u"]
+        if "tf_veg_v" in tensors:
+            self._tf_veg_v = tensors["tf_veg_v"]
+        for name in ("_tf_veg_label", "_tf_veg_has_support"):
+            tensor = getattr(self, name)
+            if tensor is not None and tensor.shape[0] == mask.shape[0]:
+                setattr(self, name, tensor[mask])
         for name in ("_tf_lookup_p", "_tf_lookup_q",
                      "_tf_lookup_ids", "_tf_lookup_counts"):
             tensor = getattr(self, name)
@@ -668,11 +760,16 @@ class GaussianModel(DGSModel):
                     "tf_opacity_factors", "_tf_opacity_factors",
                     self._tf_opacity_factors.detach()[nearest].clone(),
                 )
-            if self._tf_veg_u is not None:
+            if self._tf_veg_v is not None:
                 self._append_factor(
-                    "tf_veg_u", "_tf_veg_u",
-                    self._tf_veg_u.detach()[nearest].clone(),
+                    "tf_veg_v", "_tf_veg_v",
+                    self._tf_veg_v.detach()[nearest].clone(),
                 )
+                self._tf_veg_label = torch.cat(
+                    (self._tf_veg_label, self._tf_veg_label[nearest]), dim=0)
+                self._tf_veg_has_support = torch.cat(
+                    (self._tf_veg_has_support,
+                     self._tf_veg_has_support[nearest]), dim=0)
             for name in ("_tf_lookup_p", "_tf_lookup_q",
                          "_tf_lookup_ids", "_tf_lookup_counts"):
                 tensor = getattr(self, name)
@@ -687,7 +784,7 @@ class GaussianModel(DGSModel):
     def save_ply(self, path):
         super().save_ply(path)
         payload = {
-            "version": 2,
+            "version": 3,
             "tf_rank": self.tf_rank,
             "tf_hidden": self.tf_hidden,
             "tf_samples": self.tf_samples,
@@ -698,6 +795,7 @@ class GaussianModel(DGSModel):
             "tf_color_sh_degree": self.tf_color_sh_degree,
             "tf_use_lookup": self.tf_use_lookup,
             "tf_veg_packed": self.tf_veg_packed,
+            "tf_veg_max_gaussians": self.tf_veg_max_gaussians,
             "tf_lookup_mode": self.tf_lookup_mode if self.tf_use_lookup else None,
         }
         # Only ACTIVE branches are stored: no residual factors or encoder for
@@ -709,8 +807,11 @@ class GaussianModel(DGSModel):
         if self.tf_encoder is not None:
             payload["encoder"] = {key: value.detach().cpu()
                                   for key, value in self.tf_encoder.state_dict().items()}
-        if self.tf_veg_packed and self._tf_veg_u is not None:
-            payload["veg_u"] = self._tf_veg_u.detach().cpu()
+        if self.tf_veg_packed and self._tf_veg_v is not None:
+            payload["veg_coordinate_mode"] = "fixed_label_logit_v1"
+            payload["veg_v"] = self._tf_veg_v.detach().cpu()
+            payload["veg_label"] = self._tf_veg_label.detach().cpu()
+            payload["veg_has_support"] = self._tf_veg_has_support.detach().cpu()
         if self.tf_use_lookup and self.tf_lookup_ready:
             payload["lookup_gain"] = self._tf_lookup_gain.detach().cpu()
             if self._tf_lookup_ids is not None:
@@ -776,10 +877,27 @@ class GaussianModel(DGSModel):
                       f"(in_features={in_dim})", flush=True)
             self.tf_encoder.load_state_dict(payload["encoder"])
         if self.tf_veg_packed:
-            if "veg_u" not in payload:
-                raise ValueError("tf_veg_packed set but sidecar has no veg_u")
-            self._tf_veg_u = nn.Parameter(
-                payload["veg_u"].to("cuda").requires_grad_(True))
+            mode = payload.get("veg_coordinate_mode")
+            if mode != "fixed_label_logit_v1":
+                raise ValueError(
+                    "incompatible adapted-VEG sidecar: expected "
+                    "veg_coordinate_mode='fixed_label_logit_v1'; legacy "
+                    "packed-index checkpoints must be retrained")
+            required = ("veg_v", "veg_label", "veg_has_support")
+            if any(key not in payload for key in required):
+                raise ValueError("region-constrained VEG sidecar is incomplete")
+            veg_v = payload["veg_v"].to(
+                device="cuda", dtype=torch.float32)
+            veg_label = payload["veg_label"].to(
+                device="cuda", dtype=torch.int16)
+            veg_has_support = payload["veg_has_support"].to(
+                device="cuda", dtype=torch.bool)
+            if any(tensor.shape[0] != count for tensor in
+                   (veg_v, veg_label, veg_has_support)):
+                raise ValueError("adapted-VEG sidecar and PLY counts differ")
+            self._tf_veg_v = nn.Parameter(veg_v.requires_grad_(True))
+            self._tf_veg_label = veg_label
+            self._tf_veg_has_support = veg_has_support
         if self.tf_use_lookup:
             self._tf_lookup_gain = nn.Parameter(
                 payload["lookup_gain"].to("cuda").requires_grad_(True))
@@ -811,13 +929,18 @@ class GaussianModel(DGSModel):
                     raise ValueError("--tf_use_lookup set but sidecar has no lookup descriptors")
 
     def capture(self):
-        state = {"base": super().capture(), "version": 2}
+        state = {"base": super().capture(), "version": 3}
         if self._tf_color_factors is not None:
             state["color_factors"] = self._tf_color_factors
         if self._tf_opacity_factors is not None:
             state["opacity_factors"] = self._tf_opacity_factors
         if self.tf_encoder is not None:
             state["encoder"] = self.tf_encoder.state_dict()
+        if self.tf_veg_packed and self._tf_veg_v is not None:
+            state["veg_coordinate_mode"] = "fixed_label_logit_v1"
+            state["veg_v"] = self._tf_veg_v
+            state["veg_label"] = self._tf_veg_label
+            state["veg_has_support"] = self._tf_veg_has_support
         if self.tf_use_lookup and self.tf_lookup_ready:
             state["lookup_gain"] = self._tf_lookup_gain
             for key, name in (("lookup_ids", "_tf_lookup_ids"),
@@ -838,6 +961,16 @@ class GaussianModel(DGSModel):
                 model_args["opacity_factors"].to("cuda").requires_grad_(True))
         if self.tf_factors_active:
             self.tf_encoder.load_state_dict(model_args["encoder"])
+        if self.tf_veg_packed:
+            if model_args.get("veg_coordinate_mode") != "fixed_label_logit_v1":
+                raise ValueError(
+                    "incompatible adapted-VEG checkpoint coordinate mode")
+            self._tf_veg_v = nn.Parameter(
+                model_args["veg_v"].to("cuda").requires_grad_(True))
+            self._tf_veg_label = model_args["veg_label"].to(
+                device="cuda", dtype=torch.int16)
+            self._tf_veg_has_support = model_args["veg_has_support"].to(
+                device="cuda", dtype=torch.bool)
         if self.tf_use_lookup and "lookup_gain" in model_args:
             self._tf_lookup_gain = nn.Parameter(
                 model_args["lookup_gain"].to("cuda").requires_grad_(True))

@@ -334,6 +334,19 @@ legacy degree-one-conditioned 13Nr payload. The physical lookup is also
 DC-only. Higher-order coefficients are absent, and `load_ply` truncates an
 SH-3 initialization to the degree-one backbone.
 
+### Region-constrained VEG paper baseline
+
+The reported VEG reference keeps a categorical region fixed for every
+Gaussian and learns only a bounded intensity coordinate inside that region:
+`h_i = (B - 1) sigmoid(v_i)`. The region is the density-weighted majority of
+the primitive's packed initialization samples, so interpolation never crosses
+adjacent region curves. Color and opacity come directly from the selected TF
+curve, authored region visibility is applied exactly, and TF-aware pruning
+uses the maximum gated alpha over training presets. Densified children inherit
+the region and scalar. The scalar-logit learning rate is `0.01`; intestine is
+capped at 450k primitives with `--tf_veg_max_gaussians 450000`. Reproduce the
+seven-scene baseline with `factorsplat_veg_region_fixed_7scene_173.sh`.
+
 ### Densification factor inheritance (fixed pre-sweep)
 
 Children inherit their nearest pre-existing Gaussian's TF FACTORS as well as
