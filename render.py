@@ -221,6 +221,8 @@ def render_sets(dataset: ModelParams, iteration, pipeline: PipelineParams, skip_
                     dataset, "tf_opacity_train_envelope", False),
                 tf_opacity_residual_clip=getattr(
                     dataset, "tf_opacity_residual_clip", 0.0),
+                tf_refresh_label_locked=getattr(
+                    dataset, "tf_refresh_label_locked", False),
                 tf_opacity_log_ratio=getattr(dataset, "tf_opacity_log_ratio", False),
                 tf_log_ratio_encoder=getattr(dataset, "tf_log_ratio_encoder", False),
                 tf_lookup_mode=getattr(dataset, "tf_lookup_mode", "joint"),

@@ -46,6 +46,7 @@ class ParamGroup:
         'tf_opacity_alpha_identity_gate',
         'tf_opacity_train_envelope',
         'tf_refresh_descriptors',
+        'tf_refresh_label_locked',
         'tf_exact_visibility_gate',
         'tf_soft_visibility_gate',
         'use_jpeg_compression',
@@ -173,6 +174,9 @@ class ModelParams(ParamGroup):
         # step, from the current positions/covariances. Needs
         # points3d_refresh_grid.npz in the dataset root.
         self.tf_refresh_descriptors = False
+        # Preserve each primitive's dominant anatomical region during refresh;
+        # only HU support and covariance weights may follow its current center.
+        self.tf_refresh_label_locked = False
         self.tf_lookup_mode = "joint"  # joint = packed empirical p(l,h); separable = p(l)q(h) ablation
         self.tf_lookup_bins = 64
         self.tf_lookup_color_scale = 1.0

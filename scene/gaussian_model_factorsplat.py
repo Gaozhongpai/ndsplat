@@ -48,6 +48,7 @@ class GaussianModel(DGSModel):
                  tf_opacity_alpha_identity_gate: bool = True,
                  tf_opacity_train_envelope: bool = False,
                  tf_opacity_residual_clip: float = 0.0,
+                 tf_refresh_label_locked: bool = False,
                  tf_opacity_log_ratio: bool = False,
                  tf_log_ratio_encoder: bool = False,
                  tf_lookup_mode: str = "joint",
@@ -147,6 +148,7 @@ class GaussianModel(DGSModel):
         self.tf_opacity_residual_clip = float(tf_opacity_residual_clip)
         if self.tf_opacity_residual_clip < 0:
             raise ValueError("tf_opacity_residual_clip must be >= 0")
+        self.tf_refresh_label_locked = bool(tf_refresh_label_locked)
         # Opacity conditioning in LOG-RATIO coordinates: the logit is log-odds,
         # so ell = log((a_T+eps)/(a_T0+eps)) makes the authored family
         # near-linear -- gamma becomes (gamma-1)*log a, scale becomes log s,
@@ -615,6 +617,35 @@ class GaussianModel(DGSModel):
         ids = self._refresh_id_vol.reshape(-1)[flat]                 # [N,27] or -1
         valid = ids >= 0
 
+        # Experimental material-preserving refresh.  Lock each primitive to
+        # the region carrying most of its pre-refresh descriptor mass, then
+        # refresh HU samples only from voxels of that region.  This lets the
+        # intensity support and covariance weights track geometry without a
+        # center crossing an organ boundary silently changing material identity.
+        # If the current window contains no voxel of the locked region, retain
+        # the previous descriptor rather than borrowing another anatomy.
+        old_ids = self._tf_lookup_ids
+        old_counts = self._tf_lookup_counts
+        old_weights = self._sample_weights() if old_ids is not None else None
+        locked_has_match = None
+        if self.tf_refresh_label_locked and old_ids is not None:
+            bins = self._tf_bank_lookup.shape[2]
+            old_valid = (torch.arange(old_ids.shape[1], device=ids.device)[None, :]
+                         < old_counts.long()[:, None])
+            old_labels = old_ids.long() // bins
+            label_mass = torch.zeros(
+                old_ids.shape[0], self._tf_bank_lookup.shape[1],
+                device=ids.device, dtype=torch.float32)
+            label_mass.scatter_add_(
+                1, old_labels.clamp(0, label_mass.shape[1] - 1),
+                old_weights * old_valid.float())
+            locked_label = label_mass.argmax(dim=1)
+            refreshed_label = torch.where(valid, ids, torch.zeros_like(ids)) \
+                // self._refresh_hu_samples
+            valid = (valid & (refreshed_label == locked_label[:, None])
+                     & (old_counts.long()[:, None] > 0))
+            locked_has_match = valid.any(dim=1)
+
         # density weights from the CURRENT covariance, in the primitive frame
         rel = (nb - idx[:, None, :]).float() * self._refresh_spacing[None, None, :]
         sigma = self.get_scaling.detach().clamp_min(1e-6)             # [N,3]
@@ -642,8 +673,15 @@ class GaussianModel(DGSModel):
         S = self._refresh_hu_samples
         col, hu_bin = ids_s // S, ids_s % S
         packed = col * bins + hu_bin // max(S // bins, 1)
-        self._tf_lookup_ids = packed.to(torch.int16)
-        self._tf_lookup_counts = counts.clamp(0, 255).to(torch.uint8)
+        refreshed_ids = packed.to(torch.int16)
+        refreshed_counts = counts.clamp(0, 255).to(torch.uint8)
+        if locked_has_match is not None:
+            keep_old = ~locked_has_match
+            refreshed_ids[keep_old] = old_ids[keep_old]
+            refreshed_counts[keep_old] = old_counts[keep_old]
+            wts_s[keep_old] = old_weights[keep_old]
+        self._tf_lookup_ids = refreshed_ids
+        self._tf_lookup_counts = refreshed_counts
         self._tf_lookup_w = wts_s
         return True
 
@@ -1264,6 +1302,7 @@ class GaussianModel(DGSModel):
             "tf_opacity_alpha_identity_gate": self.tf_opacity_alpha_identity_gate,
             "tf_opacity_train_envelope": self.tf_opacity_train_envelope,
             "tf_opacity_residual_clip": self.tf_opacity_residual_clip,
+            "tf_refresh_label_locked": self.tf_refresh_label_locked,
             "tf_soft_visibility_gate": self.tf_soft_visibility_gate,
             "tf_veg_packed": self.tf_veg_packed,
             "tf_veg_max_gaussians": self.tf_veg_max_gaussians,

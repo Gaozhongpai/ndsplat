@@ -172,6 +172,44 @@ class FactorSplatSemanticTests(unittest.TestCase):
         hard = model._authored_visibility(1).squeeze(1)
         torch.testing.assert_close(hard, torch.tensor([1.0, 1.0, 0.0, 0.0]))
 
+    def test_label_locked_refresh_updates_hu_without_changing_region(self):
+        model = bare_model()
+        model.tf_refresh_label_locked = True
+        model._xyz = torch.tensor([[1.0, 1.0, 1.0],
+                                   [1.0, 1.0, 1.0]])
+        model._scaling = nn.Parameter(torch.zeros(2, 3))
+        model._rotation = nn.Parameter(torch.tensor(
+            [[1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]]))
+        model.scaling_activation = torch.exp
+        model.rotation_activation = lambda value: torch.nn.functional.normalize(
+            value, dim=1)
+        model._tf_bank_lookup = torch.zeros(1, 2, 4, 4)
+        # Primitive 0 is locked to region 1; primitive 1 to region 0.
+        # All refreshed voxels belong to region 1 at HU bin 3.
+        old = torch.zeros(2, 27, dtype=torch.int16)
+        old[0, :2] = torch.tensor([4, 5], dtype=torch.int16)
+        old[1, :2] = torch.tensor([0, 1], dtype=torch.int16)
+        model._tf_lookup_ids = old
+        model._tf_lookup_counts = torch.tensor([2, 2], dtype=torch.uint8)
+        model._tf_lookup_w = None
+        model._refresh_id_vol = torch.full((3, 3, 3), 7, dtype=torch.int32)
+        model._refresh_origin = torch.zeros(3)
+        model._refresh_spacing = torch.ones(3)
+        model._refresh_size = torch.tensor([3, 3, 3])
+        model._refresh_center = torch.zeros(3)
+        model._refresh_hu_samples = 4
+        model._refresh_centered = False
+
+        self.assertTrue(model.refresh_descriptors())
+        self.assertEqual(int(model._tf_lookup_counts[0]), 27)
+        self.assertTrue(torch.all(model._tf_lookup_ids[0] == 7))
+        # No region-0 voxel exists at the new location, so primitive 1 falls
+        # back exactly to its persistent descriptor rather than changing organ.
+        self.assertEqual(int(model._tf_lookup_counts[1]), 2)
+        self.assertTrue(torch.equal(model._tf_lookup_ids[1], old[1]))
+        torch.testing.assert_close(
+            model._tf_lookup_w[1, :2], torch.tensor([0.5, 0.5]))
+
 
 if __name__ == "__main__":
     unittest.main()
