@@ -96,6 +96,31 @@ Pilot bank: 12 TFs in mutation families, split by operation (never randomly):
 Interpolation tests sit inside the span of training mutations; OOD tests are
 operations never seen in any magnitude.
 
+Clinical successor bank: use `--preset clinical`. It preserves all 24 train,
+4 validation, 4 interpolation, and 4 composition presets from the full bank,
+but evaluates **5 OOD presets per scene**:
+
+- 2 functional stress tests: grayscale and opacity-curve sharpening;
+- 3 clinical tests: target isolation, exact occluder removal, and target
+  emphasis with translucent anatomical context.
+
+The clinical operations use audited label IDs rather than visible-label rank.
+Their scene-specific semantics are:
+
+| scene | target | removed occluder | retained context |
+|---|---|---|---|
+| heart | coronary artery + aorta | pulmonary artery/veins | pulmonary vasculature |
+| vascular | aorta + arterial structures | bone | organ context |
+| intestine | pancreas | femora + hips | duodenum + liver + stomach |
+| lower | main vessel | bone | bone |
+| kneejoint | bone | surrounding tissue | surrounding tissue |
+| nose | tumor | surrounding tissue | surrounding tissue |
+| hand | skeleton | muscle | muscle + current outline |
+
+This gives **3 clinical OOD cases and 5 total OOD cases for every scene**.
+Unsupported scenes fail at bank generation until an explicit label profile is
+added; the generator never falls back to an arbitrary visible label.
+
 ## Cameras and render budget
 
 Per scene and preset (defaults in `factorsplat_prepare.sh`, overridable via
@@ -200,10 +225,23 @@ Names correspond EXACTLY to enabled flags (FACTORSPLAT_VARIANT / output dir):
 | `residual` | color+opacity | off | functional | the pilot model (was mislabeled "hybrid") |
 | `lookup` | off | on | (unused) | Eq. 6 alone, learned global gain only |
 | `hybrid` | color+opacity (deg-1) | on | functional | degree-one conditioning ablation |
-| `hybrid_dc` | color+opacity (DC) | on | functional | PRIMARY model: lookup + DC residual (183 B/G at r=8) |
+| `hybrid_dc` | color+opacity (DC) | on | functional | PRIMARY model: lookup + DC residual (291 B/G at r=8, including FP32 descriptor weights) |
 | `residual_embedding` | color+opacity | off | embedding | seen-only baseline, nearest-train fallback |
 | `color` / `opacity` | one channel | off | functional | channel ablation |
 | `specialist` | -- | -- | -- | one dGS per preset ("per-preset specialist", NOT a strict ceiling: each sees 1/6 of the images) |
+
+The primary residual obeys an alpha-identity invariant: when a TF changes RGB
+but leaves every authored alpha curve unchanged, its learned opacity residual
+is exactly zero (`--tf_opacity_alpha_identity_gate True`). Color conditioning
+remains active, and opacity conditioning remains unrestricted for presets that
+actually edit alpha.
+
+Authored visibility removal is also computed rather than approximated by a
+finite opacity-logit residual. The primary hybrid uses
+`--tf_exact_visibility_gate True --tf_gate_removed_mass 0.5`: a primitive is
+removed when at least half of its density-weighted descriptor mass belongs to
+labels disabled by the TF. The clinical occluder-removal presets exercise this
+operator with explicit anatomy labels rather than visible-label rank.
 
 Plus: dense TF-conditioned appearance MLP (hypernetwork, TODO) and optional
 Render-FM regeneration per preset. Render-FM stays a SEPARATE amortization
@@ -211,6 +249,17 @@ branch (it could generate the canonical FactorSplat representation for a new
 volume; FactorSplat then handles instantaneous TF switching) -- it is not part
 of the core per-scene study. No main variant enables TF- or view-dependent
 position.
+
+Long-run Render-FM integration should use voxel-aligned Gaussian queries with
+an immutable source intensity and mask label. The per-scene method likewise
+treats its initialization descriptor as a persistent material tag and passes
+it to densification children; position-based refresh is a diagnostic, not the
+default. Optimized centers can still move relative to the voxel grid and finite
+Gaussians may straddle mask boundaries. A feed-forward model can predict
+geometry/appearance/factors while retaining the query's physical association;
+the existing lookup and shared TF encoder then apply unchanged. This should
+reduce center--descriptor mismatch, but does not guarantee zero leak because
+Gaussian support, segmentation errors, and projected overlap remain.
 
 ### Rank selection (full study)
 
@@ -232,25 +281,27 @@ preset and consumes several times the aggregate iterations.
 
 `--tf_lookup_mode joint` (default) stores the empirical joint p(l,h) PACKED:
 one uint16 id `label_col*S + hu_bin` per window voxel (valid-first) + one
-uint8 count per Gaussian; uniform weights are reconstructed at lookup time.
-Nothing dense is allocated in joint mode; `separable` keeps only p/q. Only
-ACTIVE branches carry parameters (lookup-only saves no residual factors or
-encoder; color/opacity ablations allocate one factor tensor). Sidecar format
-v2; v1 checkpoints load (v1 joint arrays are converted, v1 separable-only
-sidecars fall back to separable). Measured: heart pilot lookup checkpoint
-(187,930 G) 69.6 MB -> 10.3 MB (85% smaller). Use packed for all matched
-lookup/hybrid runs and final storage numbers.
+uint8 count and one FP32 density weight per valid window slot. Nothing dense
+over all label--intensity bins is allocated in joint mode; `separable` keeps
+only the marginal descriptors. Only ACTIVE branches carry parameters
+(lookup-only saves no residual factors or encoder; color/opacity ablations
+allocate one factor tensor). Sidecar format v2; v1 checkpoints load (v1 joint
+arrays are converted, v1 separable-only sidecars fall back to separable). At
+$K=27$, identifiers and counts occupy 55 B/Gaussian and density weights add
+108 B/Gaussian; the rank-8 DC residual adds 128 B/Gaussian.
 
-### ARCHITECTURAL FREEZE (2026-08-09) + confirmatory vascular protocol
+### Current paper protocol and completed measurements (2026-08-20)
 
-Frozen: degree-one dGS backbone, DC-only TF conditioning, Hybrid (DC) =
-canonical FactorSplat. Vascular is CONFIRMATORY REPLICATION, not development:
-frozen r*=8, variants, metrics, and selection rule applied unchanged; heart
-and vascular reported SEPARATELY before any pooled average; abstract goes
-two-scene only if Hybrid (DC) replicates; if rankings differ, REPORT the
-scene dependence -- do not redesign from vascular. Remaining paper work:
-latency/storage table, sweep-stability result, conclusion, compress legacy
-pilot tables once the two-scene table supersedes them.
+The canonical model uses a degree-one dGS backbone with DC-only TF
+conditioning, the physical lookup, the rank-8 functional residual, the exact
+visibility gate, TF-aware pruning, and persistent inherited descriptors. The
+41-condition study is complete on seven scans (five CT and two MR). Numeric
+tables combine the two functional and three clinical OOD mutations into one
+five-preset OOD column; the two families remain separate in the validation
+artifacts and qualitative figures. Runtime and storage were measured at
+1600x1600 on one H100: FactorSplat renders at 657--766 FPS and switches TFs in
+0.87--0.92 ms. Audited results are recorded in
+`pages/FactorSplat/paper/tools/{clinical,ablation,efficiency}_validation.json`.
 
 ### Frozen sequence (2026-08-08)
 
@@ -265,25 +316,23 @@ pilot tables once the two-scene table supersedes them.
    (`rank_selection_<scene>_<preset>.json`): val delta primary, guardrails
    recorded, parsimony tie-break to the smaller rank.
 3. Six matched variants at r*: heart first, then vascular.
-4. Label-selective presets extend the bank as a STRICT SUPERSET (append after
-   index 39 only; never reorder) so all existing 40-TF renders stay reusable.
-5. Validate the new presets on heart before any six-scene expansion.
+4. Generate the `clinical` successor bank. It preserves every non-OOD entry
+   from `full`, replaces the two discarded OOD entries, and adds the three
+   explicit clinical tests documented above.
+5. Validate the new presets on heart before cross-scene expansion.
 6. `hybrid` becomes the headline FactorSplat model ONLY if it beats `residual`
    consistently across scenes/splits; otherwise `residual` stays primary and
    the lookup is analysis/ablation.
 
-### SH-degree-1 protocol (bd5c120)
+### SH-degree-1 backbone and DC-conditioned protocol
 
-EVERY dGS/N-DGS run (mixed, specialists, lookup, residual, hybrid, embedding,
-any VEG-side comparison) passes --sh_degree 1 explicitly (baked into all three
-trainer scripts). The learned residual conditions ALL SH color coefficients
-through degree 1 (DC + three first-order; factors [N,4,3,r]; 13Nr storage,
-416 B/G at r=8 FP32); the physical lookup stays DC-only (view-independent
-edit); higher-order coefficients are ABSENT, not silently shared.
---tf_color_sh_degree 0 = the DC-only residual ablation to run at r*.
-load_ply truncates higher-degree PLYs on the coefficient axis, so the SH-3
-init warm-starts degree-1 models. DC-residual pilot results are LEGACY
-(labeled so in the paper) until retrained.
+Every dGS/N-DGS comparison passes `--sh_degree 1` explicitly. FactorSplat
+conditions only the DC color coefficient (`--tf_color_sh_degree 0`) and
+opacity; the three first-order coefficients remain shared and TF-independent.
+The rank-8 residual therefore stores 4Nr FP32 scalars (128 B/Gaussian), not the
+legacy degree-one-conditioned 13Nr payload. The physical lookup is also
+DC-only. Higher-order coefficients are absent, and `load_ply` truncates an
+SH-3 initialization to the degree-one backbone.
 
 ### Densification factor inheritance (fixed pre-sweep)
 
@@ -312,28 +361,31 @@ Preferred v2 = FACTOR GENERATOR, not a generic joint MLP:
 exact identity at T0; cache A_i after training so TF-switch cost is unchanged;
 ablation is surgical (stored vs generated factors, same rank). Input
 `q_i = q_physical (+) sg(q_canonical) (+) e_i`: physical = permutation-
-invariant encoding of the packed label-HU samples; canonical = scale/cov/
+invariant encoding of the packed material--intensity samples; canonical = scale/cov/
 appearance features FROZEN after warm-up or EMA-snapshotted (stop-gradient
 alone does not stop value drift, so G_psi(q_i) cannot be cached during
 training otherwise); e_i = optional 4-8D learned context code -- test the
 physical-only generator FIRST, add e_i only if it materially recovers
 accuracy. Compression at r=8 (128 B/G explicit FP32 factors): 4D FP32 code
-16 B/G = 8x; 8D FP32 = 4x; 4-8D FP16 = 8-16x; the 55 B/G packed descriptor
-is additional fixed storage either way. QUALIFICATION: cross-scene transfer
+16 B/G = 8x; 8D FP32 = 4x; 4-8D FP16 = 8-16x; the 163 B/G packed descriptor
+(identifiers, counts, and density weights) is additional fixed storage either
+way. QUALIFICATION: cross-scene transfer
 requires G_psi AND the TF encoder to be trained/shared across scenes; a
 per-scene generator compresses storage but provides no Render-FM transfer
 by itself. Also in the ladder: local functional residual
-`z_i(T) = sum_{l,h} p_i(l,h) phi(l, h, T(l,h)-T0(l,h))`. Explore before
+`z_i(T) = sum_{m,h} p_i(m,h) phi(T(m,h)-T0(m,h))`; the region channel routes
+the curve but is not itself an encoder input. Explore before
 all-SH conditioning (entanglement risk) and never TF-dependent position
 shifts (TFs edit appearance/support, not anatomy).
 
-### Bank TODO before the six-scene study
+### Label-selective clinical bank
 
-Add label-SELECTIVE mutations (per-label hue/alpha edits, show/hide of
-specific anatomy) to the bank families. The current bank is mostly global
-(hue/opacity/window/gamma), so the label-aware contribution of Eq. 6 is
-under-tested: on the pilot bank the joint p(l,h) and separable p(l)q(h)
-lookups agree to 1.6% relative -- selective presets are what separates them.
+Implemented as the `clinical` preset in `factorsplat_make_tf_bank.py`.
+Per-label hue/alpha edits use explicit scene profiles and are held out from
+training. The legacy `full` preset remains available solely to reproduce the
+published development tables. On the pilot bank the joint p(l,h) and
+separable p(l)q(h) lookups agreed to 1.6% relative; the clinical presets now
+provide the selective evaluation needed to distinguish them.
 
 ### Baseline implementations (2026-08-08)
 
@@ -359,8 +411,11 @@ writing `<dataset>/points3d_lookup.npz`. The model contracts them against the
 raw (un-premultiplied) bank downsampled to `--tf_lookup_bins` (64):
 `delta_i(T) = sum_l p_i(l) <q_i, R_T(l,:) - R_T0(l,:)>`, applied as a DC-color
 offset (`/C0`) and an opacity-logit offset, each through a learned global RGBA
-gain. Descriptors follow densification by nearest-pre-existing-Gaussian
-inheritance and travel in the sidecar, so `render.py` needs no npz. The tool
+gain. Canonical descriptors follow densification by nearest-pre-existing-Gaussian
+inheritance and travel in the sidecar, so `render.py` needs no npz. The
+diagnostic `--tf_refresh_descriptors True` additionally re-samples every
+primitive from the volume grid immediately after each clone/split/prune event;
+this is a detached training-time operation, not an inference-time update. The tool
 prints in-grid / foreground-support fractions and refuses to write below
 95% / 50% (frame-mapping guard). Verified: pilot heart + vascular 100%/100%;
 unit tests (zero delta at base TF, NN inherit, prune, gain gradients) pass.
