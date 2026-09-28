@@ -15,7 +15,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="assets/css/style.css?v=20260928" />
+  <link rel="stylesheet" href="assets/css/style.css?v=20260928b" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🪄</text></svg>" />
 </head>
 <body>
@@ -34,6 +34,7 @@
         <a href="https://gaozhongpai.github.io/dgs/">dGS / dBS</a>
         <a href="https://gaozhongpai.github.io/renderfm/">Render-FM</a>
         <a href="https://gaozhongpai.github.io/XClipGS/">XClipGS</a>
+        <a href="#factorsplat">FactorSplat</a>
         <a href="#bibtex">Cite</a>
       </nav>
       <button class="nav-toggle" id="navToggle" aria-label="Toggle navigation">
@@ -92,7 +93,8 @@
           <em>conditionally slicing</em> it at render time to recover a 3D primitive whose mean,
           opacity, and covariance vary continuously with view or time. The same primitives now carry
           into the clinic: <strong>Render-FM</strong> predicts them from CT in one forward pass, and
-          <strong>XClipGS</strong> cuts them exactly with an interactive clipping plane.
+          <strong>XClipGS</strong> cuts them exactly with an interactive clipping plane, and
+          <strong>FactorSplat</strong> makes their transfer function editable at inference.
         </p>
       </div>
 
@@ -150,6 +152,19 @@
             Adds the missing clinical interaction: an <strong>exact, closed-form clipping plane</strong>
             for Gaussian proxies &mdash; sharp at the cut, with
             <strong>40&times;</strong> less leakage than prior clippers.
+          </p>
+        </div>
+        <div class="lineage-branch">
+          <span class="branch-connector" aria-hidden="true"></span>
+          <a class="node node-branch" href="#factorsplat">
+            <span class="node-badge">capability</span>
+            <span class="node-year">Under review</span>
+            <span class="node-name">FactorSplat</span>
+            <span class="node-desc">editable transfer functions<br />for medical proxies</span>
+          </a>
+          <p class="branch-note">
+            Makes the <strong>transfer function an inference-time input</strong>: one checkpoint per scan
+            takes unseen TF edits without retraining, switching presets in about <strong>1&nbsp;ms</strong>.
           </p>
         </div>
         </div>
@@ -330,8 +345,30 @@
     </div>
   </section>
 
+  <!-- ============ FACTORSPLAT ============ -->
+  <section class="section" id="factorsplat">
+    <div class="container">
+      <article class="paper paper-wide">
+        <div class="paper-meta">
+          <span class="venue venue-review">Under review</span>
+          <h2 class="paper-title">FactorSplat: Appearance-Controllable Gaussian Proxies for Medical Volume Rendering</h2>
+          <p class="paper-authors">Authors withheld during double-blind review</p>
+        </div>
+        <p class="paper-abstract">
+          Image-trained Gaussian proxies usually bake one transfer function into their appearance. FactorSplat is a
+          per-scene N-DGS proxy that takes <strong>region-specific intensity-to-RGBA curves at inference</strong>: a
+          local lookup applies the authored color and opacity change, while a shared functional encoder and low-rank
+          per-Gaussian factors learn the residual response. Geometry and view-dependent appearance stay shared across
+          presets. On seven CT and MR scans it beats region-aware VEG by <strong>1.10&ndash;1.52&nbsp;dB</strong> mean
+          PSNR across validation, interpolation, unseen-composition, and out-of-distribution edits, and renders at
+          <strong>524&nbsp;FPS</strong> at 1600&sup2; with <strong>1.17&nbsp;ms</strong> TF switches.
+        </p>
+      </article>
+    </div>
+  </section>
+
   <!-- ============ BIBTEX ============ -->
-  <section class="section" id="bibtex">
+  <section class="section section-alt" id="bibtex">
     <div class="container">
       <div class="section-head">
         <span class="kicker">Cite this line of work</span>
@@ -407,6 +444,6 @@
     </div>
   </footer>
 
-  <script src="assets/js/main.js?v=20260928"></script>
+  <script src="assets/js/main.js?v=20260928b"></script>
 </body>
 </html>

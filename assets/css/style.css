@@ -196,7 +196,7 @@ em { font-style: italic; }
 .lead strong { font-weight: 600; color: var(--ink); }
 
 /* ---------- Lineage timeline ---------- */
-.lineage { margin: 0 auto 64px; max-width: 920px; }
+.lineage { margin: 0 auto 64px; max-width: 1040px; }
 .lineage-track {
   display: flex; align-items: stretch; justify-content: center; gap: 8px; flex-wrap: wrap;
 }
@@ -220,11 +220,11 @@ em { font-style: italic; }
 /* ---------- Render-FM branch (application off the main track) ---------- */
 .lineage-apps {
   display: flex; justify-content: center; align-items: flex-start;
-  gap: 40px; flex-wrap: wrap; margin: 0 auto;
+  gap: 28px; flex-wrap: wrap; margin: 0 auto;
 }
 .lineage-branch {
   display: flex; flex-direction: column; align-items: center; gap: 14px;
-  max-width: 340px; position: relative; padding-top: 30px;
+  max-width: 300px; position: relative; padding-top: 30px;
 }
 .lineage-branch .branch-note { text-align: center; }
 .apps-arrow { align-self: flex-start; margin-top: 76px; }
@@ -286,6 +286,7 @@ em { font-style: italic; }
 .venue-eccv { background: rgba(240,86,111,.13); color: #cf3b54; }
 .venue-arxiv { background: rgba(179,27,27,.10); color: #b31b1b; }
 .venue-neurips { background: rgba(214,137,16,.14); color: #a05f00; }
+.venue-review { background: rgba(90,100,120,.12); color: #4a5468; }
 .paper-title { font-size: 1.34rem; font-weight: 700; letter-spacing: -.015em; line-height: 1.28; margin: 0 0 10px; }
 .paper-pair .paper-title { font-size: 1.18rem; }
 .paper-authors { font-size: .9rem; color: var(--ink-faint); margin: 0; line-height: 1.5; }
@@ -339,6 +340,13 @@ em { font-style: italic; }
 /* ============================================================
    RESPONSIVE
    ============================================================ */
+@media (max-width: 1000px) {
+  .nav-links a { padding: 8px 8px; font-size: .86rem; }
+}
+@media (max-width: 860px) {
+  .nav-links a { padding: 6px 6px; font-size: .8rem; }
+}
+
 @media (max-width: 920px) {
   .axes { grid-template-columns: 1fr; }
   .paper-pair { grid-template-columns: 1fr; }
