@@ -3,8 +3,7 @@
 Project page for **NDSplat: N-Dimensional Splatting**, a unified research line for
 N-dimensional Gaussian and Beta splatting.
 
-The site introduces the latest work, **Direct Conditional Parameterization** (*d*GS / *d*BS),
-and situates it within the broader lineage:
+The site introduces the research line and links to each paper's own project page:
 
 | Work | Venue | Page |
 |------|-------|------|
@@ -13,7 +12,7 @@ and situates it within the broader lineage:
 | Universal Beta Splatting (UBS) | ICLR 2026 | https://rongliu-leo.github.io/universal-beta-splatting/ |
 | Render-FM — Feedforward Volumetric Rendering | ECCV 2026 | https://gaozhongpai.github.io/renderfm/ |
 | XClipGS — Exact Half-Space Clipping for Medical Volumes | arXiv | https://gaozhongpai.github.io/XClipGS/ |
-| *d*GS / *d*BS — Direct Conditional Parameterization | latest | https://gaozhongpai.github.io/ndsplat/ |
+| *d*GS / *d*BS — Direct Conditional Parameterization | NeurIPS 2026 | https://gaozhongpai.github.io/dgs/ |
 
 ## Structure
 
