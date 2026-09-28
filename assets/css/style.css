@@ -346,6 +346,9 @@ em { font-style: italic; }
 @media (max-width: 860px) {
   .nav-links a { padding: 6px 6px; font-size: .8rem; }
 }
+@media (max-width: 800px) {
+  .nav-links a { padding: 6px 4px; font-size: .76rem; }
+}
 
 @media (max-width: 920px) {
   .axes { grid-template-columns: 1fr; }

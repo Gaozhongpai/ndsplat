@@ -15,7 +15,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="assets/css/style.css?v=20260928b" />
+  <link rel="stylesheet" href="assets/css/style.css?v=20260928c" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🪄</text></svg>" />
 </head>
 <body>
@@ -28,6 +28,7 @@
       </a>
       <nav class="nav-links">
         <a href="#overview">Overview</a>
+        <a href="https://gaozhongpai.github.io/ddgs/">DDGS</a>
         <a href="https://gaozhongpai.github.io/6dgs/">6DGS</a>
         <a href="https://gaozhongpai.github.io/7dgs/">7DGS</a>
         <a href="https://rongliu-leo.github.io/universal-beta-splatting/">UBS</a>
@@ -100,6 +101,12 @@
 
       <div class="lineage">
         <div class="lineage-track">
+          <a class="node" href="#ddgs">
+            <span class="node-year">NeurIPS 2024</span>
+            <span class="node-name">DDGS</span>
+            <span class="node-desc">+ direction (X-ray)</span>
+          </a>
+          <span class="node-arrow">&rarr;</span>
           <a class="node" href="#ndgs">
             <span class="node-year">ICLR 2025</span>
             <span class="node-name">6DGS</span>
@@ -243,8 +250,32 @@
     </div>
   </section>
 
+  <!-- ============ DDGS ============ -->
+  <section class="section section-alt" id="ddgs">
+    <div class="container">
+      <article class="paper paper-wide">
+        <div class="paper-meta">
+          <span class="venue venue-neurips">NeurIPS 2024</span>
+          <h2 class="paper-title">DDGS-CT: Direction-Disentangled Gaussian Splatting for Realistic Volume Rendering</h2>
+          <p class="paper-authors">Zhongpai Gao, Benjamin Planche, Meng Zheng, Xiao Chen, Terrence Chen, Ziyan Wu</p>
+        </div>
+        <p class="paper-abstract">
+          Where direction-aware Gaussians began. DDGS renders realistic X-ray DRRs from CT by splitting the radiosity
+          into <strong>isotropic and direction-dependent Gaussians</strong>, so scattering effects are learned instead
+          of simulated at runtime. A radiodensity-aware initialization adapts 3DGS to tomography. It beats prior
+          Gaussian DRR methods on image accuracy (<strong>+1.04&nbsp;dB</strong> on CTPelvic1K) and drives 2D/3D pose
+          registration with <strong>4&times;</strong> faster DRRs and lower landmark error than DiffDRR.
+        </p>
+        <div class="paper-links">
+          <a class="link-chip" href="https://gaozhongpai.github.io/ddgs/" target="_blank" rel="noopener">Project page</a>
+          <a class="link-chip" href="https://arxiv.org/abs/2406.02518" target="_blank" rel="noopener">arXiv 2406.02518</a>
+        </div>
+      </article>
+    </div>
+  </section>
+
   <!-- ============ 6DGS / 7DGS ============ -->
-  <section class="section section-alt" id="ndgs">
+  <section class="section" id="ndgs">
     <div class="container">
       <div class="section-head">
         <span class="kicker">N-DGS &middot; the Gaussian-kernel lineage</span>
@@ -295,7 +326,7 @@
   </section>
 
   <!-- ============ RENDER-FM ============ -->
-  <section class="section" id="renderfm">
+  <section class="section section-alt" id="renderfm">
     <div class="container">
       <article class="paper paper-wide">
         <div class="paper-meta">
@@ -320,7 +351,7 @@
   </section>
 
   <!-- ============ XCLIPGS ============ -->
-  <section class="section section-alt" id="xclipgs">
+  <section class="section" id="xclipgs">
     <div class="container">
       <article class="paper paper-wide">
         <div class="paper-meta">
@@ -346,7 +377,7 @@
   </section>
 
   <!-- ============ FACTORSPLAT ============ -->
-  <section class="section" id="factorsplat">
+  <section class="section section-alt" id="factorsplat">
     <div class="container">
       <article class="paper paper-wide">
         <div class="paper-meta">
@@ -371,7 +402,7 @@
   </section>
 
   <!-- ============ BIBTEX ============ -->
-  <section class="section section-alt" id="bibtex">
+  <section class="section" id="bibtex">
     <div class="container">
       <div class="section-head">
         <span class="kicker">Cite this line of work</span>
@@ -379,7 +410,15 @@
       </div>
       <div class="bib-wrap">
         <button class="copy-btn" data-target="bib">Copy all</button>
-        <pre id="bib"><code>@inproceedings{gao20246dgs,
+        <pre id="bib"><code>@inproceedings{gao2024ddgs,
+  title     = {DDGS-CT: Direction-Disentangled Gaussian Splatting for Realistic Volume Rendering},
+  author    = {Gao, Zhongpai and Planche, Benjamin and Zheng, Meng and
+               Chen, Xiao and Chen, Terrence and Wu, Ziyan},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year      = {2024}
+}
+
+@inproceedings{gao20246dgs,
   title     = {6DGS: Enhanced Direction-Aware Gaussian Splatting for Volumetric Rendering},
   author    = {Gao, Zhongpai and Planche, Benjamin and Zheng, Meng and
                Choudhuri, Anwesa and Chen, Terrence and Wu, Ziyan},
@@ -447,6 +486,6 @@
     </div>
   </footer>
 
-  <script src="assets/js/main.js?v=20260928b"></script>
+  <script src="assets/js/main.js?v=20260928c"></script>
 </body>
 </html>

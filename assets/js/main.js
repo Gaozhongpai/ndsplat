@@ -70,7 +70,7 @@
   });
 
   // --- Active nav link highlight ---
-  var sections = ['overview', 'dgsdbs', 'ubs', 'ndgs', 'renderfm', 'xclipgs', 'factorsplat', 'bibtex']
+  var sections = ['overview', 'dgsdbs', 'ubs', 'ddgs', 'ndgs', 'renderfm', 'xclipgs', 'factorsplat', 'bibtex']
     .map(function (id) { return document.getElementById(id); })
     .filter(Boolean);
   var navAnchors = {};

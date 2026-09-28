@@ -7,6 +7,7 @@ The site introduces the research line and links to each paper's own project page
 
 | Work | Venue | Page |
 |------|-------|------|
+| DDGS-CT — Direction-Disentangled Gaussian Splatting | NeurIPS 2024 | https://gaozhongpai.github.io/ddgs/ |
 | 6DGS — Enhanced Direction-Aware Gaussian Splatting | ICLR 2025 | https://gaozhongpai.github.io/6dgs/ |
 | 7DGS — Unified Spatial-Temporal-Angular Gaussian Splatting | ICCV 2025 | https://gaozhongpai.github.io/7dgs/ |
 | Universal Beta Splatting (UBS) | ICLR 2026 | https://rongliu-leo.github.io/universal-beta-splatting/ |
