@@ -26,8 +26,7 @@
 
   // --- Scroll reveal ---
   var revealTargets = document.querySelectorAll(
-    '.section-head, .axis-card, .node, .feature-text, .feature-side, ' +
-    '.eq-block, .table-wrap, .table-title, .table-cap, .paper, .bib-wrap, .lineage-aside'
+    '.section-head, .axis-card, .node, .paper, .bib-wrap, .lineage-aside'
   );
   revealTargets.forEach(function (el) { el.classList.add('reveal'); });
 
