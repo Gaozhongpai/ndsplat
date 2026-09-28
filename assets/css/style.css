@@ -274,8 +274,9 @@ em { font-style: italic; }
 }
 .paper:hover { box-shadow: var(--shadow-lg); }
 .paper-wide { max-width: 900px; }
-.paper-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 26px; align-items: start; }
-.paper-pair .paper { max-width: none; margin: 0; }
+.paper-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 26px; align-items: stretch; }
+.paper-pair .paper { max-width: none; margin: 0; display: flex; flex-direction: column; }
+.paper-pair .paper-links { margin-top: auto; }
 
 .paper-meta { margin-bottom: 18px; }
 .venue {
