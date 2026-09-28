@@ -185,14 +185,12 @@ em { font-style: italic; }
    ============================================================ */
 .section { padding: 96px 0; }
 .section-alt { background: var(--bg-alt); }
-.section-feature { background: linear-gradient(180deg, #fbfaff 0%, #ffffff 100%); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 
 .section-head { max-width: 760px; margin: 0 auto 56px; text-align: center; }
 .kicker {
   display: inline-block; text-transform: uppercase; letter-spacing: .16em; font-size: .74rem;
   font-weight: 700; color: var(--ink-faint); margin-bottom: 14px;
 }
-.kicker-accent { color: var(--accent-ink); }
 .section-head h2 { font-size: clamp(1.9rem, 3.6vw, 2.9rem); font-weight: 800; letter-spacing: -.025em; line-height: 1.1; margin: 0 0 18px; }
 .lead { font-size: 1.1rem; color: var(--ink-soft); font-weight: 300; margin: 0; line-height: 1.66; }
 .lead strong { font-weight: 600; color: var(--ink); }
@@ -264,111 +262,6 @@ em { font-style: italic; }
 }
 .axis-card h3 { margin: 0 0 10px; font-size: 1.18rem; font-weight: 700; letter-spacing: -.01em; }
 .axis-card p { margin: 0; color: var(--ink-soft); font-size: .96rem; }
-
-/* ============================================================
-   FEATURE (dGS/dBS)
-   ============================================================ */
-.section-feature .authors { font-size: 1.04rem; color: var(--ink-soft); margin: 8px 0 0; font-weight: 500; }
-.section-feature .authors em { font-weight: 700; color: var(--accent-ink); }
-
-.feature-grid { display: grid; grid-template-columns: 1.55fr 1fr; gap: 40px; align-items: start; margin-bottom: 56px; }
-.feature-text p { color: var(--ink-soft); margin: 0 0 18px; }
-.feature-text p:last-child { margin-bottom: 0; }
-.feature-text strong { color: var(--ink); font-weight: 600; }
-.feature-text .lead { font-size: 1.08rem; color: var(--ink); }
-
-.feature-side { position: sticky; top: 90px; }
-.highlight-card {
-  background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius);
-  padding: 26px; box-shadow: var(--shadow);
-}
-.highlight-card h4 { margin: 0 0 16px; font-size: .82rem; text-transform: uppercase; letter-spacing: .12em; color: var(--ink-faint); }
-.check-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 13px; }
-.check-list li { font-size: .96rem; color: var(--ink-soft); padding-left: 26px; position: relative; }
-.check-list li::before {
-  content: "✓"; position: absolute; left: 0; top: 1px; color: var(--accent-2); font-weight: 700;
-}
-.check-list span { font-weight: 700; color: var(--ink); }
-
-/* ---------- Equations ---------- */
-.eq-block {
-  background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius);
-  padding: 30px; margin-bottom: 60px; box-shadow: var(--shadow);
-}
-.eq-label { margin: 0 0 18px; color: var(--ink-soft); font-size: .96rem; }
-.eq-label em { font-family: var(--mono); font-style: normal; color: var(--ink); }
-.eq-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 18px; }
-.eq {
-  background: var(--bg-alt); border: 1px solid var(--line); border-radius: var(--radius-sm);
-  padding: 18px 20px; position: relative;
-}
-.eq-tag {
-  display: inline-block; font-size: .68rem; text-transform: uppercase; letter-spacing: .1em;
-  font-weight: 700; color: var(--accent-ink); margin-bottom: 10px;
-}
-.eq code { display: block; font-family: var(--mono); font-size: 1.02rem; color: var(--ink); }
-.eq-note { margin: 0; font-size: .9rem; color: var(--ink-soft); line-height: 1.6; }
-.eq-note strong { color: var(--ink); }
-.eq-note code { font-family: var(--mono); background: var(--bg-alt); padding: 1px 6px; border-radius: 5px; font-size: .85rem; }
-
-/* ============================================================
-   DATA TABLE
-   ============================================================ */
-.table-title { font-size: 1.36rem; font-weight: 700; letter-spacing: -.01em; margin: 0 0 8px; text-align: center; }
-.table-cap { text-align: center; max-width: 820px; margin: 0 auto 26px; color: var(--ink-soft); font-size: .94rem; }
-.table-cap em { font-style: italic; }
-
-.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); background: var(--bg); }
-.data-table { width: 100%; border-collapse: collapse; font-size: .9rem; min-width: 720px;
-  /* tabular figures so bold and regular numbers share a fixed digit width and
-     stay vertically aligned within centered/right-aligned columns */
-  font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }
-.data-table thead th {
-  background: #11131e; color: #fff; font-weight: 600; padding: 14px 12px; text-align: right;
-  white-space: nowrap; font-size: .82rem; position: sticky; top: 0;
-}
-.data-table thead th:first-child, .data-table thead th:nth-child(2) { text-align: left; }
-.data-table tbody td { padding: 11px 12px; text-align: right; border-top: 1px solid var(--line); white-space: nowrap; color: var(--ink-soft); }
-/* Body alignment is class-based, not nth-child: the rowspan'd Dataset cell
-   shifts cell positions in non-leading rows, so positional rules misfire. */
-.data-table tbody td:first-child { text-align: left; font-weight: 600; color: var(--ink); vertical-align: middle; }
-.data-table tbody td.c-method { text-align: left; color: var(--ink); }
-.data-table tbody td.c-gauss { text-align: right; }
-.data-table tbody tr.grp td { border-top: 2px solid var(--line); }
-.data-table tbody tr.dash td:not(:first-child) { border-top: 1px dashed var(--line); }
-.data-table tbody tr.ours { background: var(--ours-bg); }
-.data-table tbody tr.ours td { color: var(--ink); }
-.data-table tbody tr.ours td:nth-child(2) { font-weight: 700; color: var(--accent-ink); }
-.data-table b { color: var(--ink); font-weight: 700; }
-.data-table tr.ours b { color: var(--accent-ink); }
-.dyn-tag {
-  display: inline-block; margin-left: 8px; font-size: .62rem; text-transform: uppercase; letter-spacing: .08em;
-  font-weight: 700; color: var(--accent-2); background: rgba(24,182,201,.12); padding: 2px 7px; border-radius: 999px;
-  vertical-align: middle;
-}
-.table-foot { text-align: center; font-size: .85rem; color: var(--ink-faint); margin: 18px 0 0; }
-
-/* ---------- SOTA comparison table ---------- */
-.sota-table { min-width: 760px; }
-.sota-table thead th { text-align: center; }
-.sota-table thead th:first-child, .sota-table thead th:nth-child(2) { text-align: left; }
-.sota-table thead tr.grp-head th { font-size: .76rem; letter-spacing: .04em; }
-.sota-table tbody td { text-align: center; }
-.sota-table tbody td.c-type { text-align: center; font-weight: 700; color: var(--ink-faint);
-  text-transform: uppercase; letter-spacing: .06em; font-size: .68rem; border-right: 1px solid var(--line); }
-.sota-table tbody td.c-name { text-align: left; color: var(--ink); }
-.sota-table tbody td.sep { border-left: 1px solid var(--line); }
-.sota-table tbody tr.ours { background: var(--ours-bg); }
-.sota-table tbody tr.ours td.c-name { font-weight: 700; color: var(--accent-ink); }
-.sota-table tbody tr.grp td { border-top: 2px solid var(--line); }
-/* rank highlights: best = accent fill, second = soft accent */
-.sota-table td.best { background: rgba(109,92,246,.16); color: var(--accent-ink); font-weight: 800; border-radius: 6px; }
-.sota-table td.second { background: rgba(24,182,201,.14); color: #0d8090; font-weight: 700; }
-.sota-legend { display: flex; gap: 18px; justify-content: center; flex-wrap: wrap; margin: 14px 0 0; font-size: .82rem; color: var(--ink-faint); }
-.sota-legend span { display: inline-flex; align-items: center; gap: 7px; }
-.sota-legend i { width: 14px; height: 14px; border-radius: 4px; display: inline-block; }
-.sota-legend i.best { background: rgba(109,92,246,.16); }
-.sota-legend i.second { background: rgba(24,182,201,.14); }
 
 /* ============================================================
    PAPER CARDS
@@ -447,11 +340,8 @@ em { font-style: italic; }
    RESPONSIVE
    ============================================================ */
 @media (max-width: 920px) {
-  .feature-grid { grid-template-columns: 1fr; }
-  .feature-side { position: static; }
   .axes { grid-template-columns: 1fr; }
   .paper-pair { grid-template-columns: 1fr; }
-  .eq-row { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 720px) {
