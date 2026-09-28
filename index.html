@@ -15,7 +15,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="assets/css/style.css?v=20260928d" />
+  <link rel="stylesheet" href="assets/css/style.css?v=20260928e" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🪄</text></svg>" />
 </head>
 <body>
@@ -351,59 +351,62 @@
     </div>
   </section>
 
-  <!-- ============ XCLIPGS ============ -->
-  <section class="section" id="xclipgs">
+  <!-- ============ XCLIPGS / FACTORSPLAT ============ -->
+  <section class="section" id="clinical">
     <div class="container">
-      <article class="paper paper-wide">
-        <div class="paper-meta">
-          <span class="venue venue-arxiv">arXiv</span>
-          <h2 class="paper-title">XClipGS: Exact Half-Space Clipping for Medical Volume Gaussian Splatting</h2>
-          <p class="paper-authors">Zhongpai Gao, Benjamin Planche, Meng Zheng, Anwesa Choudhuri, Chaoyi Zhou, Terrence Chen, Ziyan Wu</p>
-        </div>
-        <p class="paper-abstract">
-          XClipGS makes the clinical clipping plane <strong>exact</strong>: under the affine EWA model, each
-          half-space-restricted Gaussian's ray integral factorizes in closed form into its ordinary 2D footprint
-          times a conditional Gaussian CDF &mdash; no learned clipping parameters, no auxiliary network, and full
-          differentiability for clip-aware training of the hidden interior. On eight CT/MRI volumes it attains the
-          highest PSNR on every volume, renders at <strong>655&nbsp;FPS</strong>, and leaks roughly
-          <strong>40&times;</strong> less past the plane than ClipGS &mdash; including on arbitrary-normal planes
-          without retraining.
-        </p>
-        <div class="paper-links">
-          <a class="link-chip" href="https://gaozhongpai.github.io/XClipGS/" target="_blank" rel="noopener">Project page</a>
-          <a class="link-chip" href="https://gaozhongpai.github.io/XClipGS/demo/" target="_blank" rel="noopener">Live demo</a>
-        </div>
-      </article>
-    </div>
-  </section>
+      <div class="section-head">
+        <span class="kicker">Clinical capabilities</span>
+        <h2>XClipGS &amp; FactorSplat</h2>
+        <p class="lead">Two interactions clinicians expect from a volume renderer, added to Gaussian proxies: cutting the volume open with an exact clipping plane, and editing its transfer function at inference.</p>
+      </div>
 
-  <!-- ============ FACTORSPLAT ============ -->
-  <section class="section section-alt" id="factorsplat">
-    <div class="container">
-      <article class="paper paper-wide">
-        <div class="paper-meta">
-          <span class="venue venue-review">Under review</span>
-          <h2 class="paper-title">FactorSplat: Appearance-Controllable Gaussian Proxies for Medical Volume Rendering</h2>
-          <p class="paper-authors">Authors withheld during double-blind review</p>
-        </div>
-        <p class="paper-abstract">
-          Image-trained Gaussian proxies usually bake one transfer function into their appearance. FactorSplat is a
-          per-scene N-DGS proxy that takes <strong>region-specific intensity-to-RGBA curves at inference</strong>: a
-          local lookup applies the authored color and opacity change, while a shared functional encoder and low-rank
-          per-Gaussian factors learn the residual response. Geometry and view-dependent appearance stay shared across
-          presets. On seven CT and MR scans it beats region-aware VEG by <strong>1.10&ndash;1.52&nbsp;dB</strong> mean
-          PSNR across validation, interpolation, unseen-composition, and out-of-distribution edits, and renders at
-          <strong>524&nbsp;FPS</strong> at 1600&sup2; with <strong>1.17&nbsp;ms</strong> TF switches.
-        </p>
-        <div class="paper-links">
-          <a class="link-chip" href="https://gaozhongpai.github.io/FactorSplat/" target="_blank" rel="noopener">Project page</a>
-        </div>
-      </article>
+      <div class="paper-pair">
+        <article class="paper" id="xclipgs">
+          <div class="paper-meta">
+            <span class="venue venue-arxiv">arXiv</span>
+            <h3 class="paper-title">XClipGS: Exact Half-Space Clipping for Medical Volume Gaussian Splatting</h3>
+            <p class="paper-authors">Zhongpai Gao, Benjamin Planche, Meng Zheng, Anwesa Choudhuri, Chaoyi Zhou, Terrence Chen, Ziyan Wu</p>
+          </div>
+          <p class="paper-abstract">
+            XClipGS makes the clinical clipping plane <strong>exact</strong>: under the affine EWA model, each
+            half-space-restricted Gaussian's ray integral factorizes in closed form into its ordinary 2D footprint
+            times a conditional Gaussian CDF &mdash; no learned clipping parameters, no auxiliary network, and full
+            differentiability for clip-aware training of the hidden interior. On eight CT/MRI volumes it attains the
+            highest PSNR on every volume, renders at <strong>655&nbsp;FPS</strong>, and leaks roughly
+            <strong>40&times;</strong> less past the plane than ClipGS &mdash; including on arbitrary-normal planes
+            without retraining.
+          </p>
+          <div class="paper-links">
+            <a class="link-chip" href="https://gaozhongpai.github.io/XClipGS/" target="_blank" rel="noopener">Project page</a>
+            <a class="link-chip" href="https://gaozhongpai.github.io/XClipGS/demo/" target="_blank" rel="noopener">Live demo</a>
+          </div>
+        </article>
+
+        <article class="paper" id="factorsplat">
+          <div class="paper-meta">
+            <span class="venue venue-review">Under review</span>
+            <h3 class="paper-title">FactorSplat: Appearance-Controllable Gaussian Proxies for Medical Volume Rendering</h3>
+            <p class="paper-authors">Authors withheld during double-blind review</p>
+          </div>
+          <p class="paper-abstract">
+            Image-trained Gaussian proxies usually bake one transfer function into their appearance. FactorSplat is a
+            per-scene N-DGS proxy that takes <strong>region-specific intensity-to-RGBA curves at inference</strong>: a
+            local lookup applies the authored color and opacity change, while a shared functional encoder and low-rank
+            per-Gaussian factors learn the residual response. Geometry and view-dependent appearance stay shared across
+            presets. On seven CT and MR scans it beats region-aware VEG by <strong>1.10&ndash;1.52&nbsp;dB</strong> mean
+            PSNR across validation, interpolation, unseen-composition, and out-of-distribution edits, and renders at
+            <strong>524&nbsp;FPS</strong> at 1600&sup2; with <strong>1.17&nbsp;ms</strong> TF switches.
+          </p>
+          <div class="paper-links">
+            <a class="link-chip" href="https://gaozhongpai.github.io/FactorSplat/" target="_blank" rel="noopener">Project page</a>
+          </div>
+        </article>
+      </div>
     </div>
   </section>
 
   <!-- ============ BIBTEX ============ -->
-  <section class="section" id="bibtex">
+  <section class="section section-alt" id="bibtex">
     <div class="container">
       <div class="section-head">
         <span class="kicker">Cite this line of work</span>
@@ -487,6 +490,6 @@
     </div>
   </footer>
 
-  <script src="assets/js/main.js?v=20260928d"></script>
+  <script src="assets/js/main.js?v=20260928e"></script>
 </body>
 </html>
