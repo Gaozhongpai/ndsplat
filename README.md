@@ -12,7 +12,7 @@ The site introduces the research line and links to each paper's own project page
 | Universal Beta Splatting (UBS) | ICLR 2026 | https://rongliu-leo.github.io/universal-beta-splatting/ |
 | Render-FM — Feedforward Volumetric Rendering | ECCV 2026 | https://gaozhongpai.github.io/renderfm/ |
 | XClipGS — Exact Half-Space Clipping for Medical Volumes | arXiv | https://gaozhongpai.github.io/XClipGS/ |
-| FactorSplat — Appearance-Controllable Gaussian Proxies for Medical Volume Rendering | under review | — (card on the hub) |
+| FactorSplat — Appearance-Controllable Gaussian Proxies for Medical Volume Rendering | under review | https://gaozhongpai.github.io/FactorSplat/ |
 | *d*GS / *d*BS — Direct Conditional Parameterization | NeurIPS 2026 | https://gaozhongpai.github.io/dgs/ |
 
 ## Structure
