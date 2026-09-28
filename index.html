@@ -389,13 +389,12 @@
             <p class="paper-authors">Zhongpai Gao, Benjamin Planche, Meng Zheng, Anwesa Choudhuri, Terrence Chen, Ziyan Wu</p>
           </div>
           <p class="paper-abstract">
-            Image-trained Gaussian proxies usually bake one transfer function into their appearance. FactorSplat is a
-            per-scene N-DGS proxy that takes <strong>region-specific intensity-to-RGBA curves at inference</strong>: a
-            local lookup applies the authored color and opacity change, while a shared functional encoder and low-rank
-            per-Gaussian factors learn the residual response. Geometry and view-dependent appearance stay shared across
-            presets. On seven CT and MR scans it beats region-aware VEG by <strong>1.10&ndash;1.52&nbsp;dB</strong> mean
-            PSNR across validation, interpolation, unseen-composition, and out-of-distribution edits, and renders at
-            <strong>524&nbsp;FPS</strong> at 1600&sup2; with <strong>1.17&nbsp;ms</strong> TF switches.
+            FactorSplat makes the <strong>transfer function an inference-time input</strong>: each Gaussian reads the
+            region-specific intensity-to-RGBA curves under its footprint, a local lookup applies the authored color and
+            opacity change, and a shared functional encoder with low-rank per-Gaussian factors learns the residual, while
+            geometry stays shared across presets. On seven CT and MR scans it beats region-aware VEG by
+            <strong>1.10&ndash;1.52&nbsp;dB</strong> mean PSNR on held-out edits, renders at <strong>524&nbsp;FPS</strong>,
+            and switches presets in <strong>1.17&nbsp;ms</strong> without retraining.
           </p>
           <div class="paper-links">
             <a class="link-chip" href="https://gaozhongpai.github.io/FactorSplat/" target="_blank" rel="noopener">Project page</a>
