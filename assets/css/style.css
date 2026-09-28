@@ -196,7 +196,7 @@ em { font-style: italic; }
 .lead strong { font-weight: 600; color: var(--ink); }
 
 /* ---------- Lineage timeline ---------- */
-.lineage { margin: 0 auto 64px; max-width: 1040px; }
+.lineage { margin: 0 auto 64px; max-width: 1072px; }
 .lineage-track {
   display: flex; align-items: stretch; justify-content: center; gap: 8px; flex-wrap: wrap;
 }
@@ -220,7 +220,7 @@ em { font-style: italic; }
 /* ---------- Render-FM branch (application off the main track) ---------- */
 .lineage-apps {
   display: flex; justify-content: center; align-items: flex-start;
-  gap: 28px; flex-wrap: wrap; margin: 0 auto;
+  gap: 20px; flex-wrap: wrap; margin: 0 auto;
 }
 .lineage-branch {
   display: flex; flex-direction: column; align-items: center; gap: 14px;
@@ -228,6 +228,7 @@ em { font-style: italic; }
 }
 .lineage-branch .branch-note { text-align: center; }
 .apps-arrow { align-self: flex-start; margin-top: 76px; }
+.apps-plus { font-size: 1.6rem; font-weight: 400; margin-top: 72px; }
 @media (max-width: 720px) { .apps-arrow { align-self: center; margin-top: 0; transform: rotate(90deg); } }
 .branch-connector {
   position: absolute; top: 0; left: 50%; width: 2px; height: 30px;
