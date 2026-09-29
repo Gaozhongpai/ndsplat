@@ -229,7 +229,13 @@ em { font-style: italic; }
 .lineage-branch .branch-note { text-align: center; }
 .apps-arrow { align-self: flex-start; margin-top: 76px; }
 .apps-plus { font-size: 1.6rem; font-weight: 400; margin-top: 72px; }
-@media (max-width: 720px) { .apps-arrow { align-self: center; margin-top: 0; transform: rotate(90deg); } }
+@media (max-width: 720px) {
+  /* Stack branches and their connectors in one centred column */
+  .lineage-apps { flex-direction: column; align-items: center; gap: 10px; }
+  .lineage-branch { width: 100%; }
+  .apps-arrow { align-self: center; margin-top: 0; transform: rotate(90deg); }
+  .node-arrow.apps-plus { transform: none; }
+}
 .branch-connector {
   position: absolute; top: 0; left: 50%; width: 2px; height: 30px;
   background: linear-gradient(var(--line), var(--accent-2)); border-radius: 2px;
