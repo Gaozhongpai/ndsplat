@@ -21,6 +21,7 @@ The site introduces the research line and links to each paper's own project page
 ```
 ndsplat-web/
 ├── index.html              # single-page site
+├── assets/video/           # explainer video (Manim, narrated) + poster
 └── assets/
     ├── css/style.css       # styles
     └── js/main.js          # nav, scroll reveal, copy-to-clipboard
