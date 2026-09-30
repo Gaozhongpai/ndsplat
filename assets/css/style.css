@@ -61,6 +61,8 @@ em { font-style: italic; }
 }
 .nav-brand { display: flex; align-items: center; gap: 1px; font-weight: 800; font-size: 1.22rem; color: var(--ink); letter-spacing: -.02em; }
 .nav-brand:hover { text-decoration: none; }
+.brand-logo { display: block; border-radius: 7px; margin-right: 8px; flex: none; }
+.footer-brand { display: flex; align-items: center; }
 .brand-mark {
   background: linear-gradient(135deg, var(--accent), var(--accent-2));
   -webkit-background-clip: text; background-clip: text; color: transparent;

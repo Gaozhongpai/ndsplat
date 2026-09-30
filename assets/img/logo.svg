@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- NDSplat mark: a soft Gaussian splat cut by the conditional-slicing line -->
+  <defs>
+    <radialGradient id="splat" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#EAF9FC"/>
+      <stop offset="28%" stop-color="#58C4DD"/>
+      <stop offset="70%" stop-color="#5CD0B3" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#5CD0B3" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="#0E0F13"/>
+  <g transform="rotate(-32 32 32)">
+    <ellipse cx="32" cy="32" rx="25" ry="13.5" fill="url(#splat)"/>
+    <ellipse cx="32" cy="32" rx="21" ry="11" fill="none" stroke="#58C4DD" stroke-width="2"/>
+    <ellipse cx="32" cy="32" rx="13" ry="6.8" fill="none" stroke="#5CD0B3" stroke-width="1.6" stroke-opacity="0.85"/>
+  </g>
+  <line x1="7" y1="38.5" x2="57" y2="38.5" stroke="#FFD35A" stroke-width="3.2" stroke-linecap="round"/>
+</svg>
