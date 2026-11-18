@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>NDSplat &mdash; N-Dimensional Splatting</title>
-  <meta name="description" content="NDSplat: a unified framework and research line for N-dimensional Gaussian and Beta splatting — dGS/dBS, Universal Beta Splatting, 6DGS, 7DGS, and Render-FM." />
+  <meta name="description" content="NDSplat: a unified framework and research line for N-dimensional Gaussian and Beta splatting — dGS/dBS, Universal Beta Splatting, 6DGS, 7DGS, Render-FM, and RenderFM-Next." />
   <meta name="author" content="Zhongpai Gao" />
 
   <!-- Open Graph -->
@@ -21,7 +21,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="assets/css/style.css?v=20260930b" />
+  <link rel="stylesheet" href="assets/css/style.css?v=20261118a" />
   <link rel="icon" type="image/svg+xml" href="assets/img/logo.svg" />
   <link rel="icon" type="image/png" sizes="32x32" href="assets/img/favicon-32.png" />
   <link rel="apple-touch-icon" href="assets/img/apple-touch-icon.png" />
@@ -45,6 +45,7 @@
         <a href="https://gaozhongpai.github.io/renderfm/">Render-FM</a>
         <a href="https://gaozhongpai.github.io/XClipGS/">XClipGS</a>
         <a href="https://gaozhongpai.github.io/FactorSplat/">FactorSplat</a>
+        <a href="https://gaozhongpai.github.io/renderfmnext/">RenderFM-Next</a>
         <a href="#bibtex">Cite</a>
       </nav>
       <button class="nav-toggle" id="navToggle" aria-label="Toggle navigation">
@@ -123,9 +124,10 @@
           each primitive into a joint distribution over 3D position and conditioning variables, then
           <em>conditionally slicing</em> it at render time to recover a 3D primitive whose mean,
           opacity, and covariance vary continuously with view or time. The same primitives now carry
-          into the clinic: <strong>Render-FM</strong> predicts them from CT in one forward pass, and
-          <strong>XClipGS</strong> cuts them exactly with an interactive clipping plane, and
-          <strong>FactorSplat</strong> makes their transfer function editable at inference.
+          into the clinic: <strong>Render-FM</strong> predicts them from CT in one forward pass,
+          <strong>XClipGS</strong> cuts them exactly with an interactive clipping plane,
+          <strong>FactorSplat</strong> makes their transfer function editable at inference, and
+          <strong>RenderFM-Next</strong> brings all three together in one feed-forward model for CT and MR.
         </p>
       </div>
 
@@ -203,6 +205,22 @@
           <p class="branch-note">
             Makes the <strong>transfer function an inference-time input</strong>: one checkpoint per scan
             takes unseen TF edits without retraining, switching presets in about <strong>1&nbsp;ms</strong>.
+          </p>
+        </div>
+        </div>
+        <!-- second row: RenderFM-Next combines the three above -->
+        <div class="lineage-apps lineage-next">
+        <div class="lineage-branch">
+          <span class="branch-connector" aria-hidden="true"></span>
+          <a class="node node-branch" href="#renderfmnext">
+            <span class="node-badge">all three in one model</span>
+            <span class="node-year">arXiv</span>
+            <span class="node-name">RenderFM-Next</span>
+            <span class="node-desc">feed-forward CT + MR<br />with adaptive refinement</span>
+          </a>
+          <p class="branch-note">
+            <strong>One model for CT and MR</strong>: Gaussians predicted once per scan, refined where it
+            matters, then TF edits and exact clipping at <strong>4&ndash;6&nbsp;ms</strong> per frame.
           </p>
         </div>
         </div>
@@ -435,8 +453,33 @@
     </div>
   </section>
 
+  <!-- ============ RENDERFM-NEXT ============ -->
+  <section class="section section-alt" id="renderfmnext">
+    <div class="container">
+      <article class="paper paper-wide">
+        <div class="paper-meta">
+          <span class="venue venue-arxiv">arXiv</span>
+          <h2 class="paper-title">RenderFM-Next: Feed-Forward Adaptive Gaussian Splatting for Interactive Medical Volume Rendering</h2>
+          <p class="paper-authors">Zhongpai Gao, Benjamin Planche, Meng Zheng, Anwesa Choudhuri, Terrence Chen, Ziyan Wu</p>
+        </div>
+        <p class="paper-abstract">
+          RenderFM-Next is the next feed-forward model after Render-FM. <strong>One network handles both CT and
+          MR</strong> and predicts its Gaussians once per volume: a new transfer function needs no pass of the
+          network, and a clipping plane cuts the Gaussians exactly. The model predicts coarse 3-mm Gaussians and
+          <strong>refines them to 1.5&nbsp;mm only where a learned score expects the image to improve</strong>, under
+          a budget the user sets at render time. On a benchmark of about 2,000 CT and MR scans it improves over
+          retrained Render-FM by <strong>2.8&nbsp;dB on CT and 2.4&nbsp;dB on MR</strong> and renders a
+          1600&times;1600 view in <strong>4&ndash;6&nbsp;ms</strong>.
+        </p>
+        <div class="paper-links">
+          <a class="link-chip" href="https://gaozhongpai.github.io/renderfmnext/" target="_blank" rel="noopener">Project page</a>
+        </div>
+      </article>
+    </div>
+  </section>
+
   <!-- ============ BIBTEX ============ -->
-  <section class="section section-alt" id="bibtex">
+  <section class="section" id="bibtex">
     <div class="container">
       <div class="section-head">
         <span class="kicker">Cite this line of work</span>
@@ -514,6 +557,14 @@
   archivePrefix = {arXiv},
   primaryClass  = {cs.CV},
   year          = {2026}
+}
+
+@article{gao2026renderfmnext,
+  title         = {Feed-Forward Adaptive Gaussian Splatting for Interactive Medical Volume Rendering},
+  author        = {Gao, Zhongpai and Planche, Benjamin and Zheng, Meng and Choudhuri, Anwesa and
+                   Chen, Terrence and Wu, Ziyan},
+  journal       = {arXiv preprint},
+  year          = {2026}
 }</code></pre>
       </div>
     </div>
@@ -531,6 +582,6 @@
     </div>
   </footer>
 
-  <script src="assets/js/main.js?v=20260930b"></script>
+  <script src="assets/js/main.js?v=20261118a"></script>
 </body>
 </html>

@@ -70,8 +70,8 @@ em { font-style: italic; }
 .brand-text { color: var(--ink); }
 .nav-links { display: flex; gap: 4px; }
 .nav-links a {
-  color: var(--ink-soft); font-weight: 500; font-size: .92rem;
-  padding: 8px 13px; border-radius: 9px; transition: background .15s, color .15s;
+  color: var(--ink-soft); font-weight: 500; font-size: .9rem; white-space: nowrap;
+  padding: 8px 10px; border-radius: 9px; transition: background .15s, color .15s;
 }
 .nav-links a:hover { background: var(--bg-alt); color: var(--ink); text-decoration: none; }
 
@@ -229,6 +229,8 @@ em { font-style: italic; }
   max-width: 300px; position: relative; padding-top: 30px;
 }
 .lineage-branch .branch-note { text-align: center; }
+.lineage-next { margin-top: 26px; }
+.lineage-next .lineage-branch { max-width: 340px; }
 .apps-arrow { align-self: flex-start; margin-top: 76px; }
 .apps-plus { font-size: 1.6rem; font-weight: 400; margin-top: 72px; }
 @media (max-width: 720px) {
@@ -355,14 +357,14 @@ em { font-style: italic; }
 /* ============================================================
    RESPONSIVE
    ============================================================ */
-@media (max-width: 1000px) {
-  .nav-links a { padding: 8px 8px; font-size: .86rem; }
+@media (max-width: 1100px) {
+  .nav-links a { padding: 8px 7px; font-size: .84rem; }
 }
-@media (max-width: 860px) {
-  .nav-links a { padding: 6px 6px; font-size: .8rem; }
+@media (max-width: 960px) {
+  .nav-links a { padding: 6px 5px; font-size: .76rem; }
 }
-@media (max-width: 800px) {
-  .nav-links a { padding: 6px 4px; font-size: .76rem; }
+@media (max-width: 840px) {
+  .nav-links a { padding: 6px 3px; font-size: .7rem; }
 }
 
 @media (max-width: 920px) {
