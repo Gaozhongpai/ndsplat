@@ -21,7 +21,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="assets/css/style.css?v=20261118a" />
+  <link rel="stylesheet" href="assets/css/style.css?v=20261118b" />
   <link rel="icon" type="image/svg+xml" href="assets/img/logo.svg" />
   <link rel="icon" type="image/png" sizes="32x32" href="assets/img/favicon-32.png" />
   <link rel="apple-touch-icon" href="assets/img/apple-touch-icon.png" />
@@ -374,33 +374,8 @@
     </div>
   </section>
 
-  <!-- ============ RENDER-FM ============ -->
-  <section class="section section-alt" id="renderfm">
-    <div class="container">
-      <article class="paper paper-wide">
-        <div class="paper-meta">
-          <span class="venue venue-eccv">ECCV 2026</span>
-          <h2 class="paper-title">Render-FM: Feedforward Model for Real-time Photorealistic Volumetric Rendering</h2>
-          <p class="paper-authors">Zhongpai Gao, Benjamin Planche, Meng Zheng, Anwesa Choudhuri, Van Nguyen Nguyen, Terrence Chen, Ziyan Wu</p>
-        </div>
-        <p class="paper-abstract">
-          Render-FM brings the 6D representation to medicine. It directly predicts 6D Gaussian Splatting
-          parameters from CT volumes in <strong>2.8 seconds</strong> &mdash; a <strong>500&times; speedup</strong>
-          over per-scan optimization &mdash; while maintaining quality. Anatomy-Guided Priming incorporates
-          segmentation masks and transfer functions as structural priors, so the feedforward model
-          generalizes to unseen anatomies and supports real-time interactive rendering on standard GPUs
-          without per-scan optimization.
-        </p>
-        <div class="paper-links">
-          <a class="link-chip" href="https://gaozhongpai.github.io/renderfm/" target="_blank" rel="noopener">Project page</a>
-          <a class="link-chip" href="https://arxiv.org/abs/2505.17338" target="_blank" rel="noopener">arXiv 2505.17338</a>
-        </div>
-      </article>
-    </div>
-  </section>
-
   <!-- ============ XCLIPGS / FACTORSPLAT ============ -->
-  <section class="section" id="clinical">
+  <section class="section section-alt" id="clinical">
     <div class="container">
       <div class="section-head">
         <span class="kicker">Clinical capabilities</span>
@@ -453,33 +428,61 @@
     </div>
   </section>
 
-  <!-- ============ RENDERFM-NEXT ============ -->
-  <section class="section section-alt" id="renderfmnext">
+  <!-- ============ RENDER-FM / RENDERFM-NEXT ============ -->
+  <section class="section" id="feedforward">
     <div class="container">
-      <article class="paper paper-wide">
-        <div class="paper-meta">
-          <span class="venue venue-arxiv">arXiv</span>
-          <h2 class="paper-title">Feed-Forward Adaptive Gaussian Splatting for Interactive Medical Volume Rendering</h2>
-          <p class="paper-authors">Zhongpai Gao, Benjamin Planche, Meng Zheng, Anwesa Choudhuri, Terrence Chen, Ziyan Wu</p>
-        </div>
-        <p class="paper-abstract">
-          RenderFM-Next is the next feed-forward model after Render-FM. <strong>One network handles both CT and
-          MR</strong> and predicts its Gaussians once per volume: a new transfer function needs no pass of the
-          network, and a clipping plane cuts the Gaussians exactly. The model predicts coarse 3-mm Gaussians and
-          <strong>refines them to 1.5&nbsp;mm only where a learned score expects the image to improve</strong>, under
-          a budget the user sets at render time. On a benchmark of about 2,000 CT and MR scans it improves over
-          retrained Render-FM by <strong>2.8&nbsp;dB on CT and 2.4&nbsp;dB on MR</strong> and renders a
-          1600&times;1600 view in <strong>4&ndash;6&nbsp;ms</strong>.
-        </p>
-        <div class="paper-links">
-          <a class="link-chip" href="https://gaozhongpai.github.io/renderfmnext/" target="_blank" rel="noopener">Project page</a>
-        </div>
-      </article>
+      <div class="section-head">
+        <span class="kicker">Feed-forward models</span>
+        <h2>Render-FM &amp; RenderFM-Next</h2>
+        <p class="lead">No per-scan fitting: a network trained across patients predicts the Gaussians of a new volume in one pass. RenderFM-Next extends Render-FM to CT and MR with render-time transfer-function editing, exact clipping and adaptive refinement.</p>
+      </div>
+
+      <div class="paper-pair">
+        <article class="paper" id="renderfm">
+          <div class="paper-meta">
+            <span class="venue venue-eccv">ECCV 2026</span>
+            <h3 class="paper-title">Render-FM: Feedforward Model for Real-time Photorealistic Volumetric Rendering</h3>
+            <p class="paper-authors">Zhongpai Gao, Benjamin Planche, Meng Zheng, Anwesa Choudhuri, Van Nguyen Nguyen, Terrence Chen, Ziyan Wu</p>
+          </div>
+          <p class="paper-abstract">
+            Render-FM brings the 6D representation to medicine. It directly predicts 6D Gaussian Splatting
+            parameters from CT volumes in <strong>2.8 seconds</strong> &mdash; a <strong>500&times; speedup</strong>
+            over per-scan optimization &mdash; while maintaining quality. Anatomy-Guided Priming incorporates
+            segmentation masks and transfer functions as structural priors, so the feedforward model
+            generalizes to unseen anatomies and supports real-time interactive rendering on standard GPUs
+            without per-scan optimization.
+          </p>
+          <div class="paper-links">
+            <a class="link-chip" href="https://gaozhongpai.github.io/renderfm/" target="_blank" rel="noopener">Project page</a>
+            <a class="link-chip" href="https://arxiv.org/abs/2505.17338" target="_blank" rel="noopener">arXiv 2505.17338</a>
+          </div>
+        </article>
+
+        <article class="paper" id="renderfmnext">
+          <div class="paper-meta">
+            <span class="venue venue-arxiv">arXiv</span>
+            <h3 class="paper-title">Feed-Forward Adaptive Gaussian Splatting for Interactive Medical Volume Rendering</h3>
+            <p class="paper-authors">Zhongpai Gao, Benjamin Planche, Meng Zheng, Anwesa Choudhuri, Terrence Chen, Ziyan Wu</p>
+          </div>
+          <p class="paper-abstract">
+            RenderFM-Next is the next feed-forward model after Render-FM. <strong>One network handles both CT and
+            MR</strong> and predicts its Gaussians once per volume: a new transfer function needs no pass of the
+            network, and a clipping plane cuts the Gaussians exactly. The model predicts coarse 3-mm Gaussians and
+            <strong>refines them to 1.5&nbsp;mm only where a learned score expects the image to improve</strong>, under
+            a budget the user sets at render time. On a benchmark of about 2,000 CT and MR scans it improves over
+            retrained Render-FM by <strong>2.8&nbsp;dB on CT and 2.4&nbsp;dB on MR</strong> and renders a
+            1600&times;1600 view in <strong>4&ndash;6&nbsp;ms</strong>.
+          </p>
+          <div class="paper-links">
+            <a class="link-chip" href="https://gaozhongpai.github.io/renderfmnext/" target="_blank" rel="noopener">Project page</a>
+          </div>
+        </article>
+      </div>
     </div>
   </section>
 
   <!-- ============ BIBTEX ============ -->
-  <section class="section" id="bibtex">
+  <section class="section section-alt" id="bibtex">
     <div class="container">
       <div class="section-head">
         <span class="kicker">Cite this line of work</span>
@@ -582,6 +585,6 @@
     </div>
   </footer>
 
-  <script src="assets/js/main.js?v=20261118a"></script>
+  <script src="assets/js/main.js?v=20261118b"></script>
 </body>
 </html>
